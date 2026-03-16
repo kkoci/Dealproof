@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.tox/
+.venv/
+venv/
+env/
+.Python
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Environment variables
+.env
+*.env
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Docker
+*.log
+
+# Node (for Hardhat/contracts)
+node_modules/
+contracts/artifacts/
+contracts/cache/
+
+# Project-specific docs (internal planning)
+PHASE2.md
+PHASE3.md
+PHASE5.md
+IMPLEMENTATION.md
+BUILD_LOG.md
+
+# Keep README
+!README.md

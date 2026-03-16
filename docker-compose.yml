@@ -1,0 +1,26 @@
+version: "3.9"
+
+# Phase 2: dstack-simulator runs tappd on port 8090, mimicking the real
+# Phala CVM tappd socket. The app service connects to it via
+# DSTACK_SIMULATOR_ENDPOINT. To switch to a real Phala Cloud CVM, set
+# DSTACK_SIMULATOR_ENDPOINT to the CVM's internal tappd address and
+# TEE_MODE=production; remove or disable the dstack-simulator service.
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DSTACK_SIMULATOR_ENDPOINT=http://dstack-simulator:8090
+    volumes:
+      - .:/app
+    depends_on:
+      - dstack-simulator
+
+  dstack-simulator:
+    image: phalanetwork/tappd-simulator:latest
+    ports:
+      - "8090:8090"
