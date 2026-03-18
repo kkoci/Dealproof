@@ -86,7 +86,11 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         else None
     )
 
-    await db.update_deal(deal_id, "negotiating", verification=verification_dict)
+    # Status already set to 'negotiating' by the atomic claim in negotiate().
+    # Here we only persist the verification result (if any) without
+    # re-setting the status — avoids an unnecessary second write.
+    if verification_dict is not None:
+        await db.update_deal(deal_id, "negotiating", verification=verification_dict)
 
     # ------------------------------------------------------------------ #
     # Step 3 — negotiation loop
@@ -156,12 +160,23 @@ async def negotiate(deal_id: str) -> DealResult:
     Run Props verification + TEE negotiation for a previously created deal.
     Retrieves the stored DealCreate payload (including seller_proof) from
     SQLite and runs the full Phase 3 flow.
+
+    Uses an atomic DB claim (optimistic lock) to prevent two concurrent
+    callers from both running negotiation on the same deal.
     """
     row = await db.get_deal(deal_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Deal not found")
     if row["status"] != "pending":
         raise HTTPException(status_code=409, detail=f"Deal is already {row['status']}")
+
+    # Atomic claim: only one concurrent caller wins this UPDATE.
+    claimed = await db.claim_deal_for_negotiation(deal_id)
+    if not claimed:
+        raise HTTPException(
+            status_code=409,
+            detail="Deal negotiation already started by another request",
+        )
 
     payload = DealCreate(**row["payload"])
     return await _negotiate_deal(deal_id, payload)

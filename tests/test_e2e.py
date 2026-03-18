@@ -62,7 +62,8 @@ def _build_valid_proof(chunks: list[bytes] | None = None):
     if chunks is None:
         chunks = [b"chunk_alpha", b"chunk_beta", b"chunk_gamma"]
     chunk_hashes = [hashlib.sha256(c).hexdigest() for c in chunks]
-    raw = b"".join(bytes.fromhex(h) for h in chunk_hashes)
+    length_prefix = len(chunk_hashes).to_bytes(4, "big")
+    raw = length_prefix + b"".join(bytes.fromhex(h) for h in chunk_hashes)
     root_hash = hashlib.sha256(raw).hexdigest()
     return root_hash, {
         "root_hash": root_hash,

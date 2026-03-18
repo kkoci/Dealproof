@@ -198,7 +198,8 @@ def build_seller_proof(chunks: list[bytes]) -> tuple[str, dict]:
     Returns (data_hash, seller_proof).
     """
     chunk_hashes = [hashlib.sha256(c).hexdigest() for c in chunks]
-    raw = b"".join(bytes.fromhex(h) for h in chunk_hashes)
+    length_prefix = len(chunk_hashes).to_bytes(4, "big")
+    raw = length_prefix + b"".join(bytes.fromhex(h) for h in chunk_hashes)
     root_hash = hashlib.sha256(raw).hexdigest()
     return root_hash, {
         "root_hash": root_hash,

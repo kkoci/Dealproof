@@ -42,6 +42,29 @@ class NegotiationResult:
     transcript: list[NegotiationRound] = field(default_factory=list)
 
 
+def _normalise_action(response: dict, valid: set[str], default: str) -> dict:
+    """
+    Ensure the 'action' field in an agent response is a known value.
+
+    If Claude returns null, an empty string, or an unexpected action string,
+    we fall back to `default` rather than letting the negotiation loop silently
+    misbehave.  The original response dict is copied so callers' history is
+    not mutated.
+    """
+    action = response.get("action")
+    if not isinstance(action, str) or action.lower() not in valid:
+        logger.warning(
+            f"Unexpected action value {action!r} — normalising to '{default}'"
+        )
+        response = dict(response)
+        response["action"] = default
+        # If price is missing or zero after a bad response, preserve the last
+        # known price by leaving it at whatever _parse_response returned (0.0).
+        # The negotiation loop's price-tracking handles 0.0 gracefully via the
+        # existing `data.get("price") or 0` pattern.
+    return response
+
+
 async def run_negotiation(
     buyer: BuyerAgent,
     seller: SellerAgent,
@@ -55,6 +78,7 @@ async def run_negotiation(
         logger.info(f"Round {round_num}: seller making offer")
 
         seller_offer = await seller.make_offer(history)
+        seller_offer = _normalise_action(seller_offer, valid={"offer", "counter", "accept", "reject"}, default="counter")
         logger.info(f"Seller: {seller_offer}")
 
         transcript.append(
@@ -75,6 +99,7 @@ async def run_negotiation(
 
         logger.info(f"Round {round_num}: buyer evaluating offer")
         buyer_response = await buyer.evaluate_offer(seller_offer, history[:-1])
+        buyer_response = _normalise_action(buyer_response, valid={"accept", "counter", "reject"}, default="counter")
         logger.info(f"Buyer: {buyer_response}")
 
         transcript.append(

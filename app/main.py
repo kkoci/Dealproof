@@ -20,6 +20,7 @@ logging.basicConfig(level=settings.log_level)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_db()
+    await db.reset_stale_negotiations()  # recover deals interrupted by crashes/restarts
     yield
 
 

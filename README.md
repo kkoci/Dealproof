@@ -383,8 +383,10 @@ chunks = [dataset[i:i+chunk_size] for i in range(0, len(dataset), chunk_size)]
 # Hash each chunk
 chunk_hashes = [hashlib.sha256(c).hexdigest() for c in chunks]
 
-# Compute flat Merkle root: SHA-256 of concatenated raw chunk hash bytes
-raw = b"".join(bytes.fromhex(h) for h in chunk_hashes)
+# Compute length-prefixed flat Merkle root
+# The 4-byte length prefix defeats preimage attacks (N×32-byte single-chunk collision)
+length_prefix = len(chunk_hashes).to_bytes(4, "big")
+raw = length_prefix + b"".join(bytes.fromhex(h) for h in chunk_hashes)
 root_hash = hashlib.sha256(raw).hexdigest()
 
 seller_proof = {
@@ -399,8 +401,9 @@ seller_proof = {
 
 The TEE verifies:
 1. `seller_proof.root_hash == data_hash` (advertised hash matches proof)
-2. `SHA-256(chunk_hash[0] || chunk_hash[1] || ... || chunk_hash[N-1]) == root_hash` (chunks are consistent)
-3. Signs the result with a TDX quote — the buyer can verify independently.
+2. `SHA-256( N.to_bytes(4,'big') || chunk_hash[0] || ... || chunk_hash[N-1] ) == root_hash` (length-prefixed, defeating preimage attacks)
+3. No duplicate chunk hashes (prevents padding with repeated entries)
+4. Signs the result with a TDX quote — the buyer can verify independently.
 
 ---
 

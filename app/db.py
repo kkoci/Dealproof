@@ -91,6 +91,53 @@ async def update_deal(
         await db.commit()
 
 
+async def reset_stale_negotiations() -> int:
+    """
+    On startup, reset any deals stuck in 'negotiating' status to 'failed'.
+
+    A deal can be left in 'negotiating' if the server crashed or was
+    restarted mid-negotiation.  These deals will never progress on their own,
+    so we mark them failed so callers get a clear status instead of
+    'negotiating' forever.
+
+    Returns the number of deals reset (0 is the normal case).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE deals SET status = 'failed' WHERE status = 'negotiating'"
+        )
+        await db.commit()
+        count = cursor.rowcount
+    if count:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"Startup recovery: reset {count} stale 'negotiating' deal(s) to 'failed'"
+        )
+    return count
+
+
+async def claim_deal_for_negotiation(deal_id: str) -> bool:
+    """
+    Atomically transition a deal from 'pending' to 'negotiating'.
+
+    Returns True if the transition succeeded (this caller now owns the deal).
+    Returns False if the deal was already claimed by another caller — the
+    caller should return HTTP 409 without running negotiation.
+
+    This is the standard optimistic-lock pattern for single-writer DB
+    access: one UPDATE with a WHERE clause on the old status, then check
+    rowcount.  SQLite serialises writes, so no two callers can both see
+    rowcount == 1 for the same deal_id.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE deals SET status = 'negotiating' WHERE id = ? AND status = 'pending'",
+            (deal_id,),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

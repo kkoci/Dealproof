@@ -1,12 +1,12 @@
 """
-Props data-authenticity verifier tests — Phase 3.
+Props data-authenticity verifier tests — Phase 3 (patched).
 
 Tests cover every layer of app/props/verifier.py:
   - Pure helpers: _is_valid_sha256_hex, compute_merkle_root,
     validate_proof_structure
   - Main async function: verify_data_authenticity (sign_result mocked)
   - Failure paths: tampered hash, wrong chunk count, invalid format,
-    Merkle root mismatch, unsupported algorithm
+    Merkle root mismatch, unsupported algorithm, duplicate chunk hashes
   - Route-level gate: verification_failed → HTTP 400, negotiation never runs
 
 All tappd calls are mocked via patch on sign_result so tests run without
@@ -17,10 +17,11 @@ Proof construction helper
 To build a valid seller_proof for tests:
   1. Pick arbitrary chunk byte strings.
   2. chunk_hashes = [sha256(chunk).hexdigest() for chunk in chunks]
-  3. raw = b"".join(bytes.fromhex(h) for h in chunk_hashes)
-  4. root_hash = sha256(raw).hexdigest()
-  5. data_hash = root_hash   (the advertised hash must equal the root)
-  6. seller_proof = {"root_hash": root_hash, "chunk_hashes": chunk_hashes,
+  3. length_prefix = len(chunk_hashes).to_bytes(4, 'big')
+  4. raw = length_prefix + b"".join(bytes.fromhex(h) for h in chunk_hashes)
+  5. root_hash = sha256(raw).hexdigest()
+  6. data_hash = root_hash   (the advertised hash must equal the root)
+  7. seller_proof = {"root_hash": root_hash, "chunk_hashes": chunk_hashes,
                      "chunk_count": len(chunks), "algorithm": "sha256"}
 """
 import hashlib
@@ -41,7 +42,8 @@ def _build_valid_proof(chunks: list[bytes] | None = None):
         chunks = [b"dataset_chunk_alpha", b"dataset_chunk_beta", b"dataset_chunk_gamma"]
 
     chunk_hashes = [hashlib.sha256(c).hexdigest() for c in chunks]
-    raw = b"".join(bytes.fromhex(h) for h in chunk_hashes)
+    length_prefix = len(chunk_hashes).to_bytes(4, "big")
+    raw = length_prefix + b"".join(bytes.fromhex(h) for h in chunk_hashes)
     root_hash = hashlib.sha256(raw).hexdigest()
 
     return root_hash, {
@@ -74,12 +76,13 @@ def test_compute_merkle_root_order_matters():
 
 
 def test_compute_merkle_root_single_chunk():
-    """Single-chunk dataset: root = sha256(sha256(chunk_data))."""
+    """Single-chunk dataset: root = sha256(length_prefix(1) || sha256(chunk_data))."""
     from app.props.verifier import compute_merkle_root
 
     chunk_data = b"only_chunk"
     chunk_hash = hashlib.sha256(chunk_data).hexdigest()
-    expected_root = hashlib.sha256(bytes.fromhex(chunk_hash)).hexdigest()
+    length_prefix = (1).to_bytes(4, "big")
+    expected_root = hashlib.sha256(length_prefix + bytes.fromhex(chunk_hash)).hexdigest()
     assert compute_merkle_root([chunk_hash]) == expected_root
 
 
@@ -144,6 +147,18 @@ def test_validate_proof_structure_bad_chunk_hash():
     error = validate_proof_structure(data_hash, proof)
     assert error is not None
     assert "chunk_hashes[0]" in error
+
+
+def test_validate_proof_structure_duplicate_chunk_hashes():
+    """Duplicate chunk hashes must be rejected to prevent padding attacks."""
+    from app.props.verifier import validate_proof_structure
+
+    data_hash, proof = _build_valid_proof([b"chunk_a", b"chunk_b"])
+    # Replace second chunk with a copy of the first
+    proof["chunk_hashes"][1] = proof["chunk_hashes"][0]
+    error = validate_proof_structure(data_hash, proof)
+    assert error is not None
+    assert "duplicate" in error.lower()
 
 
 def test_validate_proof_structure_empty_chunk_list():

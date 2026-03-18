@@ -35,7 +35,8 @@ Verification steps (all run inside the TEE)
                            + raw_bytes(chunk_hash[N-1]))
    and checks that computed_root == root_hash.
    This is a flat (single-level) concatenation hash, not a binary tree.
-   It is deterministic, order-preserving, and easy to recompute independently.
+   It is deterministic, order-preserving, length-prefixed (defeating preimage
+   attacks), and easy to recompute independently.
 4. TEE sign — sign_result() is called with:
      {
        "data_hash": data_hash,
@@ -86,19 +87,26 @@ def _is_valid_sha256_hex(value: str) -> bool:
 
 def compute_merkle_root(chunk_hashes: list[str]) -> str:
     """
-    Compute the flat Merkle root of an ordered list of chunk hashes.
+    Compute the length-prefixed flat Merkle root of an ordered list of
+    chunk hashes.
 
-    Algorithm: concatenate the raw 32-byte values of each hex-encoded hash
-    in order, then SHA-256 the result.
+    Algorithm:
+      root = SHA-256( len(chunk_hashes).to_bytes(4, 'big')
+                    + bytes(chunk_hash[0])
+                    + bytes(chunk_hash[1])
+                    + ... )
 
-      root = SHA-256( bytes(chunk_hash[0]) || bytes(chunk_hash[1]) || ... )
+    The 4-byte length prefix defeats preimage attacks where an attacker
+    could substitute N chunks of 32 bytes with 1 chunk of 32*N bytes and
+    produce the same root hash.
 
     Returns a 64-char lower-case hex string.
     Raises ValueError if any entry is not a valid SHA-256 hex string.
     """
     if not chunk_hashes:
         raise ValueError("chunk_hashes must be a non-empty list")
-    raw = b"".join(bytes.fromhex(h.lower()) for h in chunk_hashes)
+    length_prefix = len(chunk_hashes).to_bytes(4, "big")
+    raw = length_prefix + b"".join(bytes.fromhex(h.lower()) for h in chunk_hashes)
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -139,6 +147,12 @@ def validate_proof_structure(data_hash: str, seller_proof: dict) -> str | None:
             f"seller_proof.chunk_count ({declared_count!r}) does not match "
             f"len(chunk_hashes) ({len(chunk_hashes)})"
         )
+
+    # Duplicate chunk hashes would allow a seller to deliver fewer unique
+    # chunks than claimed (e.g. 5 identical hashes = 1 real chunk repeated).
+    normalised = [h.lower() for h in chunk_hashes]
+    if len(set(normalised)) != len(normalised):
+        return "seller_proof.chunk_hashes contains duplicate entries"
 
     return None  # all good
 

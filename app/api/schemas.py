@@ -13,7 +13,7 @@ Changes from Phase 2:
     deal was agreed.
 """
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DealCreate(BaseModel):
@@ -32,6 +32,33 @@ class DealCreate(BaseModel):
             "If omitted, only basic hash-format validation is performed."
         ),
     )
+
+    @field_validator("data_hash")
+    @classmethod
+    def data_hash_must_be_sha256(cls, v: str) -> str:
+        """Reject non-SHA-256 data_hash values at schema level, regardless of whether
+        seller_proof is present. A garbage hash would propagate into the DB and
+        attestation payload without this guard."""
+        _hex = frozenset("0123456789abcdef")
+        if not (isinstance(v, str) and len(v) == 64 and all(c in _hex for c in v.lower())):
+            raise ValueError(
+                f"data_hash must be a 64-char lowercase hex SHA-256 string (got: {v!r})"
+            )
+        return v.lower()
+
+    @model_validator(mode="after")
+    def budget_must_meet_floor(self) -> "DealCreate":
+        """
+        Reject deals where the buyer's maximum budget is below the seller's
+        floor price — negotiation would always fail, wasting API credits.
+        Equal values are allowed: the buyer can accept exactly the floor.
+        """
+        if self.buyer_budget < self.floor_price:
+            raise ValueError(
+                f"buyer_budget ({self.buyer_budget}) must be >= floor_price ({self.floor_price}). "
+                "A deal where the buyer cannot afford the seller's minimum will always fail."
+            )
+        return self
 
 
 class NegotiationRound(BaseModel):
