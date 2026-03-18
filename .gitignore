@@ -35,6 +35,9 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
+# db
+*.db
+
 # Claude
 .claude/
 
@@ -54,6 +57,7 @@ IMPLEMENTATION.md
 BUILD_LOG.md
 dealproof_patches.md
 PATCHES_APPLIED.md
+TESTING.md
 
 # Keep README
 !README.md
