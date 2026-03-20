@@ -146,6 +146,34 @@ scenario_g = {
 }
 
 # ---------------------------------------------------------------------------
+# Scenario H — Two-step flow (same payload as A, printed separately for each step)
+# ---------------------------------------------------------------------------
+# Step 1: POST /api/deals  (use this payload)
+# Step 2: POST /api/deals/{deal_id}/negotiate  (no body needed)
+# Step 3: GET  /api/deals/{deal_id}/status
+# Step 4: GET  /api/deals/{deal_id}/verification
+# Step 5: GET  /api/deals/{deal_id}/attestation
+scenario_h_step1 = scenario_a  # identical payload to A
+
+# ---------------------------------------------------------------------------
+# Scenario I — Concurrent negotiate calls (optimistic lock)
+# ---------------------------------------------------------------------------
+# Step 1: POST /api/deals with this payload → get deal_id
+# Step 2: fire two simultaneous POST /api/deals/{deal_id}/negotiate requests
+#         → one returns 200, the other returns 409
+scenario_i_step1 = scenario_a  # any valid payload works
+
+# ---------------------------------------------------------------------------
+# Scenario J — Status polling after verification_failed
+# ---------------------------------------------------------------------------
+# Step 1: POST /api/deals with this payload → get deal_id
+# Step 2: POST /api/deals/{deal_id}/negotiate → 400 verification error
+# Step 3: GET  /api/deals/{deal_id}/status    → status: verification_failed
+# Step 4: GET  /api/deals/{deal_id}/attestation → 404
+# Step 5: GET  /api/deals/{deal_id}/verification → verified: false, error present
+scenario_j_step1 = scenario_e  # tampered proof — same payload as E
+
+# ---------------------------------------------------------------------------
 # Print all scenarios
 # ---------------------------------------------------------------------------
 scenarios = {
@@ -158,7 +186,26 @@ scenarios = {
     "G — Invalid: budget below floor": scenario_g,
 }
 
+scenarios_hij = {
+    "H — Two-step flow (Step 1: POST /api/deals)": scenario_h_step1,
+    "I — Concurrent lock (Step 1: POST /api/deals)": scenario_i_step1,
+    "J — Verification failed (Step 1: POST /api/deals)": scenario_j_step1,
+}
+
 for name, payload in scenarios.items():
+    print(f"\n{'='*70}")
+    print(f"  SCENARIO {name}")
+    print(f"{'='*70}")
+    print(json.dumps(payload, indent=2))
+
+print(f"\n\n{'#'*70}")
+print("  SCENARIOS H / I / J  — multi-step flows")
+print(f"{'#'*70}")
+print("""
+These scenarios require multiple HTTP calls. Use the payloads below for
+Step 1 (POST /api/deals) to get a deal_id, then follow the steps in TESTING.md.
+""")
+for name, payload in scenarios_hij.items():
     print(f"\n{'='*70}")
     print(f"  SCENARIO {name}")
     print(f"{'='*70}")

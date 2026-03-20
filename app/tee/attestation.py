@@ -38,6 +38,10 @@ async def sign_result(terms: dict) -> str:
     # TDX report_data must be exactly 64 bytes; SHA-256 fills the first 32
     report_data = (digest + b"\x00" * 32).hex()
 
+    if settings.tee_mode == "simulation":
+        # No real TEE available — return a deterministic local mock quote.
+        return "sim_quote:" + hashlib.sha256(report_data.encode()).hexdigest()
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{settings.dstack_simulator_endpoint}/prpc/Tappd.TdxQuote",
