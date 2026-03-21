@@ -32,6 +32,24 @@ class DealCreate(BaseModel):
             "If omitted, only basic hash-format validation is performed."
         ),
     )
+    # Phase 4: optional on-chain escrow fields
+    seller_address: Optional[str] = Field(
+        default=None,
+        description=(
+            "Ethereum address of the seller (checksummed). When provided alongside "
+            "escrow_amount_eth and a configured CONTRACT_ADDRESS, ETH is deposited "
+            "into DealProof.sol escrow at deal creation and released on TEE attestation."
+        ),
+    )
+    escrow_amount_eth: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Amount of ETH to deposit as escrow. Required when seller_address is set. "
+            "Released to the seller on successful negotiation; refundable after the "
+            "negotiation window expires if the deal fails."
+        ),
+    )
 
     @field_validator("data_hash")
     @classmethod
@@ -79,6 +97,9 @@ class DealResult(BaseModel):
     attestation: str | None = None
     # Phase 3: TDX quote from Props verification (covers data_hash + verified + chunk_count)
     data_verification_attestation: str | None = None
+    # Phase 4: on-chain escrow transaction hashes
+    escrow_tx: str | None = None        # tx hash of createDeal (escrow deposit)
+    completion_tx: str | None = None    # tx hash of completeDeal or refund
     transcript: list[NegotiationRound] = []
 
 

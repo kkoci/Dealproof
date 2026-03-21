@@ -23,6 +23,11 @@ from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
 from app.props.verifier import verify_data_authenticity
+from app.contract.escrow import (
+    create_deal_on_chain,
+    complete_deal_on_chain,
+    EscrowNotConfigured,
+)
 import app.db as db
 
 router = APIRouter(prefix="/api")
@@ -73,6 +78,25 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         data_hash_for_attestation = payload.data_hash
 
     # ------------------------------------------------------------------ #
+    # Step 1b — on-chain escrow deposit (Phase 4, optional)
+    # ------------------------------------------------------------------ #
+    escrow_tx: str | None = None
+    if payload.seller_address and payload.escrow_amount_eth:
+        try:
+            value_wei = int(payload.escrow_amount_eth * 1e18)
+            escrow_tx = await create_deal_on_chain(
+                deal_id=deal_id,
+                seller_address=payload.seller_address,
+                data_hash=payload.data_hash,
+                value_wei=value_wei,
+            )
+            logger.info(f"Deal {deal_id}: escrow deposited — tx {escrow_tx}")
+        except EscrowNotConfigured:
+            logger.warning(f"Deal {deal_id}: CONTRACT_ADDRESS not set, skipping escrow")
+        except Exception as exc:
+            logger.error(f"Deal {deal_id}: escrow deposit failed — {exc}")
+
+    # ------------------------------------------------------------------ #
     # Step 2 — persist verification result and mark as negotiating
     # ------------------------------------------------------------------ #
     verification_dict = (
@@ -101,6 +125,26 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     result = await run_negotiation(buyer, seller, data_hash=data_hash_for_attestation)
 
     # ------------------------------------------------------------------ #
+    # Step 3b — on-chain deal completion (Phase 4, optional)
+    # ------------------------------------------------------------------ #
+    completion_tx: str | None = None
+    if result.agreed and result.attestation and escrow_tx:
+        try:
+            completion_tx = await complete_deal_on_chain(
+                deal_id=deal_id,
+                tee_attestation=result.attestation,
+            )
+            logger.info(f"Deal {deal_id}: escrow released — tx {completion_tx}")
+        except EscrowNotConfigured:
+            pass  # already logged at deposit stage
+        except Exception as exc:
+            logger.error(f"Deal {deal_id}: escrow completion failed — {exc}")
+    elif not result.agreed and escrow_tx:
+        logger.info(
+            f"Deal {deal_id}: negotiation failed — buyer may refund after escrow deadline"
+        )
+
+    # ------------------------------------------------------------------ #
     # Step 4 — persist and return
     # ------------------------------------------------------------------ #
     deal_result = DealResult(
@@ -112,6 +156,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         data_verification_attestation=(
             verification_result.attestation if verification_result else None
         ),
+        escrow_tx=escrow_tx,
+        completion_tx=completion_tx,
         transcript=[
             NegotiationRound(
                 round=r.round,

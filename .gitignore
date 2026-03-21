@@ -44,6 +44,9 @@ Thumbs.db
 # Docker
 *.log
 
+# Images
+*.png
+
 # Node (for Hardhat/contracts)
 node_modules/
 contracts/artifacts/
@@ -52,11 +55,13 @@ contracts/cache/
 # Project-specific docs (internal planning)
 PHASE2.md
 PHASE3.md
+PHASE4.md
 PHASE5.md
 IMPLEMENTATION.md
 BUILD_LOG.md
 dealproof_patches.md
 PATCHES_APPLIED.md
+SETUP.md
 TESTING.md
 
 # Keep README
