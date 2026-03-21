@@ -23,9 +23,17 @@ async def get_signing_key() -> bytes:
     be reproduced outside the enclave, giving the deal a hardware root of
     trust even before the TDX quote is generated.
     """
-    async with httpx.AsyncClient() as client:
+    if settings.tee_mode == "production":
+        transport = httpx.AsyncHTTPTransport(uds="/var/run/tappd.sock")
+        client_kwargs = {"transport": transport, "base_url": "http://localhost"}
+        url = "/prpc/Tappd.DeriveKey"
+    else:
+        client_kwargs = {}
+        url = f"{settings.dstack_simulator_endpoint}/prpc/Tappd.DeriveKey"
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
         response = await client.post(
-            f"{settings.dstack_simulator_endpoint}/prpc/Tappd.DeriveKey",
+            url,
             json={"path": "dealproof/signing-key", "subject": "dealproof-v1"},
             timeout=10.0,
         )

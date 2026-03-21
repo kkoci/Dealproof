@@ -66,8 +66,7 @@ class SellerAgent:
             data = json.loads(raw)
         except json.JSONDecodeError:
             start = raw.find("{")
-            end = raw.rfind("}") + 1
-            data = json.loads(raw[start:end])
+            data, _ = json.JSONDecoder().raw_decode(raw, start)
 
         return {
             "action": data.get("action", "offer"),

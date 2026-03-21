@@ -42,9 +42,11 @@ async def sign_result(terms: dict) -> str:
         # No real TEE available — return a deterministic local mock quote.
         return "sim_quote:" + hashlib.sha256(report_data.encode()).hexdigest()
 
-    async with httpx.AsyncClient() as client:
+    # Production: tappd is available via Unix domain socket on Phala Cloud CVM
+    transport = httpx.AsyncHTTPTransport(uds="/var/run/tappd.sock")
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
         response = await client.post(
-            f"{settings.dstack_simulator_endpoint}/prpc/Tappd.TdxQuote",
+            "/prpc/Tappd.TdxQuote",
             json={"report_data": report_data},
             timeout=10.0,
         )

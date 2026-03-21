@@ -58,10 +58,9 @@ class BuyerAgent:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            # Extract JSON block if model wrapped it in markdown
+            # Extract first JSON object — model may return extra text after the block
             start = raw.find("{")
-            end = raw.rfind("}") + 1
-            data = json.loads(raw[start:end])
+            data, _ = json.JSONDecoder().raw_decode(raw, start)
 
         return {
             "action": data.get("action", "reject"),
