@@ -86,6 +86,8 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 
 ## Quick Start
 
+> For a complete step-by-step guide including Docker, Sepolia escrow, and Phala Cloud deployment, see **[QUICKSTART.md](QUICKSTART.md)**.
+
 ### Prerequisites
 
 - Python 3.11+
