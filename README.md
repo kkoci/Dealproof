@@ -513,4 +513,4 @@ Submit the hex quote to `https://proof.phala.network` (requires real Phala Cloud
 
 ## License
 
-MIT
+[MIT](LICENSE)
