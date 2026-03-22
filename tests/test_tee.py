@@ -94,15 +94,18 @@ async def test_get_signing_key_calls_correct_endpoint(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sign_result_returns_quote_string():
-    """sign_result() returns the raw quote string from tappd."""
+    """sign_result() returns the raw quote string from tappd (production mode)."""
     from app.tee.attestation import sign_result
+    import app.tee.attestation as attestation_mod
 
     fake_quote = "0x" + "ab" * 128
     mock_ctx = _mock_httpx_client({"quote": fake_quote, "event_log": ""})
 
     terms = {"final_price": 750.0, "terms": {"access_scope": "full", "duration_days": 365}}
 
-    with patch("httpx.AsyncClient", return_value=mock_ctx):
+    with patch.object(attestation_mod.settings, "tee_mode", "production"), \
+         patch("httpx.AsyncHTTPTransport"), \
+         patch("httpx.AsyncClient", return_value=mock_ctx):
         result = await sign_result(terms)
 
     assert result == fake_quote
@@ -116,13 +119,16 @@ async def test_sign_result_report_data_is_64_bytes():
     """
     import hashlib, json
     from app.tee.attestation import sign_result
+    import app.tee.attestation as attestation_mod
 
     fake_quote = "cc" * 128
     mock_ctx = _mock_httpx_client({"quote": fake_quote, "event_log": ""})
 
     terms = {"final_price": 500.0, "terms": {}}
 
-    with patch("httpx.AsyncClient", return_value=mock_ctx):
+    with patch.object(attestation_mod.settings, "tee_mode", "production"), \
+         patch("httpx.AsyncHTTPTransport"), \
+         patch("httpx.AsyncClient", return_value=mock_ctx):
         await sign_result(terms)
 
     mock_client = mock_ctx.__aenter__.return_value
@@ -144,12 +150,15 @@ async def test_sign_result_report_data_is_64_bytes():
 
 @pytest.mark.asyncio
 async def test_sign_result_calls_correct_endpoint():
-    """sign_result() posts to /prpc/Tappd.TdxQuote."""
+    """sign_result() posts to /prpc/Tappd.TdxQuote (production mode)."""
     from app.tee.attestation import sign_result
+    import app.tee.attestation as attestation_mod
 
     mock_ctx = _mock_httpx_client({"quote": "ff" * 128, "event_log": ""})
 
-    with patch("httpx.AsyncClient", return_value=mock_ctx):
+    with patch.object(attestation_mod.settings, "tee_mode", "production"), \
+         patch("httpx.AsyncHTTPTransport"), \
+         patch("httpx.AsyncClient", return_value=mock_ctx):
         await sign_result({"final_price": 100.0, "terms": {}})
 
     mock_client = mock_ctx.__aenter__.return_value
