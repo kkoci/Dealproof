@@ -6,12 +6,6 @@ Two AI agents (buyer and seller) negotiate a data deal entirely inside an Intel 
 
 ---
 
-## Demo
-
-📹 **[Watch the demo video](https://drive.google.com/file/d/11FDO9T9HF8Xo0IpTh5_yVzZj4fnG5gVf/view?usp=drive_link)**
-
----
-
 ## The Problem
 
 Private dataset markets break on trust. A buyer cannot verify the data before paying. A seller cannot trust the buyer not to dispute the price after delivery. Any intermediary platform can manipulate the negotiation or lie about the outcome. Traditional escrow requires trusting a third party.
