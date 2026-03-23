@@ -111,7 +111,7 @@ The agents will negotiate for a few seconds. The response includes:
 pytest tests/ -v
 ```
 
-All 49 tests should pass. No network calls are made — everything is mocked.
+All 56 tests should pass. No network calls are made — everything is mocked.
 
 ---
 
