@@ -88,8 +88,8 @@ Dealproof/
 | 3 | Props layer — Merkle proof, data hash binding, combined attestation | ✅ Complete |
 | 4 | Smart contract — DealProof.sol on Sepolia, web3.py escrow | ✅ Complete |
 | 5 | Polish — CLI demo, README, E2E tests | ✅ Complete |
-| 6 | Frontend — React UI with wallet connection | 🔜 Next |
-| 7 | DCAP verification — Intel root CA on-chain | 🔜 Next |
+| 6 | Frontend — React UI with wallet connection | 🚧 In progress (scaffold built) |
+| 7 | DCAP verification — Full Intel DCAP (Option B) | ✅ Complete (2026-03-30) |
 
 ## Test Suite (56 passing)
 
@@ -170,20 +170,32 @@ Build a minimal React frontend. Judges and users should be able to run a deal wi
 
 **Key difference from TBVH:** Show the Props verification result prominently — this is DealProof's unique feature that TBVH doesn't have.
 
-### Priority 2: DCAP Verification (Days 3-4)
-Replace Phala-trust attestation verification with full Intel DCAP verification.
+### Priority 2: DCAP Verification (Days 3-4) ✅ COMPLETE (2026-03-30)
 
-**Current (Option A):** Phala root cert check — trust Phala's word that the hardware is genuine.
+Full Intel DCAP verification implemented in `app/tee/dcap.py`.
 
-**Target (Option B):** Intel DCAP — verify TDX quote against Intel's public certificate chain directly.
+**Option A (old):** Trust Phala's root cert — Phala says the hardware is genuine.
+**Option B (done):** Verify the TDX quote directly against Intel's public PKI — no Phala trust required.
 
-**Reference project:** TrustVerify by Joanne Muthoni (Shape Rotator finalist) — she built exactly this verification UI. Her GitHub: search "Joannetich TrustVerify Shape Rotator". Contact her for collaboration.
+**What was implemented:**
+Four-step verification chain in `parse_tdx_quote()`:
+1. **cert_chain_valid** — Extract PCK cert chain (Type 5) from QE Certification Data. Verify each cert signed by the next. Confirm root CN is "Intel SGX Root CA" and is self-signed. No hardcoded cert bytes needed — pins to Intel's identity by subject + self-signature.
+2. **qe_sig_valid** — Verify QE Report ECDSA-P256 signature using PCK public key. Proves the Quoting Enclave is Intel-signed.
+3. **att_key_binding_valid** — Verify QE REPORTDATA[0:32] == SHA-256(att_key_64bytes || qe_auth_data). Proves the attestation key is cryptographically bound to this Intel platform.
+4. **td_sig_valid** — Verify ECDSA-P256 signature over Header||TD_Report_Body using the ATT key. Proves the quote content (including deal_terms_hash) has not been tampered with.
 
-**Implementation path:**
-- Intel DCAP verification library: https://github.com/intel/SGXDataCenterAttestationPrimitives
-- Phala's verification docs: https://docs.phala.network
-- Add /api/deals/{id}/dcap-verify endpoint
-- Show full verification chain in frontend: hex decode → DCAP header parse → Platform ID → Provider registry → Trust score
+**`intel_verified=True`** only when all four pass. This is the full trustless path.
+
+**Files changed:**
+- `app/tee/dcap.py` — complete rewrite with 4-step verification
+- `app/api/schemas.py` — `DCAPVerification` gains: `cert_chain_valid`, `qe_sig_valid`, `att_key_binding_valid`, `td_sig_valid`, `intel_verified`, `pck_cert_subject`; new `verification_status` values: `dcap_partial`, `dcap_fully_verified`
+- `requirements.txt` — added `cryptography>=42.0.0`
+
+**Quote structure reference (TDX v4, ECDSA-P256):**
+- `[0:48]` Header, `[48:632]` TD Report (REPORTDATA at +400), `[632:636]` Sig len, `[636:]` Sig data
+- Sig data: ecdsa_sig(64) | att_key(64) | qe_report(384) | qe_sig(64) | auth_size(2) | auth_data(N) | cert_type(2) | cert_size(4) | cert_data(M)
+
+**Endpoint:** `GET /api/deals/{id}/dcap-verify` — returns full DCAPVerification JSON including all four check results.
 
 ### Priority 3: DKIM Email Proof (Day 4-5)
 Add email-based seller credential verification inside the TEE.

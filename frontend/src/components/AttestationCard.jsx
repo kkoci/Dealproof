@@ -125,44 +125,107 @@ export default function AttestationCard({ attestation, dealId, onInspect, dcapDa
       </div>
 
       {dcapData && (
-        <div className="px-4 pb-4">
+        <div className="px-4 pb-4 space-y-3">
+          {/* intel_verified headline */}
+          <div
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border ${
+              dcapData.intel_verified
+                ? 'bg-emerald-950/40 border-emerald-800/50'
+                : dcapData.mode === 'simulation'
+                ? 'bg-yellow-950/40 border-yellow-800/50'
+                : 'bg-red-950/30 border-red-800/40'
+            }`}
+          >
+            {dcapData.intel_verified ? (
+              <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0117.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4 text-yellow-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+            )}
+            <div>
+              <div className={`text-sm font-semibold ${dcapData.intel_verified ? 'text-emerald-300' : dcapData.mode === 'simulation' ? 'text-yellow-300' : 'text-gray-300'}`}>
+                {dcapData.intel_verified
+                  ? 'Intel DCAP Fully Verified'
+                  : dcapData.mode === 'simulation'
+                  ? 'Simulation Mode — No Hardware Attestation'
+                  : 'Partial Verification'}
+              </div>
+              <div className={`text-xs font-mono mt-0.5 ${dcapData.intel_verified ? 'text-emerald-500' : 'text-gray-500'}`}>
+                {dcapData.verification_status}
+              </div>
+            </div>
+          </div>
+
+          {/* 4-step chain (production only) */}
+          {dcapData.mode === 'production' && (
+            <div className="rounded-lg border border-gray-800/60 bg-gray-950/50 overflow-hidden">
+              <div className="px-3 py-2 border-b border-gray-800/40 bg-gray-900/40">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Verification Chain</span>
+              </div>
+              <div className="divide-y divide-gray-800/30">
+                {[
+                  { step: '1', label: 'PCK Cert Chain → Intel Root CA', ok: dcapData.cert_chain_valid, detail: dcapData.pck_cert_subject },
+                  { step: '2', label: 'QE Report Signature (PCK key)', ok: dcapData.qe_sig_valid },
+                  { step: '3', label: 'ATT Key Binding (QE REPORTDATA)', ok: dcapData.att_key_binding_valid },
+                  { step: '4', label: 'TD Report Signature (ATT key)', ok: dcapData.td_sig_valid },
+                ].map((row) => (
+                  <div key={row.step} className="flex items-center gap-3 px-3 py-2.5">
+                    <span className="text-xs font-mono text-gray-600 w-4 flex-shrink-0">{row.step}</span>
+                    <span className="flex-1 text-xs text-gray-300">{row.label}</span>
+                    {row.detail && (
+                      <span className="text-xs font-mono text-gray-500 truncate max-w-[120px]" title={row.detail}>{row.detail}</span>
+                    )}
+                    {row.ok === true && (
+                      <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                    {row.ok === false && (
+                      <svg className="w-4 h-4 text-red-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                    {row.ok === null && (
+                      <span className="text-xs text-gray-600">—</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Quote metadata */}
           <div className="rounded-lg border border-gray-800/60 bg-gray-950/50 overflow-hidden">
             <div className="px-3 py-2 border-b border-gray-800/40 bg-gray-900/40">
-              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">DCAP Quote Details</span>
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Quote Metadata</span>
             </div>
             <table className="w-full text-xs">
               <tbody>
                 {[
-                  { label: 'Mode', value: dcapData.mode },
                   { label: 'Version', value: dcapData.version },
                   { label: 'TEE Type', value: dcapData.tee_type },
                   {
-                    label: 'QE Vendor ID',
-                    value: dcapData.qe_vendor_id
-                      ? dcapData.qe_vendor_id.slice(0, 16) + (dcapData.qe_vendor_id.length > 16 ? '...' : '')
-                      : 'N/A',
-                    mono: true,
-                  },
-                  {
                     label: 'Deal Terms Hash',
                     value: dcapData.deal_terms_hash
-                      ? dcapData.deal_terms_hash.slice(0, 16) + (dcapData.deal_terms_hash.length > 16 ? '...' : '')
-                      : 'N/A',
+                      ? dcapData.deal_terms_hash.slice(0, 20) + '...'
+                      : null,
                     mono: true,
                   },
-                  { label: 'Status', value: dcapData.verification_status },
-                ].map((row) => (
+                ].filter(r => r.value != null).map((row) => (
                   <tr key={row.label} className="border-b border-gray-800/30 last:border-0">
                     <td className="px-3 py-2 text-gray-500 font-medium w-36">{row.label}</td>
                     <td className={`px-3 py-2 text-gray-200 ${row.mono ? 'font-mono' : ''}`}>
-                      {String(row.value ?? 'N/A')}
+                      {String(row.value)}
                     </td>
                   </tr>
                 ))}
                 {dcapData.error && (
                   <tr>
                     <td className="px-3 py-2 text-red-400 font-medium">Error</td>
-                    <td className="px-3 py-2 text-red-300 font-mono">{dcapData.error}</td>
+                    <td className="px-3 py-2 text-red-300 font-mono break-all">{dcapData.error}</td>
                   </tr>
                 )}
               </tbody>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
-import { getDealStatus, getDcapVerification } from '../api.js'
+import { getDealStatus, getDcapVerification, getDealVerification } from '../api.js'
 import TranscriptFeed from '../components/TranscriptFeed.jsx'
 import AttestationCard from '../components/AttestationCard.jsx'
 import StatusBadge from '../components/StatusBadge.jsx'
@@ -74,6 +74,71 @@ function TermsTable({ terms }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function PropsVerificationPanel({ dealId }) {
+  const [propsData, setPropsData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getDealVerification(dealId)
+      .then((d) => { if (!cancelled) setPropsData(d.verification) })
+      .catch(() => { /* no seller_proof — silently skip */ })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [dealId])
+
+  if (loading || !propsData) return null
+
+  const verified = propsData.verified === true
+
+  return (
+    <div className={`rounded-xl border overflow-hidden ${verified ? 'border-emerald-800/50 bg-emerald-950/20' : 'border-red-800/50 bg-red-950/20'}`}>
+      <div className={`px-4 py-3 border-b flex items-center gap-2 ${verified ? 'border-emerald-800/40 bg-emerald-950/30' : 'border-red-800/40 bg-red-950/30'}`}>
+        <svg className={`w-4 h-4 ${verified ? 'text-emerald-400' : 'text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+        </svg>
+        <span className={`text-sm font-semibold ${verified ? 'text-emerald-300' : 'text-red-300'}`}>
+          Props Data Verification
+        </span>
+        <span className={`ml-auto text-xs font-mono px-2 py-0.5 rounded-full border ${verified ? 'bg-emerald-900/40 border-emerald-700/50 text-emerald-300' : 'bg-red-900/40 border-red-700/50 text-red-300'}`}>
+          {verified ? '✓ VERIFIED' : '✗ FAILED'}
+        </span>
+      </div>
+
+      <div className="px-4 py-3 space-y-2 text-xs">
+        {verified && (
+          <p className="text-emerald-400 text-sm">
+            Dataset cryptographically verified inside Intel TDX enclave using Merkle proof.
+            The data hash is bound into the same attestation as the negotiation outcome.
+          </p>
+        )}
+        {propsData.data_hash && (
+          <div className="flex gap-2 items-center">
+            <span className="text-gray-500 w-24 flex-shrink-0">Data Hash</span>
+            <code className="font-mono text-gray-300 bg-gray-950/60 rounded px-2 py-1 border border-gray-800/60 break-all">{propsData.data_hash}</code>
+          </div>
+        )}
+        {propsData.chunk_count != null && (
+          <div className="flex gap-2 items-center">
+            <span className="text-gray-500 w-24 flex-shrink-0">Chunks</span>
+            <span className="text-gray-200">{propsData.chunk_count} verified</span>
+          </div>
+        )}
+        {propsData.attestation && (
+          <div className="flex gap-2 items-start">
+            <span className="text-gray-500 w-24 flex-shrink-0 pt-1">Props Quote</span>
+            <code className="font-mono text-gray-400 text-xs bg-gray-950/60 rounded px-2 py-1 border border-gray-800/60 break-all">{propsData.attestation.slice(0, 40)}...</code>
+          </div>
+        )}
+        {propsData.error && (
+          <p className="text-red-400">{propsData.error}</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -154,6 +219,9 @@ function ResultPanel({ result, dealId }) {
 
       {/* Terms */}
       {agreed && result.terms && <TermsTable terms={result.terms} />}
+
+      {/* Props data verification — DealProof's unique feature */}
+      <PropsVerificationPanel dealId={dealId} />
 
       {/* DKIM seller identity */}
       {result.dkim_verification && (
