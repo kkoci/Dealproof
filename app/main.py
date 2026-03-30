@@ -9,6 +9,7 @@ Changes from Phase 1:
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.config import settings
@@ -29,6 +30,19 @@ app = FastAPI(
     description="Verifiable AI Negotiation for Private Data Access — TEE-backed escrow via Claude agents",
     version="0.2.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:4173",
+        "https://*.vercel.app",
+        "*",  # open during demo; tighten before prod
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(router)

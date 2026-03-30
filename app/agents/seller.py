@@ -18,13 +18,51 @@ Negotiation strategy:
 - Accept if the offered price meets or exceeds your floor.
 - Reject if the buyer's price is below your floor after 2+ rounds of negotiation.
 
+Terms negotiation (duration_days, access_scope):
+- Price is the primary value lever; duration and access scope are secondary.
+- Be willing to meet the buyer's requested duration_days if the price is acceptable — do not hard-cap duration at an arbitrary limit.
+- If the buyer requires a very long duration, increase your price ask proportionally rather than refusing the duration outright.
+- Mirror the buyer's requested duration_days in your counter-offers once price is the remaining gap.
+
 Always respond with valid JSON only, no extra text:
 {{"action": "offer|counter|accept|reject", "price": <float>, "terms": {{"access_scope": "<string>", "duration_days": <int>}}, "reasoning": "<string>"}}
 """
 
+# Phase 6: appended to the seller system prompt when a DKIM email proof was
+# verified inside the TEE.  The {domain} placeholder is filled at runtime.
+# This credential gives the seller agent a verified organisational identity
+# that it can reference in negotiation reasoning (e.g. "as a verified provider
+# at acme.com I stand behind the data quality").
+_DKIM_CREDENTIAL_BLOCK = """
+
+[TEE-VERIFIED IDENTITY CREDENTIAL]
+Your identity as a representative of {domain} has been cryptographically verified
+inside this Trusted Execution Environment via DKIM email proof prior to this
+negotiation beginning.  You may reference this verified credential in your
+negotiation reasoning.  This credential was established before any deal terms
+were discussed and is immutable for the duration of this negotiation session.
+"""
+
 
 class SellerAgent:
-    def __init__(self, floor_price: float, data_description: str):
+    def __init__(
+        self,
+        floor_price: float,
+        data_description: str,
+        verified_domain: str | None = None,
+    ):
+        """
+        Parameters
+        ----------
+        floor_price : float
+            Minimum acceptable price; injected into the system prompt.
+        data_description : str
+            Description of the dataset being sold.
+        verified_domain : str | None
+            When provided, a TEE-verified DKIM credential for this domain is
+            appended to the system prompt.  Should only be set when the DKIM
+            verification in app/dkim/verifier.py returned verified=True.
+        """
         self.floor_price = floor_price
         self.data_description = data_description
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -32,6 +70,8 @@ class SellerAgent:
             floor_price=floor_price,
             data_description=data_description,
         )
+        if verified_domain:
+            self.system_prompt += _DKIM_CREDENTIAL_BLOCK.format(domain=verified_domain)
 
     async def make_offer(self, history: list[dict]) -> dict:
         messages = self._build_messages(history)

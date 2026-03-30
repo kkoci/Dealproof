@@ -16,12 +16,19 @@ DealProof moves the entire negotiation into a hardware-secured enclave:
 
 ```
 Buyer ──► AI Agent ──► TEE (Intel TDX) ◄── AI Agent ◄── Seller
+                             │                     │
+                    DKIM email proof       Seller identity
+                    (verified domain       credential injected
+                     inside TEE)           into agent context
                              │
                     Props data verification
                     (Merkle proof of dataset)
                              │
                     TDX attestation quote
                     (hardware-signed proof)
+                             │
+                    DCAP quote parsing
+                    (Phase 7: header + report_data)
                              │
                     On-chain escrow release
                     (DealProof.sol on Sepolia)
@@ -78,6 +85,9 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 | TEE runtime | Phala Cloud CVM (Intel TDX) |
 | TEE attestation | dstack tappd — `POST /prpc/Tappd.TdxQuote` |
 | Data provenance | Props-inspired Merkle root verification |
+| Seller identity | DKIM email proof — `dkimpy` + `dnspython` (Phase 6) |
+| DCAP inspection | TDX quote header parser — `app/tee/dcap.py` (Phase 7) |
+| Frontend | React 18 + Vite 5 + Tailwind CSS (Phase 6) |
 | API framework | FastAPI + uvicorn |
 | Persistence | SQLite via aiosqlite |
 | Smart contract | Solidity (DealProof.sol) on Sepolia — Phase 4 |
@@ -93,6 +103,27 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 - Python 3.11+
 - An Anthropic API key (get one at console.anthropic.com)
 - Docker + Docker Compose (for TEE simulator mode)
+
+### Frontend (React)
+
+The `frontend/` directory contains a Vite + React + Tailwind UI that connects to the backend.
+
+```bash
+cd frontend
+npm install
+npm run dev        # starts at http://localhost:5173
+```
+
+In `frontend/.env` (copy from `.env.example`):
+```
+VITE_API_URL=http://localhost:8000
+```
+
+The Vite dev server proxies `/api` and `/health` to the backend automatically — no CORS issues in development.
+
+For production, set `VITE_API_URL` to your Phala Cloud CVM URL and deploy `frontend/` to Vercel (the included `vercel.json` handles SPA routing).
+
+---
 
 ### Local — no Docker, no TEE
 
@@ -257,11 +288,17 @@ Create a deal. Stores the full payload in SQLite. Returns immediately.
     "chunk_hashes": ["<sha256>", "<sha256>", "..."],
     "chunk_count":  5,
     "algorithm":    "sha256"
-  }
+  },
+  "seller_email_eml": "<base64-encoded .eml file>",
+  "seller_address":   "0xABCD...",
+  "escrow_amount_eth": 0.01
 }
 ```
 
-`seller_proof` is optional. Omitting it skips Props verification.
+`seller_proof`, `seller_email_eml`, `seller_address`, and `escrow_amount_eth` are all optional.
+- `seller_proof`: enables Props Merkle verification inside the TEE
+- `seller_email_eml`: enables DKIM email identity proof (see **DKIM Email Proof** section below)
+- `seller_address` + `escrow_amount_eth`: enables on-chain escrow (Phase 4)
 
 **Response (201):**
 ```json
@@ -317,6 +354,32 @@ Returns the negotiation TDX quote (covers `final_price + terms + data_hash` when
 
 ---
 
+### `GET /api/deals/{deal_id}/dcap-verify`
+
+Phase 7: Parse and inspect the raw TDX attestation quote for a deal.
+
+**Response (200):**
+```json
+{
+  "deal_id": "3f2e1d0c-...",
+  "mode": "simulation",
+  "version": 4,
+  "tee_type": "TDX",
+  "qe_vendor_id": "939a7233f79c4ca9940a0db3957f0607",
+  "report_data_hex": "9f86d081884c7d659a2feaa0...",
+  "deal_terms_hash": "9f86d081884c7d659a2feaa0...",
+  "verification_status": "simulation_only",
+  "error": null
+}
+```
+
+`verification_status` values:
+- `simulation_only` — quote is from the tappd simulator; hardware verification not possible
+- `dcap_header_parsed` — real TDX quote; header fields extracted (full DCAP chain verification is Phase 7 on-chain)
+- `invalid_quote` — quote bytes could not be parsed
+
+---
+
 ### `GET /api/deals/{deal_id}/verification`
 
 Returns the Props data verification record. Only present when `seller_proof` was submitted.
@@ -357,6 +420,14 @@ Returns the Props data verification record. Only present when `seller_proof` was
   },
   "attestation":                  "0x04020000...",
   "data_verification_attestation": "0x04020000...",
+  "dkim_verification": {
+    "domain":          "acme.com",
+    "verified":         true,
+    "dns_unavailable":  false,
+    "error":            null
+  },
+  "escrow_tx":    null,
+  "completion_tx": null,
   "transcript": [
     {
       "round":     1,
@@ -369,6 +440,41 @@ Returns the Props data verification record. Only present when `seller_proof` was
   ]
 }
 ```
+
+`dkim_verification` is `null` when `seller_email_eml` was not provided.
+
+---
+
+## DKIM Email Proof — Seller Identity Verification
+
+Phase 6 adds a seller identity layer: the seller can upload an email they control (any email sent from their company domain), and the TEE verifies the DKIM signature before negotiation starts. The verified domain is injected into the seller agent's system prompt as an immutable TEE-verified credential.
+
+**Privacy guarantee:** The raw email body is discarded immediately after DKIM verification. Only the domain name and verified flag are retained in the deal record.
+
+**How to use:**
+
+```python
+import base64
+
+# Read a .eml file from your email client (Thunderbird: Save As, Apple Mail: Save As)
+with open("company_email.eml", "rb") as f:
+    eml_b64 = base64.b64encode(f.read()).decode()
+
+payload = {
+    "buyer_budget": 1000.0,
+    # ... other fields ...
+    "seller_email_eml": eml_b64,
+}
+```
+
+**What the TEE does:**
+1. Decodes the base64 `.eml` bytes
+2. Extracts the `d=` tag from the `DKIM-Signature` header to identify the domain
+3. Fetches the DKIM public key from DNS and verifies the signature
+4. Injects `[TEE-VERIFIED IDENTITY CREDENTIAL] seller represents acme.com` into the seller agent's system prompt
+5. Stores `{domain, verified, dns_unavailable, error}` in the deal record
+
+**Note:** Inside a Phala CVM, outbound DNS may be restricted by network policy. In that case, `dns_unavailable=true` is returned — the domain is still extracted but the cryptographic verification could not complete. The frontend shows a clear warning badge in this case.
 
 ---
 
@@ -438,23 +544,43 @@ LOG_LEVEL=INFO
 ```
 Dealproof/
 ├── app/
-│   ├── main.py              FastAPI app + lifespan (DB init)
+│   ├── main.py              FastAPI app + lifespan + CORS middleware
 │   ├── config.py            Pydantic Settings (reads .env)
 │   ├── db.py                SQLite persistence (aiosqlite)
 │   ├── agents/
 │   │   ├── buyer.py         BuyerAgent — Claude claude-sonnet-4-6
-│   │   ├── seller.py        SellerAgent — Claude claude-sonnet-4-6
+│   │   ├── seller.py        SellerAgent — Claude claude-sonnet-4-6 (Phase 6: verified_domain)
 │   │   └── negotiation.py   run_negotiation() loop + TEE sign
 │   ├── api/
-│   │   ├── routes.py        All HTTP endpoints
-│   │   └── schemas.py       Pydantic request/response models
+│   │   ├── routes.py        All HTTP endpoints (Phase 6: DKIM step, DCAP endpoint)
+│   │   └── schemas.py       Pydantic models (Phase 6: DealCreate.seller_email_eml, DCAPVerification)
 │   ├── tee/
 │   │   ├── attestation.py   sign_result() → POST /prpc/Tappd.TdxQuote
-│   │   └── kms.py           get_signing_key() → POST /prpc/Tappd.DeriveKey
+│   │   ├── kms.py           get_signing_key() → POST /prpc/Tappd.DeriveKey
+│   │   └── dcap.py          Phase 7: TDX quote header parser
+│   ├── dkim/
+│   │   ├── __init__.py      Package exports
+│   │   └── verifier.py      Phase 6: DKIM email proof verification (dkimpy + dnspython)
 │   ├── props/
 │   │   └── verifier.py      verify_data_authenticity() + Merkle root
 │   └── contract/
-│       └── escrow.py        web3.py stubs (Phase 4)
+│       └── escrow.py        web3.py escrow (Phase 4)
+├── frontend/                Phase 6: React + Vite + Tailwind UI
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js       (proxies /api + /health to localhost:8000)
+│   ├── vercel.json          (SPA rewrite for Vercel deploy)
+│   └── src/
+│       ├── App.jsx          React Router setup
+│       ├── api.js           All fetch calls (reads VITE_API_URL)
+│       ├── pages/
+│       │   ├── Home.jsx     Landing page + health status
+│       │   ├── CreateDeal.jsx  Deal form + DKIM upload
+│       │   └── DealView.jsx    Live transcript + result + DCAP inspect
+│       └── components/
+│           ├── TranscriptFeed.jsx
+│           ├── AttestationCard.jsx
+│           └── StatusBadge.jsx
 ├── contracts/
 │   ├── DealProof.sol        Solidity escrow contract (Phase 4)
 │   └── hardhat.config.js    Hardhat config for Sepolia deploy
@@ -464,17 +590,13 @@ Dealproof/
 │   ├── test_tee.py          Unit — KMS + attestation HTTP calls
 │   ├── test_props.py        Unit — Props verifier (22 tests)
 │   ├── test_e2e.py          E2E  — full HTTP stack (TestClient)
-│   └── test_contract.py     Stub — Phase 4
+│   └── test_contract.py     Phase 4 escrow tests
 ├── demo.py                  CLI demo script
 ├── Dockerfile               Python 3.11-slim, uvicorn
 ├── docker-compose.yml       app + dstack-simulator
-├── requirements.txt         All Python deps
+├── requirements.txt         All Python deps (incl. dkimpy, dnspython)
 ├── .env.example             Environment variable template
-├── IMPLEMENTATION.md        Phase-by-phase plan
-├── BUILD_LOG.md             What was built, when, where
-├── PHASE2.md                Phase 2 implementation detail
-├── PHASE3.md                Phase 3 implementation detail
-└── PHASE5.md                Phase 5 implementation detail
+└── IMPLEMENTATION.md        Phase-by-phase plan
 ```
 
 ---
@@ -486,8 +608,10 @@ Dealproof/
 | 1 | FastAPI scaffold, Claude agents, negotiation loop | ✅ Complete |
 | 2 | TEE integration — dstack tappd, TDX quotes, SQLite persistence, AsyncAnthropic | ✅ Complete |
 | 3 | Props layer — Merkle proof verification, data hash binding, combined attestation | ✅ Complete |
-| 4 | Smart contract — DealProof.sol on Sepolia, web3.py escrow | 🔜 Next |
+| 4 | Smart contract — DealProof.sol on Sepolia, web3.py escrow | ✅ Complete |
 | 5 | Polish & demo — CLI script, README, E2E tests | ✅ Complete |
+| 6 | React frontend (Vite + Tailwind), DKIM email identity proof, CORS | ✅ Complete |
+| 7 | DCAP quote parsing (header + report_data extraction); full on-chain cert chain verification | 🔄 Partial — quote parsing done; on-chain verifier contract pending |
 
 ---
 

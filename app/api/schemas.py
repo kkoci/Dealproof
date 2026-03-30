@@ -1,16 +1,16 @@
 """
-API schemas — Phase 3.
+API schemas — Phase 6.
 
-Changes from Phase 2:
-  - DealCreate gains optional seller_proof field (Phase 3 Props layer).
-    If omitted, verification is skipped and the deal runs with basic
-    hash-format validation only (Phase 1/2 backward-compatible behaviour).
-    If provided, full Merkle verification runs inside the TEE before
-    negotiation starts.
-  - DealResult gains data_verification_attestation field: the TDX quote
-    produced by verify_data_authenticity(), separate from the negotiation
-    attestation.  Both are present when seller_proof was supplied and the
-    deal was agreed.
+Changes from Phase 3:
+  - DealCreate gains optional seller_email_eml field (Phase 6 DKIM email proof).
+    When present, the base64-encoded .eml is verified inside the TEE before
+    negotiation.  The sending domain is injected into the seller agent's system
+    prompt as a TEE-verified credential.  The raw email body is never stored.
+  - DealResult gains dkim_verification field: the result of DKIM verification
+    {domain, verified, dns_unavailable, error}.
+  - DCAPVerification response model added for Phase 7 DCAP quote inspection.
+
+Changes from Phase 2→3 are preserved unchanged (seller_proof, data_verification_attestation).
 """
 from typing import Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -30,6 +30,20 @@ class DealCreate(BaseModel):
             "chunk_hashes (list of sha256 hex), chunk_count (int), algorithm ('sha256'). "
             "When present, data authenticity is verified inside the TEE before negotiation starts. "
             "If omitted, only basic hash-format validation is performed."
+        ),
+    )
+    # Phase 6: optional DKIM email proof — base64-encoded .eml file from the seller.
+    # The TEE verifies the DKIM signature via DNS, extracts the sending domain, and
+    # injects a TEE-verified credential into the seller agent before negotiation starts.
+    # The raw email bytes are never stored; only the domain + verified flag are retained.
+    seller_email_eml: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base64-encoded .eml file providing a DKIM email proof of seller identity. "
+            "The TEE verifies the DKIM signature and extracts the sending domain "
+            "(e.g. 'acme.com'). This domain is injected as a TEE-verified credential "
+            "into the seller agent's negotiation context. The raw email body is discarded "
+            "immediately after verification and is never persisted."
         ),
     )
     # Phase 4: optional on-chain escrow fields
@@ -100,6 +114,8 @@ class DealResult(BaseModel):
     # Phase 4: on-chain escrow transaction hashes
     escrow_tx: str | None = None        # tx hash of createDeal (escrow deposit)
     completion_tx: str | None = None    # tx hash of completeDeal or refund
+    # Phase 6: DKIM verification result (present when seller_email_eml was supplied)
+    dkim_verification: dict | None = None
     transcript: list[NegotiationRound] = []
 
 
@@ -107,3 +123,44 @@ class DealStatus(BaseModel):
     deal_id: str
     status: str  # "pending" | "negotiating" | "agreed" | "failed" | "verification_failed"
     result: DealResult | None = None
+
+
+class DCAPVerification(BaseModel):
+    """
+    Phase 7: Structured result from parsing a TDX attestation quote.
+
+    In simulation mode the quote is a hex-encoded SHA-256 string prefixed with
+    'sim_quote:'.  In production it is a raw TDX quote binary encoded as hex.
+
+    Fields
+    ------
+    deal_id : str
+    mode : "simulation" | "production"
+        Whether this quote came from a simulated or real TEE.
+    version : int | None
+        DCAP quote version (from the 2-byte header field). None for simulation.
+    tee_type : str | None
+        Decoded TEE type string (e.g. "TDX" for 0x00000081). None for simulation.
+    qe_vendor_id : str | None
+        16-byte QE vendor UUID hex string. Intel's QE has a fixed known value.
+        None for simulation.
+    report_data_hex : str | None
+        First 32 bytes of the TD report_data field, hex-encoded.
+        In DealProof this equals SHA-256(json(deal_terms)).  None for simulation.
+    deal_terms_hash : str | None
+        Same as report_data_hex — shown as a labeled alias for UI clarity.
+    verification_status : str
+        "simulation_only" | "dcap_header_parsed" | "invalid_quote"
+    error : str | None
+        Human-readable error if parsing failed.
+    """
+
+    deal_id: str
+    mode: str
+    version: int | None = None
+    tee_type: str | None = None
+    qe_vendor_id: str | None = None
+    report_data_hex: str | None = None
+    deal_terms_hash: str | None = None
+    verification_status: str
+    error: str | None = None
