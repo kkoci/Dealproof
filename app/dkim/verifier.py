@@ -9,10 +9,10 @@ DealCreate payload.  This module runs entirely inside the TEE and:
   1. Decodes the base64 payload to raw RFC-2822 email bytes.
   2. Extracts the `d=` tag from every DKIM-Signature header to identify the
      sending domain (e.g. "company.com").
-  3. Calls dkimpy's `verify()` to perform a live DKIM signature check via DNS.
-     If DNS is unavailable inside the CVM (network policy), the domain is still
-     extracted and returned with `verified=False, dns_unavailable=True` so the
-     UI can distinguish a verification failure from a network restriction.
+  3. Calls dkimpy's verify() using a custom DNS resolver that queries
+     Cloudflare's DNS-over-HTTPS endpoint (https://1.1.1.1/dns-query) so
+     DKIM public keys can be fetched inside the Phala TDX CVM where UDP
+     port 53 is blocked.
   4. Returns a DKIMResult dataclass.  The raw email bytes are never logged or
      persisted — only the domain and verified flag leave this function.
 
@@ -35,7 +35,9 @@ import base64
 import email as _email
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +57,8 @@ class DKIMResult:
     verified : bool
         True only when the cryptographic DKIM signature checked out.
     dns_unavailable : bool
-        True when the verification could not be completed because DNS was
-        unreachable inside the CVM.  In this case ``domain`` is still
-        populated but ``verified`` is False.
+        Retained for API compatibility; always False now that DNS lookups use
+        DoH and are not blocked inside the CVM.
     error : str | None
         Human-readable explanation when ``verified`` is False.
     """
@@ -66,6 +67,53 @@ class DKIMResult:
     verified: bool = False
     dns_unavailable: bool = False
     error: str | None = None
+
+
+class _TXTRecord:
+    """Wraps DoH TXT data to match the interface dkimpy expects from dnsfunc."""
+
+    __slots__ = ("strings",)
+
+    def __init__(self, strings: list[bytes]) -> None:
+        self.strings = strings
+
+
+def _doh_get_txt(
+    name: "bytes | str",
+    rdatatype: str = "TXT",
+    timeout: int = 5,
+    **_kwargs,
+) -> "list[_TXTRecord]":
+    """Fetch DNS TXT records via Cloudflare DoH (https://1.1.1.1/dns-query).
+
+    Injected as dkimpy's dnsfunc so DKIM key lookups work inside the Phala
+    TDX CVM where UDP port 53 is blocked.  HTTPS port 443 is allowed.
+    """
+    host = name.decode("ascii") if isinstance(name, bytes) else name
+    try:
+        resp = httpx.get(
+            "https://1.1.1.1/dns-query",
+            params={"name": host, "type": "TXT"},
+            headers={"Accept": "application/dns-json"},
+            timeout=float(timeout),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise OSError(f"DoH lookup failed for {host}: {exc}") from exc
+
+    records: list[_TXTRecord] = []
+    for answer in data.get("Answer", []):
+        if answer.get("type") != 16:  # 16 = TXT
+            continue
+        raw: str = answer.get("data", "")
+        # DoH JSON wraps each TXT string segment in double-quotes.
+        parts = [p.encode() for p in re.findall(r'"([^"]*)"', raw)]
+        if not parts:
+            # No quoted segments found — treat the whole value as one string.
+            parts = [raw.encode()]
+        records.append(_TXTRecord(parts))
+    return records
 
 
 async def verify_email_proof(eml_b64: str) -> DKIMResult:
@@ -94,7 +142,6 @@ async def verify_email_proof(eml_b64: str) -> DKIMResult:
     except Exception as exc:
         return DKIMResult(error=f"email parse failed: {exc}")
 
-    # There may be multiple DKIM-Signature headers; collect all domains.
     raw_sigs: list[str] = msg.get_all("DKIM-Signature") or []
     if not raw_sigs:
         return DKIMResult(error="No DKIM-Signature header found in the supplied .eml")
@@ -111,33 +158,29 @@ async def verify_email_proof(eml_b64: str) -> DKIMResult:
             error="DKIM-Signature header present but could not extract d= domain tag"
         )
 
-    # Step 3 — cryptographic verification via dkimpy
+    # Step 3 — cryptographic verification via dkimpy with DoH-based DNS
     try:
         import dkim  # dkimpy — optional dep; graceful fallback if missing
 
         try:
-            verified: bool = bool(dkim.verify(eml_bytes))
+            d = dkim.DKIM(eml_bytes)
+            d.dnsfunc = _doh_get_txt
+            verified: bool = bool(d.verify())
         except dkim.ValidationError as exc:
             return DKIMResult(domain=domain, verified=False, error=str(exc))
         except Exception as exc:
-            # Catch DNS resolution failures separately so the UI can surface
-            # the distinction between "bad signature" and "no DNS in CVM".
-            err_str = str(exc).lower()
-            if any(kw in err_str for kw in ("dns", "resolve", "timeout", "nxdomain", "nodns")):
-                logger.warning("DKIM DNS lookup failed inside TEE: %s", exc)
-                return DKIMResult(domain=domain, verified=False, dns_unavailable=True,
-                                  error=f"DNS unavailable inside TEE: {exc}")
             return DKIMResult(domain=domain, verified=False, error=str(exc))
 
         if not verified:
-            return DKIMResult(domain=domain, verified=False,
-                              error="DKIM signature did not verify (signature mismatch)")
+            return DKIMResult(
+                domain=domain,
+                verified=False,
+                error="DKIM signature did not verify (signature mismatch)",
+            )
 
         return DKIMResult(domain=domain, verified=True)
 
     except ImportError:
-        # dkimpy not installed — still return the domain so the UI shows
-        # something useful; mark as unverified with a clear reason.
         logger.warning("dkimpy not installed; cannot verify DKIM signature cryptographically")
         return DKIMResult(
             domain=domain,

@@ -1,26 +1,38 @@
 version: "3.9"
 
-# Phase 2: dstack-simulator runs tappd on port 8090, mimicking the real
-# Phala CVM tappd socket. The app service connects to it via
-# DSTACK_SIMULATOR_ENDPOINT. To switch to a real Phala Cloud CVM, set
-# DSTACK_SIMULATOR_ENDPOINT to the CVM's internal tappd address and
-# TEE_MODE=production; remove or disable the dstack-simulator service.
+# Production compose — suitable for Phala Cloud TDX CVM deployment.
+#
+# Build + push to Docker Hub:
+#   docker compose build
+#   docker compose push
+#
+# Deploy on Phala (pull pre-built image, no local source needed):
+#   docker compose pull
+#   docker compose up
+#
+# Local dev (adds hot-reload volume mount):
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml up
+#
+# DNS note: UDP port 53 is blocked inside the Phala TDX CVM.
+# DKIM key lookups use DNS-over-HTTPS (https://1.1.1.1/dns-query) via
+# HTTPS port 443 which is allowed. No extra network config required.
 
 services:
   app:
     build: .
+    image: kkoci/dealproof:latest
+    platform: linux/amd64
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
       - DSTACK_SIMULATOR_ENDPOINT=http://dstack-simulator:8090
-    volumes:
-      - .:/app
     depends_on:
       - dstack-simulator
 
   dstack-simulator:
     image: phalanetwork/tappd-simulator:latest
+    platform: linux/amd64
     ports:
       - "8090:8090"

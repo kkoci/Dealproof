@@ -43,6 +43,8 @@ Thumbs.db
 
 # Docker
 *.log
+docker-compose.phala.yml
+docker-compose.override.yml
 
 # Images
 *.png
@@ -66,6 +68,9 @@ PATCHES_APPLIED.md
 SETUP.md
 TESTING.md
 VIDEO_SCRIPT.md
+CLAUDE.md
+DKIM_DOH_CHANGES.md
+medium_part2_draft.md
 
 # Keep README
 !README.md
