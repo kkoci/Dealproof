@@ -331,3 +331,39 @@ async def test_verify_domain_lowercased_and_stripped():
         result = await verify_email_proof(_b64(eml))
 
     assert result.domain == "upper.example.com"
+
+
+# ---------------------------------------------------------------------------
+# Real .eml round-trip (skipped unless tests/fixtures/sample.eml is present)
+# ---------------------------------------------------------------------------
+
+import base64
+import os
+
+EML_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.eml")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.path.exists(EML_FIXTURE),
+    reason="sample.eml not yet provided — place a real Gmail .eml in tests/fixtures/",
+)
+async def test_real_gmail_dkim_roundtrip():
+    """
+    Full end-to-end test using a real Gmail .eml file.
+    Requires live network access to 1.1.1.1 DoH endpoint.
+    Only runs when tests/fixtures/sample.eml exists.
+    """
+    from app.dkim.verifier import verify_email_proof
+
+    with open(EML_FIXTURE, "rb") as f:
+        eml_bytes = f.read()
+
+    eml_b64 = base64.b64encode(eml_bytes).decode()
+    result = await verify_email_proof(eml_b64)
+
+    assert result.error is None, f"Unexpected error: {result.error}"
+    assert result.verified is True, "DKIM signature did not verify"
+    assert result.dns_unavailable is False, "DoH lookup failed — dns_unavailable is True"
+    assert result.domain, "Domain field is empty"
+    print(f"\nVerified DKIM for domain: {result.domain}")

@@ -74,3 +74,6 @@ medium_part2_draft.md
 
 # Keep README
 !README.md
+
+# DKIM test fixtures — real emails contain personal headers
+tests/fixtures/sample.eml
