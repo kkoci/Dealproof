@@ -369,3 +369,31 @@ def test_e2e_health_endpoint(client):
     body = r.json()
     assert body["status"] == "ok"
     assert "tee_mode" in body
+
+
+def test_e2e_attest_endpoint_returns_quote(client):
+    """
+    GET /api/attest returns a valid AttestationResponse in simulation mode.
+    No auth required; quote and mrenclave are present and non-empty.
+    """
+    r = client.get("/api/attest")
+    assert r.status_code == 200
+    body = r.json()
+    assert "quote" in body
+    assert "mrenclave" in body
+    assert "timestamp" in body
+    assert body["quote"].startswith("sim_quote:")
+    assert body["mrenclave"].startswith("sim_mrenclave:")
+    assert isinstance(body["timestamp"], int)
+    assert body["timestamp"] > 0
+
+
+def test_e2e_attest_endpoint_is_deterministic(client):
+    """
+    Two calls to GET /api/attest return the same quote and mrenclave
+    (simulation mode is deterministic — same enclave measurement every time).
+    """
+    r1 = client.get("/api/attest")
+    r2 = client.get("/api/attest")
+    assert r1.json()["quote"] == r2.json()["quote"]
+    assert r1.json()["mrenclave"] == r2.json()["mrenclave"]

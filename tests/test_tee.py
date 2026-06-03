@@ -212,6 +212,50 @@ async def test_negotiation_agreed_has_attestation():
     assert result.attestation == mock_quote
 
 
+# ---------------------------------------------------------------------------
+# attestation.get_enclave_quote
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_enclave_quote_simulation_mode():
+    """get_enclave_quote() in simulation mode returns deterministic quote and mrenclave."""
+    from app.tee.attestation import get_enclave_quote
+
+    result = await get_enclave_quote()
+
+    assert "quote" in result
+    assert "mrenclave" in result
+    assert result["quote"].startswith("sim_quote:")
+    assert result["mrenclave"].startswith("sim_mrenclave:")
+    # Deterministic — same values on repeated calls
+    result2 = await get_enclave_quote()
+    assert result["quote"] == result2["quote"]
+    assert result["mrenclave"] == result2["mrenclave"]
+
+
+@pytest.mark.asyncio
+async def test_get_enclave_quote_production_mode():
+    """get_enclave_quote() in production mode calls tappd with 128 zero hex chars."""
+    import app.tee.attestation as attestation_mod
+
+    fake_quote = "ab" * 256  # arbitrary hex, long enough for MRTD extraction
+    mock_ctx = _mock_httpx_client({"quote": fake_quote, "event_log": ""})
+
+    with patch.object(attestation_mod.settings, "tee_mode", "production"), \
+         patch("httpx.AsyncHTTPTransport"), \
+         patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await attestation_mod.get_enclave_quote()
+
+    assert result["quote"] == fake_quote
+    # report_data sent to tappd must be 128 hex chars (64 zero bytes)
+    mock_client = mock_ctx.__aenter__.return_value
+    call_args = mock_client.post.call_args
+    assert call_args[1]["json"]["report_data"] == "00" * 64
+    # MRTD extracted from offset 64..112 of the quote bytes
+    expected_mrenclave = bytes.fromhex(fake_quote)[64:112].hex()
+    assert result["mrenclave"] == expected_mrenclave
+
+
 @pytest.mark.asyncio
 async def test_negotiation_failed_has_no_attestation():
     """When a deal fails (buyer rejects), attestation stays None."""
