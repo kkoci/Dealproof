@@ -15,14 +15,16 @@ Changes from Phase 3:
 
 Changes from Phase 2→3 are preserved unchanged.
 """
+import time
 import uuid
 import logging
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification
+from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification, AttestationResponse
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
+from app.tee.attestation import get_enclave_quote
 from app.props.verifier import verify_data_authenticity
 from app.dkim.verifier import verify_email_proof
 from app.tee.dcap import parse_tdx_quote
@@ -232,6 +234,26 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/attest", response_model=AttestationResponse)
+async def get_attestation() -> AttestationResponse:
+    """
+    Return the current DCAP quote for the running enclave.
+
+    This is the FIRST call a client makes — before sending any sensitive payload.
+    Verify the returned quote against Intel's DCAP verification service (or the
+    /api/deals/{id}/dcap-verify endpoint), confirm mrenclave matches your trusted
+    build measurement, then proceed to POST /api/deals/run.
+
+    No authentication required — this endpoint is public by design.
+    """
+    result = await get_enclave_quote()
+    return AttestationResponse(
+        quote=result["quote"],
+        mrenclave=result["mrenclave"],
+        timestamp=int(time.time()),
+    )
+
 
 @router.post("/deals", response_model=DealStatus, status_code=201)
 async def create_deal(payload: DealCreate) -> DealStatus:

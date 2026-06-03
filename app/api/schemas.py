@@ -16,6 +16,13 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+class AttestationResponse(BaseModel):
+    """Response for GET /api/attest — the client verifies this before sending any payload."""
+    quote: str = Field(..., description="Hex-encoded DCAP TDX quote for the running enclave")
+    mrenclave: str | None = Field(None, description="Enclave code measurement (MRTD for TDX, 48-byte SHA-384 hex)")
+    timestamp: int = Field(..., description="Unix timestamp of quote generation")
+
+
 class DealCreate(BaseModel):
     buyer_budget: float = Field(..., gt=0, description="Maximum the buyer will pay")
     buyer_requirements: str = Field(..., description="What the buyer needs from the data")
