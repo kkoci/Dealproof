@@ -55,6 +55,8 @@ contracts/artifacts/
 contracts/cache/
 
 # Project-specific docs (internal planning)
+ARCHITECTURE.md
+dealproof_attestation_first.md
 PHASE2.md
 PHASE3.md
 PHASE4.md
@@ -77,3 +79,6 @@ medium_part2_draft.md
 
 # DKIM test fixtures — real emails contain personal headers
 tests/fixtures/sample.eml
+
+# Powershell
+test_dkim_live.ps1
