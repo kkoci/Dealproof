@@ -704,6 +704,8 @@ OPENROUTER_API_KEY=...        # alternative
 
 ## πCreds — Privately Inferred Credentials
 
+> Paper: [Privately Inferred Credentials (πCreds)](https://arxiv.org/pdf/2606.03771)
+
 ### What They Are
 
 After each successful deal, the TEE runs a Claude-powered compliance audit over the negotiation using `app/picreds/auditor.py`. This produces three **Privately Inferred Credentials (πCreds)**:
@@ -786,6 +788,8 @@ payload = {
 ---
 
 ## Props — How Seller Proof Generation Works
+
+> Paper: [Props: Privacy-Preserving Proof of Data Authenticity](https://arxiv.org/pdf/2410.20522)
 
 The seller generates their proof before creating the deal:
 
@@ -972,6 +976,16 @@ python verify_attestation.py --url https://your-cvm.phala.network --deal-id 3f2e
 1. The quote signature is valid (signed by CPU hardware key → chains to Intel root CA)
 2. `MRTD` register matches the expected Docker image measurement
 3. `REPORTDATA[0:32]` equals `SHA-256(canonical JSON of deal terms + memory hashes + picreds_hash)`
+
+---
+
+## References
+
+| Paper | Relevance |
+|-------|-----------|
+| [Privately Inferred Credentials (πCreds)](https://arxiv.org/pdf/2606.03771) | Theoretical basis for the πCreds audit — LLM-inferred, TEE-attested policy and conduct credentials |
+| [Props: Privacy-Preserving Proof of Data Authenticity](https://arxiv.org/pdf/2410.20522) | Merkle-based data provenance scheme used in the Props verification layer |
+| [NDAI: Non-Disclosure AI](https://arxiv.org/pdf/2502.07924) | Broader framework for private AI computation with hardware attestation — motivates the overall DealProof architecture |
 
 ---
 

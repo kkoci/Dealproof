@@ -441,6 +441,42 @@ def run_demo(base_url: str, scenario_key: str, two_step: bool, include_proof: bo
 
         print()
 
+        # Attested memory state transition (Phase 8)
+        mem_hash      = result_data.get("memory_hash")
+        mem_hash_post = result_data.get("memory_hash_post")
+        mem_attested  = result_data.get("memory_attested", False)
+        if mem_hash or mem_hash_post:
+            badge = GREEN("✓ attested") if mem_attested else YELLOW("not attested")
+            print(f"  {BOLD(MAGENTA('Contexto Memory (Phase 8):'))}  {badge}")
+            if mem_hash:
+                pre_short = mem_hash[:32] if len(mem_hash) <= 40 else mem_hash[:32] + "…"
+                print(f"  {BOLD('Pre-deal  (A):')}  {DIM(pre_short)}")
+            if mem_hash_post:
+                post_short = mem_hash_post[:32] if len(mem_hash_post) <= 40 else mem_hash_post[:32] + "…"
+                print(f"  {BOLD('Post-deal (B):')}  {DIM(post_short)}")
+            if mem_attested:
+                print(f"  {DIM('State transition A→B is covered by the Deal Attestation TDX quote.')}")
+            print()
+
+        # πCreds (Phase 9)
+        picreds      = result_data.get("picreds") or []
+        picreds_hash = result_data.get("picreds_hash")
+        picreds_att  = result_data.get("picreds_attested", False)
+        if picreds:
+            badge = GREEN("✓ attested") if picreds_att else YELLOW("not attested")
+            print(f"  {BOLD(MAGENTA('πCreds — Privately Inferred Credentials (Phase 9):'))}  {badge}")
+            for cred in picreds:
+                subj     = cred.get("subject", "?")
+                ctype    = cred.get("credential_type", "?")
+                result_  = cred.get("audit_result", {})
+                assess   = result_.get("assessment", "")
+                short    = textwrap.shorten(assess, width=50, placeholder="…")
+                print(f"  {CYAN(f'{subj:14}')} {DIM(f'[{ctype}]'):16}  {short}")
+            if picreds_hash:
+                ph_short = picreds_hash[:32] + "…"
+                print(f"  {BOLD('Combined hash:')}  {DIM(ph_short)}  {DIM('[in TDX report_data]')}")
+            print()
+
         # On-chain placeholder (Phase 4)
         print(f"  {BOLD('On-chain escrow:')}  {DIM('Phase 4 — not yet deployed')}")
         print(f"  {DIM('(Phase 4 will: deposit ETH to DealProof.sol → verify attestation → release payment)')}")
