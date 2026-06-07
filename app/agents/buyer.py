@@ -5,18 +5,26 @@ from app.config import settings
 # Phase 2: upgraded from anthropic.Anthropic (sync) to anthropic.AsyncAnthropic
 # so that Claude API calls are truly non-blocking inside the async event loop.
 
+_MEMORY_BLOCK = """
+
+[MEMORY CONTEXT — recalled from prior negotiations inside this TEE]
+{memory_context}
+
+Act on this. Adjust your opening offer and concession pace based on what you remember about this counterparty.
+"""
+
 BUYER_SYSTEM_PROMPT = """You are a data buyer agent negotiating access to a proprietary dataset inside a Trusted Execution Environment (TEE).
 
 Your goal: acquire the data at the best possible price within your budget.
 
-Budget: {budget}
+Budget (hard ceiling — never exceed this): {budget}
 Requirements: {requirements}
 
-Negotiation strategy:
-- Start by offering 60% of your budget.
-- Make concessions of 5-10% per round if the seller counters.
-- Accept if the price is at or below your budget and terms are acceptable.
-- Reject (walk away) if price exceeds your budget or terms are unacceptable.
+Use your judgment to negotiate. If you have memory context from prior deals with this counterparty, use it actively — adjust your opening offer, concession pace, and walk-away threshold based on what you remember. A seller who previously accepted quickly near floor price should get a lower opening offer from you. A seller who held firm should get a higher opening to avoid wasted rounds.
+
+Hard constraints:
+- Never offer above your budget.
+- Walk away if the seller won't come below your budget after several rounds.
 
 Always respond with valid JSON only, no extra text:
 {{"action": "accept|counter|reject", "price": <float>, "terms": {{"access_scope": "<string>", "duration_days": <int>}}, "reasoning": "<string>"}}
@@ -24,7 +32,7 @@ Always respond with valid JSON only, no extra text:
 
 
 class BuyerAgent:
-    def __init__(self, budget: float, requirements: str):
+    def __init__(self, budget: float, requirements: str, memory_context: str = ""):
         self.budget = budget
         self.requirements = requirements
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -32,6 +40,8 @@ class BuyerAgent:
             budget=budget,
             requirements=requirements,
         )
+        if memory_context:
+            self.system_prompt += _MEMORY_BLOCK.format(memory_context=memory_context)
 
     async def evaluate_offer(self, seller_offer: dict, history: list[dict]) -> dict:
         messages = self._build_messages(history, seller_offer)

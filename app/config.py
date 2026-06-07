@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     private_key: str = ""
     contract_address: str = ""
 
+    # Memory sidecar
+    memory_service_url: str = "http://localhost:4011"
+    openai_api_key: str = ""
+
     # App
     debug: bool = True
     log_level: str = "INFO"

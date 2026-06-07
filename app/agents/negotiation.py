@@ -70,6 +70,7 @@ async def run_negotiation(
     seller: SellerAgent,
     max_rounds: int = 10,
     data_hash: str | None = None,  # Phase 3: from Props verification; embedded in the deal attestation
+    memory_hash: str = "",  # SHA-256 of buyer+seller memory state; included in attestation when non-empty
 ) -> NegotiationResult:
     history: list[dict] = []
     transcript: list[NegotiationRound] = []
@@ -119,7 +120,8 @@ async def run_negotiation(
             agreed_terms = seller_offer.get("terms", {})
             logger.info(f"Deal agreed at {agreed_price} — requesting TEE attestation")
             attestation = await sign_result(
-                _build_sign_payload(agreed_price, agreed_terms, data_hash)
+                _build_sign_payload(agreed_price, agreed_terms, data_hash),
+                memory_hash=memory_hash,
             )
             return NegotiationResult(
                 agreed=True,
@@ -136,12 +138,23 @@ async def run_negotiation(
         # Re-query seller with the buyer's counter offer
         history_check = list(history)
         seller_eval = await seller.make_offer(history_check)
+        seller_eval = _normalise_action(seller_eval, valid={"offer", "counter", "accept", "reject"}, default="counter")
+
+        # When the seller accepts, the deal closes at the buyer's counter price.
+        # Override the transcript price so it matches the actual agreed amount —
+        # the seller's stated price on an accept is unreliable (the LLM may echo
+        # its own last ask rather than the buyer's counter).
+        transcript_price = (
+            buyer_response["price"]
+            if seller_eval["action"] == "accept"
+            else seller_eval["price"]
+        )
         transcript.append(
             NegotiationRound(
                 round=round_num,
                 role="seller",
                 action=seller_eval["action"],
-                price=seller_eval["price"],
+                price=transcript_price,
                 terms=seller_eval.get("terms", {}),
                 reasoning=seller_eval.get("reasoning", ""),
             )
@@ -155,7 +168,8 @@ async def run_negotiation(
                 f"Seller accepted buyer counter at {agreed_price} — requesting TEE attestation"
             )
             attestation = await sign_result(
-                _build_sign_payload(agreed_price, agreed_terms, data_hash)
+                _build_sign_payload(agreed_price, agreed_terms, data_hash),
+                memory_hash=memory_hash,
             )
             return NegotiationResult(
                 agreed=True,

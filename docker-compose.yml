@@ -28,11 +28,35 @@ services:
       - .env
     environment:
       - DSTACK_SIMULATOR_ENDPOINT=http://dstack-simulator:8090
+      - MEMORY_SERVICE_URL=http://memory-service:4011
     depends_on:
       - dstack-simulator
+      - memory-service
 
   dstack-simulator:
     image: phalanetwork/tappd-simulator:latest
     platform: linux/amd64
     ports:
       - "8090:8090"
+
+  memory-service:
+    build:
+      context: ./memory-service
+      dockerfile: Dockerfile
+    image: kkoci/dealproof-memory:latest
+    platform: linux/amd64
+    ports:
+      - "4011:4011"
+    volumes:
+      - memory-data:/data
+    environment:
+      - MEMORY_DB_PATH=/data/memory.db
+      - PORT=4011
+      - MEMORY_PROVIDER=${MEMORY_PROVIDER:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+    restart: unless-stopped
+
+volumes:
+  memory-data:

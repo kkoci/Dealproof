@@ -56,6 +56,8 @@ contracts/cache/
 
 # Project-specific docs (internal planning)
 ARCHITECTURE.md
+CONTEXTO_INTEGRATION.md
+dealproof_attested_memory.md
 dealproof_attestation_first.md
 DEALPROOF_NEXT5DAYS.md
 task2_attest_endpoint.md

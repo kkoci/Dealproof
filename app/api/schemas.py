@@ -109,6 +109,26 @@ class NegotiationRound(BaseModel):
     reasoning: str
 
 
+class PiCred(BaseModel):
+    """
+    A Privately Inferred Credential (πCred) produced by LLM inference
+    over TEE-resident data, attested by the enclave's TDX quote.
+
+    credential_type: "policy" (agent code audit) | "conduct" (transcript audit)
+    subject:         "buyer_agent" | "seller_agent" | "deal"
+    code_hash:       SHA-256 of the audited system prompt (policy creds only)
+    audit_result:    structured LLM assessment
+    issued_at:       unix timestamp of issuance (inside the enclave)
+    """
+    type: str = "DealProofCredential"
+    credential_type: str
+    subject: str
+    deal_id: str
+    code_hash: str
+    audit_result: dict
+    issued_at: int
+
+
 class DealResult(BaseModel):
     deal_id: str
     agreed: bool
@@ -123,6 +143,17 @@ class DealResult(BaseModel):
     completion_tx: str | None = None    # tx hash of completeDeal or refund
     # Phase 6: DKIM verification result (present when seller_email_eml was supplied)
     dkim_verification: dict | None = None
+    # Attested memory state transition:
+    #   memory_hash      — pre-negotiation snapshot (state A, included in TDX quote)
+    #   memory_hash_post — post-negotiation snapshot (state B, included in TDX quote)
+    # Together they prove: code ran on state A, produced outcome, arrived at state B.
+    memory_hash: str | None = None
+    memory_hash_post: str | None = None
+    memory_attested: bool = False
+    # πCreds: LLM-inferred credentials attested by TDX quote
+    picreds: list[PiCred] | None = None
+    picreds_hash: str | None = None  # combined SHA-256 of all credentials, in TDX report_data
+    picreds_attested: bool = False
     transcript: list[NegotiationRound] = []
 
 

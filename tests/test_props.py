@@ -408,7 +408,12 @@ async def test_route_valid_proof_produces_both_attestations():
     with patch("app.api.routes.db.create_deal", new_callable=AsyncMock), \
          patch("app.api.routes.db.update_deal", new_callable=AsyncMock), \
          patch("app.props.verifier.sign_result", new_callable=AsyncMock, return_value="props-quote-xyz"), \
-         patch("app.agents.negotiation.sign_result", new_callable=AsyncMock, return_value="deal-quote-abc"):
+         patch("app.agents.negotiation.sign_result", new_callable=AsyncMock, return_value="deal-quote-abc"), \
+         patch("app.api.routes.search_memories", new_callable=AsyncMock, return_value=[]), \
+         patch("app.api.routes.add_memories", new_callable=AsyncMock, return_value={"stored": 0, "ids": []}), \
+         patch("app.api.routes.get_memory_hash", new_callable=AsyncMock, return_value={"hash": "", "count": 0}), \
+         patch("app.api.routes.audit_agent_policy", new_callable=AsyncMock, side_effect=Exception("mock")), \
+         patch("app.api.routes.audit_deal_conduct", new_callable=AsyncMock, side_effect=Exception("mock")):
 
         from app.agents.buyer import BuyerAgent
         from app.agents.seller import SellerAgent

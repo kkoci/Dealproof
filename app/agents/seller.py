@@ -9,20 +9,18 @@ SELLER_SYSTEM_PROMPT = """You are a data seller agent negotiating access to your
 
 Your goal: maximise revenue while protecting data integrity.
 
-Minimum acceptable price (floor): {floor_price}
+Minimum acceptable price (floor — never go below this): {floor_price}
 Data description: {data_description}
 
-Negotiation strategy:
-- Open by asking 40% above your floor price.
-- Come down by 5-10% per round if the buyer counters reasonably.
-- Accept if the offered price meets or exceeds your floor.
-- Reject if the buyer's price is below your floor after 2+ rounds of negotiation.
+Use your judgment to negotiate. If you have memory context from prior deals with this counterparty, use it actively — adjust your opening ask, how quickly you concede, and whether you hold firm based on what you remember. A buyer who previously accepted high quickly should get a higher opening ask. A buyer who always anchors low and grinds you down should get a lower opening to close faster and protect your floor.
 
-Terms negotiation (duration_days, access_scope):
-- Price is the primary value lever; duration and access scope are secondary.
-- Be willing to meet the buyer's requested duration_days if the price is acceptable — do not hard-cap duration at an arbitrary limit.
-- If the buyer requires a very long duration, increase your price ask proportionally rather than refusing the duration outright.
-- Mirror the buyer's requested duration_days in your counter-offers once price is the remaining gap.
+Hard constraints:
+- Never accept below your floor price.
+- Reject if the buyer refuses to move above floor after several rounds.
+
+Terms negotiation:
+- Price is the primary lever. Be flexible on duration and access scope if price is right.
+- If the buyer needs a longer duration, price it in proportionally.
 
 Always respond with valid JSON only, no extra text:
 {{"action": "offer|counter|accept|reject", "price": <float>, "terms": {{"access_scope": "<string>", "duration_days": <int>}}, "reasoning": "<string>"}}
@@ -33,6 +31,14 @@ Always respond with valid JSON only, no extra text:
 # This credential gives the seller agent a verified organisational identity
 # that it can reference in negotiation reasoning (e.g. "as a verified provider
 # at acme.com I stand behind the data quality").
+_MEMORY_BLOCK = """
+
+[MEMORY CONTEXT — recalled from prior negotiations inside this TEE]
+{memory_context}
+
+Act on this. Adjust your opening ask and concession pace based on what you remember about this counterparty.
+"""
+
 _DKIM_CREDENTIAL_BLOCK = """
 
 [TEE-VERIFIED IDENTITY CREDENTIAL]
@@ -50,6 +56,7 @@ class SellerAgent:
         floor_price: float,
         data_description: str,
         verified_domain: str | None = None,
+        memory_context: str = "",
     ):
         """
         Parameters
@@ -62,6 +69,9 @@ class SellerAgent:
             When provided, a TEE-verified DKIM credential for this domain is
             appended to the system prompt.  Should only be set when the DKIM
             verification in app/dkim/verifier.py returned verified=True.
+        memory_context : str
+            Recalled memories from prior negotiations, injected into the system
+            prompt before negotiation starts.
         """
         self.floor_price = floor_price
         self.data_description = data_description
@@ -70,6 +80,8 @@ class SellerAgent:
             floor_price=floor_price,
             data_description=data_description,
         )
+        if memory_context:
+            self.system_prompt += _MEMORY_BLOCK.format(memory_context=memory_context)
         if verified_domain:
             self.system_prompt += _DKIM_CREDENTIAL_BLOCK.format(domain=verified_domain)
 

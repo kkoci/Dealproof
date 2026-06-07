@@ -108,6 +108,22 @@ def patch_db_path(tmp_path):
     db_module.DB_PATH = original
 
 
+@pytest.fixture(autouse=True)
+def mock_memory_sidecar():
+    """
+    Mock all memory sidecar calls so tests don't depend on a running service.
+    autouse=True — applied to every test in this module.
+    Patch at app.api.routes (where the names are used) so the mocks take effect.
+    Returns empty results by default so memory context is blank and memory_hash is "".
+    """
+    with patch("app.api.routes.search_memories", new_callable=AsyncMock, return_value=[]), \
+         patch("app.api.routes.add_memories", new_callable=AsyncMock, return_value={"stored": 0, "ids": []}), \
+         patch("app.api.routes.get_memory_hash", new_callable=AsyncMock, return_value={"hash": "", "count": 0}), \
+         patch("app.api.routes.audit_agent_policy", new_callable=AsyncMock, side_effect=Exception("mock: no picreds")), \
+         patch("app.api.routes.audit_deal_conduct", new_callable=AsyncMock, side_effect=Exception("mock: no picreds")):
+        yield
+
+
 @pytest.fixture()
 def client():
     """
@@ -356,6 +372,32 @@ def test_e2e_duplicate_negotiate_returns_409(client):
 
         r2 = client.post(f"/api/deals/{deal_id}/negotiate")
         assert r2.status_code == 409
+
+
+def test_e2e_memory_attested_in_response(client):
+    """
+    When the memory sidecar returns non-empty hashes, the DealResult should
+    include memory_hash and memory_attested: true.
+    """
+    data_hash = "e" * 64
+    payload = {**BASE_PAYLOAD, "data_hash": data_hash}
+
+    fake_hash = "f" * 64
+
+    with patch("app.agents.negotiation.sign_result", new_callable=AsyncMock, return_value="deal-quote-mem"), \
+         patch("app.agents.buyer.BuyerAgent.evaluate_offer", new_callable=AsyncMock, return_value=_agent_response("accept", 700.0)), \
+         patch("app.agents.seller.SellerAgent.make_offer", new_callable=AsyncMock, return_value=_agent_response("offer", 700.0)), \
+         patch("app.api.routes.search_memories", new_callable=AsyncMock, return_value=[{"content": "past deal at 700"}]), \
+         patch("app.api.routes.add_memories", new_callable=AsyncMock, return_value={"stored": 1, "ids": ["m1"]}), \
+         patch("app.api.routes.get_memory_hash", new_callable=AsyncMock, return_value={"hash": fake_hash, "count": 1}):
+
+        response = client.post("/api/deals/run", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agreed"] is True
+    assert body["memory_attested"] is True
+    assert body["memory_hash"] == f"{fake_hash}:{fake_hash}"
 
 
 def test_e2e_unknown_deal_returns_404(client):

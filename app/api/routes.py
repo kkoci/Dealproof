@@ -15,12 +15,14 @@ Changes from Phase 3:
 
 Changes from Phase 2→3 are preserved unchanged.
 """
+import hashlib
 import time
 import uuid
 import logging
+import httpx
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification, AttestationResponse
+from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification, AttestationResponse, PiCred
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
@@ -34,9 +36,22 @@ from app.contract.escrow import (
     EscrowNotConfigured,
 )
 import app.db as db
+from app.memory.client import search_memories, add_memories, get_memory_hash
+from app.picreds.auditor import audit_agent_policy, audit_deal_conduct
+from app.picreds.credential import make_credential, hash_credentials
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
+
+
+def _format_memories(results: list[dict]) -> str:
+    if not results:
+        return ""
+    lines = []
+    for r in results[:5]:
+        content = r.get("content") or r.get("text") or str(r)
+        lines.append(f"- {content}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -159,18 +174,153 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         await db.update_deal(deal_id, "negotiating", verification=verification_dict)
 
     # ------------------------------------------------------------------ #
+    # Step M1 — recall memory context + snapshot hash before negotiation
+    # Search and hash are separated so hash works even if embedding fails.
+    # ------------------------------------------------------------------ #
+    buyer_memory_context = ""
+    seller_memory_context = ""
+    try:
+        buyer_memories = await search_memories(
+            "buyer",
+            f"counterparty offering {payload.data_description} at floor {payload.floor_price}"
+        )
+        seller_memories = await search_memories(
+            "seller",
+            f"buyer with budget {payload.buyer_budget} requiring {payload.buyer_requirements}"
+        )
+        buyer_memory_context = _format_memories(buyer_memories)
+        seller_memory_context = _format_memories(seller_memories)
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: memory search failed (non-fatal) — {exc}")
+
+    memory_hash = ""
+    try:
+        buyer_hash_data = await get_memory_hash("buyer")
+        seller_hash_data = await get_memory_hash("seller")
+        memory_hash = f"{buyer_hash_data.get('hash', '')}:{seller_hash_data.get('hash', '')}"
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: memory hash failed (non-fatal) — {exc}")
+
+    # ------------------------------------------------------------------ #
     # Step 3 — negotiation loop
     # ------------------------------------------------------------------ #
-    buyer = BuyerAgent(budget=payload.buyer_budget, requirements=payload.buyer_requirements)
+    buyer = BuyerAgent(
+        budget=payload.buyer_budget,
+        requirements=payload.buyer_requirements,
+        memory_context=buyer_memory_context,
+    )
     # Phase 6: pass verified_domain so the seller agent receives a TEE-verified
     # DKIM identity credential in its system prompt (only set when DKIM passed).
     seller = SellerAgent(
         floor_price=payload.floor_price,
         data_description=payload.data_description,
         verified_domain=verified_domain,
+        memory_context=seller_memory_context,
     )
 
-    result = await run_negotiation(buyer, seller, data_hash=data_hash_for_attestation)
+    result = await run_negotiation(
+        buyer, seller, data_hash=data_hash_for_attestation, memory_hash=memory_hash
+    )
+
+    # ------------------------------------------------------------------ #
+    # Step M2 — store deal outcome + capture post-deal memory hash (non-fatal)
+    #
+    # Completing the state transition proof:
+    #   memory_hash      = pre-negotiation state (A) — snapshotted in M1
+    #   memory_hash_post = post-negotiation state (B) — snapshotted here after storing
+    #
+    # Both are included in the final TDX attestation so a verifier can prove:
+    #   "Code X ran on memory state A, reached outcome Y, and produced memory state B."
+    # ------------------------------------------------------------------ #
+    memory_hash_post: str | None = None
+    picreds_raw: list[dict] = []
+    picreds_hash: str | None = None
+    if result.agreed:
+        try:
+            outcome_messages = [
+                {"role": "user", "content": f"Deal context: {payload.buyer_requirements}. Data: {payload.data_description}."},
+                {"role": "assistant", "content": f"Agreed at price {result.final_price}. Terms: {result.terms}."},
+            ]
+            await add_memories("buyer", outcome_messages, user_id=deal_id)
+            await add_memories("seller", outcome_messages, user_id=deal_id)
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:300] if exc.response.text else "(empty body)"
+            logger.warning(
+                f"Deal {deal_id}: memory store failed (non-fatal) — "
+                f"HTTP {exc.response.status_code} from memory service: {body}"
+            )
+        except Exception as exc:
+            logger.warning(f"Deal {deal_id}: memory store failed (non-fatal) — {exc}")
+
+        try:
+            buyer_hash_post = await get_memory_hash("buyer")
+            seller_hash_post = await get_memory_hash("seller")
+            memory_hash_post = f"{buyer_hash_post.get('hash', '')}:{seller_hash_post.get('hash', '')}"
+            logger.info(f"Deal {deal_id}: post-deal memory hash captured")
+        except Exception as exc:
+            logger.warning(f"Deal {deal_id}: post-deal memory hash failed (non-fatal) — {exc}")
+
+        # ------------------------------------------------------------------ #
+        # Step P — πCreds: audit agent policy + deal conduct (non-fatal)
+        #
+        # Policy credentials: read each agent's system prompt inside the TEE
+        #   and certify what rules it is bound by, without revealing the prompt.
+        # Conduct credential: review the transcript and certify neither agent
+        #   violated their hard constraints during this negotiation.
+        # ------------------------------------------------------------------ #
+        picreds_raw: list[dict] = []
+        picreds_hash: str | None = None
+        try:
+            buyer_code_hash = hashlib.sha256(buyer.system_prompt.encode()).hexdigest()
+            seller_code_hash = hashlib.sha256(seller.system_prompt.encode()).hexdigest()
+
+            buyer_policy = await audit_agent_policy("buyer", buyer.system_prompt)
+            seller_policy = await audit_agent_policy("seller", seller.system_prompt)
+
+            transcript_data = [
+                {"round": r.round, "role": r.role, "action": r.action, "price": r.price}
+                for r in result.transcript
+            ]
+            conduct = await audit_deal_conduct(
+                transcript_data, payload.buyer_budget, payload.floor_price, result.final_price
+            )
+
+            picreds_raw = [
+                make_credential("policy", "buyer_agent", buyer_policy, deal_id, buyer_code_hash),
+                make_credential("policy", "seller_agent", seller_policy, deal_id, seller_code_hash),
+                make_credential("conduct", "deal", conduct, deal_id, ""),
+            ]
+            picreds_hash = hash_credentials(picreds_raw)
+            logger.info(f"Deal {deal_id}: πCreds issued ({len(picreds_raw)} credentials)")
+        except Exception as exc:
+            logger.warning(f"Deal {deal_id}: πCreds audit failed (non-fatal) — {exc}")
+
+        # Re-attest with the full evidence chain:
+        #   deal terms + memory state A→B + πCreds hash
+        # Fires when any of the above produced real content.
+        _post_parts = (memory_hash_post or "").split(":")
+        _has_memory = len(_post_parts) == 2 and all(_post_parts)
+        _has_picreds = bool(picreds_hash)
+        if (_has_memory or _has_picreds) and result.final_price is not None:
+            try:
+                from app.tee.attestation import sign_result as _sign_result
+                sign_payload: dict = {"final_price": result.final_price, "terms": result.terms or {}}
+                if data_hash_for_attestation:
+                    sign_payload["data_hash"] = data_hash_for_attestation
+                    sign_payload["data_verified"] = True
+                if memory_hash:
+                    sign_payload["memory_hash"] = memory_hash
+                if memory_hash_post:
+                    sign_payload["memory_hash_post"] = memory_hash_post
+                if _has_memory:
+                    sign_payload["memory_attested"] = True
+                if picreds_hash:
+                    sign_payload["picreds_hash"] = picreds_hash
+                    sign_payload["picreds_attested"] = True
+                result.attestation = await _sign_result(sign_payload)
+                logger.info(f"Deal {deal_id}: re-attested with full evidence chain")
+            except Exception as exc:
+                logger.warning(f"Deal {deal_id}: evidence chain re-attestation failed (non-fatal) — {exc}")
 
     # ------------------------------------------------------------------ #
     # Step 3b — on-chain deal completion (Phase 4, optional)
@@ -207,6 +357,12 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         escrow_tx=escrow_tx,
         completion_tx=completion_tx,
         dkim_verification=dkim_result_dict,  # Phase 6: DKIM result (None if not provided)
+        memory_hash=memory_hash if memory_hash else None,
+        memory_hash_post=memory_hash_post,
+        memory_attested=bool(memory_hash and result.agreed),
+        picreds=[PiCred(**{k: v for k, v in p.items()}) for p in picreds_raw] if picreds_raw else None,
+        picreds_hash=picreds_hash,
+        picreds_attested=bool(picreds_hash and result.agreed),
         transcript=[
             NegotiationRound(
                 round=r.round,

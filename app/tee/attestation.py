@@ -59,12 +59,14 @@ async def get_enclave_quote() -> dict:
     return {"quote": quote_hex, "mrenclave": mrenclave}
 
 
-async def sign_result(terms: dict) -> str:
+async def sign_result(terms: dict, memory_hash: str = "") -> str:
     """
     Generate a TDX attestation quote over the negotiation result.
 
     Steps:
       1. Serialise `terms` to canonical JSON (keys sorted) and SHA-256 hash it.
+         When memory_hash is non-empty, it is included in the payload so the
+         quote also covers the agents' memory state at settlement time.
       2. Pad the 32-byte digest to 64 bytes (TDX report_data size requirement)
          by appending 32 zero bytes.
       3. POST the 64-byte hex string to tappd TdxQuote.
@@ -77,7 +79,11 @@ async def sign_result(terms: dict) -> str:
     The returned quote can be verified by any party using Intel's DCAP
     verification stack or Phala's on-chain verifier.
     """
-    payload = json.dumps(terms, sort_keys=True)
+    attested_payload = dict(terms)
+    if memory_hash:
+        attested_payload["memory_hash"] = memory_hash
+        attested_payload["memory_attested"] = True
+    payload = json.dumps(attested_payload, sort_keys=True)
     digest = hashlib.sha256(payload.encode()).digest()
     # TDX report_data must be exactly 64 bytes; SHA-256 fills the first 32
     report_data = (digest + b"\x00" * 32).hex()
