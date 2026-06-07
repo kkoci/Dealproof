@@ -24,17 +24,23 @@ Buyer ──► AI Agent ──► TEE (Intel TDX) ◄── AI Agent ◄── 
                     Props data verification
                     (Merkle proof of dataset)
                              │
+                    Contexto memory sidecar
+                    (attested state A → B)
+                             │
+                    πCreds audit
+                    (policy + conduct credentials)
+                             │
                     TDX attestation quote
                     (hardware-signed proof)
                              │
                     DCAP quote parsing
-                    (Phase 7: header + report_data)
+                    (header + report_data)
                              │
                     On-chain escrow release
                     (DealProof.sol on Sepolia)
 ```
 
-The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's public certificate chain. It binds to the exact deal terms and data hash — if any of them differ, the quote is invalid.
+The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's public certificate chain. It binds to the exact deal terms, data hash, memory state transition, and πCreds hash — if any of them differ, the quote is invalid.
 
 ---
 
@@ -57,15 +63,31 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 │         │           └──────────────────┬───────────────────────┘   │
 │         │                              │ verified                   │
 │         │           ┌──────────────────▼───────────────────────┐   │
+│         │           │  Contexto Memory (port 4011)             │   │
+│         │           │  pre-deal recall → inject context        │   │
+│         │           │  post-deal store → update memory         │   │
+│         │           │  hash A + hash B → TDX report_data       │   │
+│         │           └──────────────────┬───────────────────────┘   │
+│         │                              │ memory_hash A→B            │
+│         │           ┌──────────────────▼───────────────────────┐   │
+│         │           │  πCreds Auditor                          │   │
+│         │           │  audit_agent_policy() × 2               │   │
+│         │           │  audit_deal_conduct()                    │   │
+│         │           │  hash_credentials() → TDX report_data   │   │
+│         │           └──────────────────┬───────────────────────┘   │
+│         │                              │ picreds_hash               │
+│         │           ┌──────────────────▼───────────────────────┐   │
 │         │           │         TEE Attestation                  │   │
 │         │           │  tappd: POST /prpc/Tappd.TdxQuote        │   │
-│         │           │  report_data = SHA-256(deal terms)       │   │
+│         │           │  report_data = SHA-256(deal+mem+creds)   │   │
 │         │           └──────────────────┬───────────────────────┘   │
 │         │                              │ TDX quote                 │
 │  ┌──────▼──────┐    ┌──────────────────▼───────────────────────┐   │
 │  │  SQLite     │◄───│         DealResult                       │   │
 │  │  (aiosqlite)│    │  attestation + data_verification_att     │   │
-│  └─────────────┘    └──────────────────────────────────────────┘   │
+│  └─────────────┘    │  memory_hash + memory_hash_post          │   │
+│                     │  picreds + picreds_hash                  │   │
+│                     └──────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────┘
          │
          │ (Phase 4)
@@ -85,8 +107,10 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 | TEE runtime | Phala Cloud CVM (Intel TDX) |
 | TEE attestation | dstack tappd — `POST /prpc/Tappd.TdxQuote` |
 | Data provenance | Props-inspired Merkle root verification |
-| Seller identity | DKIM email proof — `dkimpy` + `dnspython` (Phase 6) |
+| Seller identity | DKIM email proof — `dkimpy` + DNS-over-HTTPS (Phase 6) |
 | DCAP inspection | TDX quote header parser — `app/tee/dcap.py` (Phase 7) |
+| Attested memory | Contexto `@ekai/memory` sidecar (Phase 8) |
+| πCreds | LLM-inferred policy + conduct credentials (Phase 9) |
 | Frontend | React 18 + Vite 5 + Tailwind CSS (Phase 6) |
 | API framework | FastAPI + uvicorn |
 | Persistence | SQLite via aiosqlite |
@@ -147,19 +171,21 @@ Run the demo:
 python demo.py --no-proof
 ```
 
-### Docker + tappd simulator (full Phase 3 flow, fake TDX quotes)
+### Docker + tappd simulator (full flow, fake TDX quotes)
 
-The recommended local dev mode. The `phalanetwork/tappd-simulator` container mimics the real Phala CVM tappd API, returning structurally valid but not hardware-signed quotes.
+The recommended local dev mode. The `phalanetwork/tappd-simulator` container mimics the real Phala CVM tappd API. The `memory-service` container runs the Contexto memory sidecar.
 
 ```bash
 cp .env.example .env
 # Edit .env:  ANTHROPIC_API_KEY=sk-ant-...
+# Optional:   OPENAI_API_KEY=... or GOOGLE_API_KEY=... (for memory embeddings)
 
 docker compose up --build
 ```
 
 - API: `http://localhost:8000`
 - tappd simulator: `http://localhost:8090`
+- Contexto memory sidecar: `http://localhost:4011`
 
 Run the demo:
 ```bash
@@ -198,15 +224,152 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-All 56+ tests pass without Docker or a running tappd. Every external call (Claude API, tappd, SQLite path) is either mocked or redirected to a temp file.
+All 90 tests pass without Docker or a running tappd. Every external call (Claude API, tappd, SQLite path, memory sidecar) is either mocked or redirected to a temp file.
 
 ```
 tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests
 tests/test_negotiation.py     4 tests  — Negotiation loop, combined attestation payload
-tests/test_tee.py             8 tests  — KMS + TDX quote HTTP calls, report_data construction
-tests/test_props.py          22 tests  — Props verifier: all pure helpers + failure paths + route gate
-tests/test_e2e.py            10 tests  — Full HTTP stack end-to-end (TestClient + mocks)
-tests/test_contract.py        0 tests  — Phase 4 stub
+tests/test_tee.py            10 tests  — KMS + TDX quote HTTP calls, report_data construction, GET /api/attest
+tests/test_props.py          23 tests  — Props verifier: all pure helpers + failure paths + route gate
+tests/test_dkim_verifier.py  19 tests  — DKIM email proof: parsing, DNS-over-HTTPS, verification paths
+tests/test_memory.py          4 tests  — Contexto memory client: add, search, hash, sidecar-down resilience
+tests/test_picreds.py         6 tests  — πCreds: auditor mocks, credential hashing, failure isolation
+tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
+tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
+```
+
+**Resilience guarantees tested explicitly:**
+- Memory sidecar down → deal proceeds, `memory_attested: false`
+- πCreds audit fails → deal proceeds, `picreds: null`, `picreds_attested: false`
+- DKIM verification fails → deal proceeds, `dkim_verification.verified: false`
+
+---
+
+## Example: `POST /api/deals/run`
+
+The minimal happy-path payload. Copy-paste into curl or the `/docs` Swagger UI at `http://localhost:8000/docs`.
+
+```bash
+curl -s -X POST http://localhost:8000/api/deals/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "buyer_budget": 120.0,
+    "buyer_requirements": "US demographic data segmented by age group for market research",
+    "data_description": "US census demographic dataset split into three regional chunks",
+    "data_hash": "8eb0d327402f025f76800c61c5e5a8a9eb7f4dd75b828aa75fb1bec12a0aeead",
+    "floor_price": 60.0,
+    "seller_proof": {
+      "algorithm": "sha256",
+      "chunk_count": 3,
+      "chunk_hashes": [
+        "7dbc0ac52b859c0da1e912cc0540efac34f317fca0c58ecadc2e335eb5f05489",
+        "d923d226228953d6d1fad35e9b9906c6d54c591df2d7b26800f9b47ca64df35e",
+        "535c41b0c21e5c19d4fcd921605c512abf054b15e6bda09c631c164bcbce3235"
+      ],
+      "root_hash": "8eb0d327402f025f76800c61c5e5a8a9eb7f4dd75b828aa75fb1bec12a0aeead"
+    }
+  }' | python -m json.tool
+```
+
+`data_hash` must equal `seller_proof.root_hash` (they are the same hash). Use `generate_seller_proof.py` to compute consistent values for your own dataset chunks:
+
+```bash
+python generate_seller_proof.py
+```
+
+**Skip verification** (no `seller_proof`):
+
+```bash
+curl -s -X POST http://localhost:8000/api/deals/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "buyer_budget": 80.0,
+    "buyer_requirements": "Financial time-series data for backtesting",
+    "data_description": "Daily OHLCV stock data, S&P500, 2015-2023",
+    "data_hash": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+    "floor_price": 40.0
+  }' | python -m json.tool
+```
+
+**Expected response shape (agreed deal):**
+
+```json
+{
+  "deal_id": "3f2e1d0c-...",
+  "agreed": true,
+  "final_price": 89.0,
+  "terms": {
+    "access_scope": "full",
+    "duration_days": 365
+  },
+  "attestation": "sim_quote:9f86d081...",
+  "data_verification_attestation": "sim_quote:a3f1e2d4...",
+  "dkim_verification": null,
+  "memory_hash": "aa...bb:cc...dd",
+  "memory_hash_post": "ee...ff:gg...hh",
+  "memory_attested": true,
+  "picreds": [
+    {
+      "type": "DealProofCredential",
+      "credential_type": "policy",
+      "subject": "buyer_agent",
+      "deal_id": "3f2e1d0c-...",
+      "code_hash": "sha256-of-system-prompt",
+      "audit_result": {
+        "claims": ["Never offer above budget"],
+        "hard_constraints": ["Never offer above budget"],
+        "guidelines": ["Open at 60% of budget"],
+        "assessment": "Buyer agent constrained to negotiate within budget."
+      },
+      "issued_at": 1749300000
+    },
+    {
+      "type": "DealProofCredential",
+      "credential_type": "policy",
+      "subject": "seller_agent",
+      "deal_id": "3f2e1d0c-...",
+      "code_hash": "sha256-of-seller-system-prompt",
+      "audit_result": { "..." : "..." },
+      "issued_at": 1749300000
+    },
+    {
+      "type": "DealProofCredential",
+      "credential_type": "conduct",
+      "subject": "deal",
+      "deal_id": "3f2e1d0c-...",
+      "code_hash": "",
+      "audit_result": {
+        "buyer_budget_respected": true,
+        "seller_floor_respected": true,
+        "no_collusion_detected": true,
+        "genuine_negotiation": true,
+        "findings": ["Buyer remained within budget. Seller held floor throughout."],
+        "assessment": "Both agents complied with their constraints."
+      },
+      "issued_at": 1749300000
+    }
+  ],
+  "picreds_hash": "64-char-sha256-hex",
+  "picreds_attested": true,
+  "transcript": [
+    {
+      "round": 1,
+      "role": "seller",
+      "action": "offer",
+      "price": 100.0,
+      "terms": {},
+      "reasoning": "Opening at high anchor..."
+    },
+    {
+      "round": 1,
+      "role": "buyer",
+      "action": "counter",
+      "price": 72.0,
+      "terms": {},
+      "reasoning": "Countering below budget..."
+    }
+  ]
+}
 ```
 
 ---
@@ -270,6 +433,21 @@ python demo.py --help
 ## API Reference
 
 Base URL: `http://localhost:8000` (local) or `https://your-cvm.phala.network` (Phala Cloud)
+
+### `GET /api/attest`
+
+Pre-flight attestation handshake. **Call this before sending any sensitive payload.** Verify the returned TDX quote against Intel DCAP — confirm `mrenclave` matches your expected build measurement — then proceed to `POST /api/deals/run`.
+
+**Response (200):**
+```json
+{
+  "quote": "0x04020000...",
+  "mrenclave": "sha384-hex-or-null",
+  "timestamp": 1749300000
+}
+```
+
+---
 
 ### `POST /api/deals`
 
@@ -342,7 +520,7 @@ Status values: `pending` | `negotiating` | `agreed` | `failed` | `verification_f
 
 ### `GET /api/deals/{deal_id}/attestation`
 
-Returns the negotiation TDX quote (covers `final_price + terms + data_hash` when proof was provided).
+Returns the negotiation TDX quote (covers `final_price + terms + data_hash + memory_hash + picreds_hash` when all features are active).
 
 **Response (200):**
 ```json
@@ -411,23 +589,29 @@ Returns the Props data verification record. Only present when `seller_proof` was
 
 ```json
 {
-  "deal_id":                     "3f2e1d0c-...",
-  "agreed":                       true,
-  "final_price":                  730.0,
+  "deal_id":                       "3f2e1d0c-...",
+  "agreed":                         true,
+  "final_price":                    730.0,
   "terms": {
-    "access_scope":               "full",
-    "duration_days":               365
+    "access_scope":                 "full",
+    "duration_days":                 365
   },
-  "attestation":                  "0x04020000...",
-  "data_verification_attestation": "0x04020000...",
+  "attestation":                    "0x04020000...",
+  "data_verification_attestation":  "0x04020000...",
   "dkim_verification": {
     "domain":          "acme.com",
     "verified":         true,
     "dns_unavailable":  false,
     "error":            null
   },
-  "escrow_tx":    null,
-  "completion_tx": null,
+  "memory_hash":      "<buyer_hash>:<seller_hash>",
+  "memory_hash_post": "<buyer_hash_post>:<seller_hash_post>",
+  "memory_attested":  true,
+  "picreds": [...],
+  "picreds_hash":     "64-char-sha256-hex",
+  "picreds_attested": true,
+  "escrow_tx":        null,
+  "completion_tx":    null,
   "transcript": [
     {
       "round":     1,
@@ -442,6 +626,129 @@ Returns the Props data verification record. Only present when `seller_proof` was
 ```
 
 `dkim_verification` is `null` when `seller_email_eml` was not provided.
+`memory_hash` / `memory_hash_post` / `memory_attested` are set only when the Contexto sidecar is reachable.
+`picreds` / `picreds_hash` / `picreds_attested` are set only when the πCreds audit succeeds.
+
+---
+
+## Contexto — Attested Memory
+
+### What It Is
+
+DealProof integrates the [Contexto](https://github.com/ekaics/contexto) `@ekai/memory` package as a sidecar service running alongside the FastAPI app inside the Phala CVM. It gives the buyer and seller agents persistent memory across deals — so they can learn pricing patterns, counterparty behaviors, and dataset characteristics over time.
+
+The memory sidecar runs at `http://localhost:4011` inside the enclave and exposes three endpoints:
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /memory/:agentId/add` | Store deal outcome as agent memory |
+| `GET /memory/:agentId/search?q=...` | Recall relevant past context before negotiation |
+| `GET /memory/:agentId/hash` | SHA-256 of all stored memory rows |
+
+### Memory Flow Per Deal
+
+```
+1. Search:   buyer + seller recall relevant past deals → inject into system prompts
+2. Snapshot: capture memory_hash (state A) before negotiation starts
+3. Negotiate: agents use past context to inform pricing and strategy
+4. Store:    agreed outcome saved as memory for both agents
+5. Snapshot: capture memory_hash_post (state B) after storing
+6. Attest:   both hashes included in TDX report_data
+```
+
+### What the TDX Quote Covers
+
+```json
+{
+  "final_price": 730.0,
+  "terms": { "access_scope": "full", "duration_days": 365 },
+  "data_hash": "8eb0d327...",
+  "data_verified": true,
+  "memory_hash":      "<buyer_hash_A>:<seller_hash_A>",
+  "memory_hash_post": "<buyer_hash_B>:<seller_hash_B>",
+  "memory_attested": true,
+  "picreds_hash": "64-char-sha256"
+}
+```
+
+This establishes a **complete state-transition proof**:
+
+> "The attestation proves that agent code (MRTD) executed on memory state A, produced outcome Y, and arrived at memory state B — all in one hardware-signed quote."
+
+### Resilience
+
+The memory integration is fully non-fatal. If the sidecar is down or returns an error, the deal proceeds normally — `memory_attested: false` in the response. No deal is ever blocked by memory unavailability.
+
+### Running the Memory Sidecar Locally
+
+The sidecar runs automatically in `docker compose up`. For local Python dev without Docker:
+
+```bash
+cd memory-service
+npm install
+node dist/server.js   # starts on port 4011
+```
+
+Set `MEMORY_SERVICE_URL=http://localhost:4011` in `.env` (this is the default).
+
+**Embedding provider** (optional — memory still works without embeddings, falling back to exact-match search):
+
+```bash
+# Pick whichever key you have — the sidecar auto-detects
+OPENAI_API_KEY=sk-...         # recommended
+GOOGLE_API_KEY=...            # alternative
+OPENROUTER_API_KEY=...        # alternative
+```
+
+---
+
+## πCreds — Privately Inferred Credentials
+
+### What They Are
+
+After each successful deal, the TEE runs a Claude-powered compliance audit over the negotiation using `app/picreds/auditor.py`. This produces three **Privately Inferred Credentials (πCreds)**:
+
+| Credential | Subject | What It Certifies |
+|------------|---------|-------------------|
+| `policy` | `buyer_agent` | Rules the buyer agent is bound by (from system prompt audit) |
+| `policy` | `seller_agent` | Rules the seller agent is bound by (from system prompt audit) |
+| `conduct` | `deal` | Whether both agents complied with constraints throughout the negotiation |
+
+### How It Works
+
+```
+1. audit_agent_policy("buyer",  buyer.system_prompt)   → policy claims, hard constraints
+2. audit_agent_policy("seller", seller.system_prompt)  → policy claims, hard constraints
+3. audit_deal_conduct(transcript, budget, floor, price) → compliance verdict
+4. make_credential(...)  × 3                           → structured DealProofCredential dicts
+5. hash_credentials([cred1, cred2, cred3])             → combined SHA-256
+6. picreds_hash embedded in TDX report_data            → hardware-attested
+```
+
+The system prompt is never returned — only the auditor's certified claims. A verifier can confirm the audit ran on the same execution as the deal without seeing the raw prompt.
+
+### Credential Structure
+
+```json
+{
+  "type": "DealProofCredential",
+  "credential_type": "policy",
+  "subject": "buyer_agent",
+  "deal_id": "3f2e1d0c-...",
+  "code_hash": "<sha256-of-system-prompt>",
+  "audit_result": {
+    "claims": ["Never offer above budget", "Open at 60% of budget"],
+    "hard_constraints": ["Never offer above budget"],
+    "guidelines": ["Open at 60% of budget"],
+    "assessment": "Buyer agent constrained to negotiate within budget."
+  },
+  "issued_at": 1749300000
+}
+```
+
+### Resilience
+
+πCreds are non-fatal. If the audit call fails, the deal completes normally with `picreds: null` and `picreds_attested: false`.
 
 ---
 
@@ -470,11 +777,11 @@ payload = {
 **What the TEE does:**
 1. Decodes the base64 `.eml` bytes
 2. Extracts the `d=` tag from the `DKIM-Signature` header to identify the domain
-3. Fetches the DKIM public key from DNS and verifies the signature
+3. Fetches the DKIM public key via DNS-over-HTTPS (Cloudflare 1.1.1.1 — works inside Phala CVM where UDP port 53 is blocked)
 4. Injects `[TEE-VERIFIED IDENTITY CREDENTIAL] seller represents acme.com` into the seller agent's system prompt
 5. Stores `{domain, verified, dns_unavailable, error}` in the deal record
 
-**Note:** Inside a Phala CVM, outbound DNS may be restricted by network policy. In that case, `dns_unavailable=true` is returned — the domain is still extracted but the cryptographic verification could not complete. The frontend shows a clear warning badge in this case.
+**Note:** `dns_unavailable=true` is returned when the DoH lookup cannot complete. The domain is still extracted but the cryptographic signature check could not finish. The frontend shows a clear warning badge in this case.
 
 ---
 
@@ -507,6 +814,8 @@ seller_proof = {
 # data_hash in DealCreate must equal root_hash
 ```
 
+Or just run `python generate_seller_proof.py` to get ready-to-paste JSON for multiple scenarios.
+
 The TEE verifies:
 1. `seller_proof.root_hash == data_hash` (advertised hash matches proof)
 2. `SHA-256( N.to_bytes(4,'big') || chunk_hash[0] || ... || chunk_hash[N-1] ) == root_hash` (length-prefixed, defeating preimage attacks)
@@ -526,6 +835,14 @@ ANTHROPIC_API_KEY=sk-ant-...
 # TEE (defaults work for docker compose)
 DSTACK_SIMULATOR_ENDPOINT=http://localhost:8090
 TEE_MODE=simulation   # or "production" on Phala Cloud
+
+# Contexto memory sidecar (defaults work for docker compose)
+MEMORY_SERVICE_URL=http://memory-service:4011
+
+# Embedding provider for memory (pick one — memory works without embeddings too)
+OPENAI_API_KEY=
+GOOGLE_API_KEY=
+OPENROUTER_API_KEY=
 
 # Blockchain (Phase 4 — leave blank until Phase 4 deploy)
 RPC_URL=https://sepolia.infura.io/v3/YOUR_KEY
@@ -549,22 +866,33 @@ Dealproof/
 │   ├── db.py                SQLite persistence (aiosqlite)
 │   ├── agents/
 │   │   ├── buyer.py         BuyerAgent — Claude claude-sonnet-4-6
-│   │   ├── seller.py        SellerAgent — Claude claude-sonnet-4-6 (Phase 6: verified_domain)
+│   │   ├── seller.py        SellerAgent — Claude claude-sonnet-4-6 (verified_domain)
 │   │   └── negotiation.py   run_negotiation() loop + TEE sign
 │   ├── api/
-│   │   ├── routes.py        All HTTP endpoints (Phase 6: DKIM step, DCAP endpoint)
-│   │   └── schemas.py       Pydantic models (Phase 6: DealCreate.seller_email_eml, DCAPVerification)
+│   │   ├── routes.py        All HTTP endpoints + memory + πCreds orchestration
+│   │   └── schemas.py       Pydantic models (DealCreate, DealResult, PiCred, etc.)
 │   ├── tee/
 │   │   ├── attestation.py   sign_result() → POST /prpc/Tappd.TdxQuote
 │   │   ├── kms.py           get_signing_key() → POST /prpc/Tappd.DeriveKey
 │   │   └── dcap.py          Phase 7: TDX quote header parser
 │   ├── dkim/
 │   │   ├── __init__.py      Package exports
-│   │   └── verifier.py      Phase 6: DKIM email proof verification (dkimpy + dnspython)
+│   │   └── verifier.py      Phase 6: DKIM email proof verification (dkimpy + DoH)
 │   ├── props/
 │   │   └── verifier.py      verify_data_authenticity() + Merkle root
+│   ├── memory/
+│   │   ├── __init__.py      Package exports
+│   │   └── client.py        Phase 8: Contexto memory sidecar client (httpx)
+│   ├── picreds/
+│   │   ├── __init__.py      Package exports
+│   │   ├── auditor.py       Phase 9: LLM audit — policy + conduct
+│   │   └── credential.py    Phase 9: make_credential(), hash_credentials()
 │   └── contract/
 │       └── escrow.py        web3.py escrow (Phase 4)
+├── memory-service/          Contexto @ekai/memory sidecar (Node.js/TypeScript)
+│   ├── src/server.ts        Express HTTP server (port 4011)
+│   ├── Dockerfile           Node 20 slim
+│   └── vendor/memory/       @ekai/memory package (vendored for Docker)
 ├── frontend/                Phase 6: React + Vite + Tailwind UI
 │   ├── index.html
 │   ├── package.json
@@ -585,16 +913,21 @@ Dealproof/
 │   ├── DealProof.sol        Solidity escrow contract (Phase 4)
 │   └── hardhat.config.js    Hardhat config for Sepolia deploy
 ├── tests/
-│   ├── test_agents.py       Unit — buyer/seller agents
-│   ├── test_negotiation.py  Unit — negotiation loop
-│   ├── test_tee.py          Unit — KMS + attestation HTTP calls
-│   ├── test_props.py        Unit — Props verifier (22 tests)
-│   ├── test_e2e.py          E2E  — full HTTP stack (TestClient)
-│   └── test_contract.py     Phase 4 escrow tests
+│   ├── test_agents.py       Unit — buyer/seller agents (3)
+│   ├── test_negotiation.py  Unit — negotiation loop (4)
+│   ├── test_tee.py          Unit — KMS + attestation + GET /api/attest (10)
+│   ├── test_props.py        Unit — Props verifier (23)
+│   ├── test_dkim_verifier.py Unit — DKIM email proof (19)
+│   ├── test_memory.py       Unit — Contexto memory client (4)
+│   ├── test_picreds.py      Unit — πCreds auditor + credentials (6)
+│   ├── test_e2e.py          E2E  — full HTTP stack (13)
+│   └── test_contract.py     Unit — Phase 4 escrow (8)
+├── generate_seller_proof.py Generates ready-to-paste seller_proof JSON for all scenarios
+├── verify_attestation.py    Client-side attestation verification script
 ├── demo.py                  CLI demo script
 ├── Dockerfile               Python 3.11-slim, uvicorn
-├── docker-compose.yml       app + dstack-simulator
-├── requirements.txt         All Python deps (incl. dkimpy, dnspython)
+├── docker-compose.yml       app + dstack-simulator + memory-service
+├── requirements.txt         All Python deps (incl. dkimpy, httpx)
 ├── .env.example             Environment variable template
 └── IMPLEMENTATION.md        Phase-by-phase plan
 ```
@@ -612,6 +945,8 @@ Dealproof/
 | 5 | Polish & demo — CLI script, README, E2E tests | ✅ Complete |
 | 6 | React frontend (Vite + Tailwind), DKIM email identity proof, CORS | ✅ Complete |
 | 7 | DCAP quote parsing (header + report_data extraction); full on-chain cert chain verification | 🔄 Partial — quote parsing done; on-chain verifier contract pending |
+| 8 | Contexto attested memory — sidecar integration, memory_hash A→B in TDX attestation, 90 tests | ✅ Complete |
+| 9 | πCreds — LLM-inferred policy + conduct credentials attested in TDX quote | ✅ Complete |
 
 ---
 
@@ -628,10 +963,15 @@ Submit the hex quote to `https://proof.phala.network` (requires real Phala Cloud
 # Verify using: https://github.com/intel/SGXDataCenterAttestationPrimitives
 ```
 
+**Using the included client script:**
+```bash
+python verify_attestation.py --url https://your-cvm.phala.network --deal-id 3f2e1d0c-...
+```
+
 **What to check in the quote:**
 1. The quote signature is valid (signed by CPU hardware key → chains to Intel root CA)
 2. `MRTD` register matches the expected Docker image measurement
-3. `REPORTDATA[0:32]` equals `SHA-256(canonical JSON of your deal terms or verification payload)`
+3. `REPORTDATA[0:32]` equals `SHA-256(canonical JSON of deal terms + memory hashes + picreds_hash)`
 
 ---
 
