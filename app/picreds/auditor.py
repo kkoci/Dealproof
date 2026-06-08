@@ -9,9 +9,13 @@ Two audit types:
     The system prompt is never returned — only the certified claims.
 
   audit_deal_conduct(transcript, buyer_budget, floor_price, final_price)
-    Reviews the full negotiation transcript and verifies both agents
-    complied with their hard constraints throughout.
-    Produces a conduct credential: "neither agent violated their bounds."
+    Two-layer conduct audit:
+      1. Deterministic constraint checks (constraints.py) — pure math, no LLM.
+         Results are authoritative. Hard constraint booleans come from here.
+      2. LLM audit grounded in the hard findings — assesses qualitative conduct
+         (collusion, genuine bargaining style) on top of the verified facts.
+    Code override: genuine_negotiation is set to False if any hard check failed,
+    regardless of what the LLM returns.
 
 Both calls use the same Anthropic API already in use for the agents.
 The TEE attestation covers the auditor's output alongside the deal terms,
@@ -20,6 +24,7 @@ so a verifier can confirm the audit ran on the same execution.
 import json
 import anthropic
 from app.config import settings
+from app.picreds.constraints import run_all_checks
 
 _POLICY_PROMPT = """You are a compliance auditor inside a Trusted Execution Environment (TEE). Your output will be included in a cryptographic attestation.
 
@@ -38,10 +43,16 @@ Respond with valid JSON only, no extra text:
 
 _CONDUCT_PROMPT = """You are a compliance auditor inside a Trusted Execution Environment (TEE). Your output will be included in a cryptographic attestation.
 
-Review the negotiation transcript below and verify both agents complied with their stated hard constraints.
+The following hard constraint checks were run deterministically against the transcript before this call. These findings are authoritative — you may not contradict them:
 
-Buyer budget (hard ceiling — buyer must never offer above this): {buyer_budget}
-Seller floor price (hard floor — seller must never accept below this): {floor_price}
+{hard_findings_block}
+
+IMPORTANT: If any hard constraint above is FAILED, you MUST set genuine_negotiation to false in your response and your assessment must acknowledge the failure. The system enforces this in code regardless of what you return — your assessment text should be consistent with it.
+
+Now assess the qualitative conduct of the negotiation:
+
+Buyer budget (hard ceiling): {buyer_budget}
+Seller floor price (hard floor): {floor_price}
 Final agreed price: {final_price}
 
 Transcript:
@@ -49,14 +60,10 @@ Transcript:
 {transcript}
 ---
 
-Answer each question precisely:
-1. Did the buyer offer above {buyer_budget} at any point?
-2. Did the seller accept or counter-offer below {floor_price} at any point?
-3. Is there any evidence of collusion (both agents coordinating against a third party)?
-4. Did both parties engage in genuine back-and-forth negotiation?
+Assess whether there is evidence of collusion (agents coordinating against a third party) and whether the negotiation — beyond the hard constraints — reflects genuine autonomous bargaining.
 
 Respond with valid JSON only, no extra text:
-{{"buyer_budget_respected": true|false, "seller_floor_respected": true|false, "no_collusion_detected": true|false, "genuine_negotiation": true|false, "findings": ["<finding 1>"], "assessment": "<one sentence summary of negotiation conduct>"}}"""
+{{"no_collusion_detected": true|false, "genuine_negotiation": true|false, "findings": ["<finding 1>"], "assessment": "<one sentence — must acknowledge any failed hard constraints>"}}"""
 
 
 def _parse(raw: str) -> dict:
@@ -87,15 +94,42 @@ async def audit_deal_conduct(
     floor_price: float,
     final_price: float,
 ) -> dict:
+    # Step 1: deterministic constraint checks (authoritative)
+    constraint_results = run_all_checks(transcript, buyer_budget, floor_price)
+    any_hard_failure = not all(r.passed for r in constraint_results.values())
+
+    # Step 2: format hard findings for LLM context
+    hard_findings_block = "\n".join(
+        f"• {r.check_name}: {'PASSED' if r.passed else 'FAILED'} — {r.finding}"
+        for r in constraint_results.values()
+    )
+
+    # Step 3: LLM audit grounded in hard findings
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     response = await client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
         messages=[{"role": "user", "content": _CONDUCT_PROMPT.format(
+            hard_findings_block=hard_findings_block,
             buyer_budget=buyer_budget,
             floor_price=floor_price,
             final_price=final_price,
             transcript=json.dumps(transcript, indent=2),
         )}],
     )
-    return _parse(response.content[0].text.strip())
+    llm = _parse(response.content[0].text.strip())
+
+    # Step 4: merge — hard constraint booleans are authoritative; code overrides LLM
+    return {
+        "buyer_budget_respected":  constraint_results["buyer_budget"].passed,
+        "seller_floor_respected":  constraint_results["seller_floor"].passed,
+        "no_sudden_capitulation":  constraint_results["capitulation"].passed,
+        "convergence_pattern_valid": constraint_results["convergence"].passed,
+        "no_collusion_detected":   llm.get("no_collusion_detected", True),
+        # Code override: genuine_negotiation is False if any hard check failed,
+        # regardless of what the LLM returned.
+        "genuine_negotiation": False if any_hard_failure else llm.get("genuine_negotiation", True),
+        "hard_constraint_findings": [r.finding for r in constraint_results.values()],
+        "llm_findings": llm.get("findings", []),
+        "assessment": llm.get("assessment", ""),
+    }

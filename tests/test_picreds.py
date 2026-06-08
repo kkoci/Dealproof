@@ -27,11 +27,9 @@ POLICY_RESPONSE = {
 }
 
 CONDUCT_RESPONSE = {
-    "buyer_budget_respected": True,
-    "seller_floor_respected": True,
     "no_collusion_detected": True,
     "genuine_negotiation": True,
-    "findings": ["Buyer opened at floor, seller accepted in round 1."],
+    "findings": ["Buyer remained within budget. Seller held floor throughout."],
     "assessment": "Both agents complied with their constraints throughout.",
 }
 
@@ -65,15 +63,24 @@ async def test_audit_deal_conduct_ok():
     transcript = [
         {"round": 1, "role": "seller", "action": "offer", "price": 840.0},
         {"round": 1, "role": "buyer", "action": "counter", "price": 600.0},
-        {"round": 1, "role": "seller", "action": "accept", "price": 600.0},
+        {"round": 2, "role": "seller", "action": "counter", "price": 720.0},
+        {"round": 2, "role": "buyer", "action": "accept", "price": 720.0},
     ]
 
     with patch("anthropic.AsyncAnthropic", return_value=mock_client):
-        result = await audit_deal_conduct(transcript, 1000.0, 600.0, 600.0)
+        result = await audit_deal_conduct(transcript, 1000.0, 600.0, 720.0)
 
+    # Hard constraint booleans come from deterministic checks, not LLM
     assert result["buyer_budget_respected"] is True
     assert result["seller_floor_respected"] is True
+    assert result["no_sudden_capitulation"] is True
+    assert result["convergence_pattern_valid"] is True
+    # LLM-sourced fields
     assert result["no_collusion_detected"] is True
+    assert result["genuine_negotiation"] is True
+    # Hard findings are present
+    assert isinstance(result["hard_constraint_findings"], list)
+    assert len(result["hard_constraint_findings"]) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +128,74 @@ def test_individual_credential_hash_is_sha256():
 
     expected = hashlib.sha256(json.dumps(cred, sort_keys=True).encode()).hexdigest()
     assert h == expected
+
+
+# ---------------------------------------------------------------------------
+# Deterministic constraint checks — pure unit tests, no mocks needed
+# ---------------------------------------------------------------------------
+
+def test_check_buyer_budget_respected_fail():
+    from app.picreds.constraints import check_buyer_budget_respected
+    transcript = [
+        {"round": 1, "role": "seller", "action": "offer", "price": 1200.0},
+        {"round": 1, "role": "buyer", "action": "counter", "price": 1100.0},
+    ]
+    result = check_buyer_budget_respected(transcript, buyer_budget=1000.0)
+    assert result.passed is False
+    assert "1100.0" in result.finding
+    assert len(result.evidence) == 1
+
+
+def test_check_seller_floor_respected_fail():
+    from app.picreds.constraints import check_seller_floor_respected
+    transcript = [
+        {"round": 1, "role": "seller", "action": "offer", "price": 800.0},
+        {"round": 2, "role": "seller", "action": "counter", "price": 500.0},
+    ]
+    result = check_seller_floor_respected(transcript, floor_price=600.0)
+    assert result.passed is False
+    assert "500.0" in result.finding
+    assert len(result.evidence) == 1
+
+
+def test_check_no_sudden_capitulation_fail():
+    from app.picreds.constraints import check_no_sudden_capitulation
+    # seller drops from 1000 to 400 = 60% jump, exceeds 40% threshold
+    transcript = [
+        {"round": 1, "role": "seller", "action": "offer", "price": 1000.0},
+        {"round": 2, "role": "seller", "action": "counter", "price": 400.0},
+    ]
+    result = check_no_sudden_capitulation(transcript, threshold=0.40)
+    assert result.passed is False
+    assert "60.0%" in result.finding
+
+
+def test_check_convergence_pattern_fail():
+    from app.picreds.constraints import check_convergence_pattern
+    # buyer goes DOWN from 700 to 600 — non-convergent
+    transcript = [
+        {"round": 1, "role": "seller", "action": "offer", "price": 1000.0},
+        {"round": 1, "role": "buyer", "action": "counter", "price": 700.0},
+        {"round": 2, "role": "seller", "action": "counter", "price": 900.0},
+        {"round": 2, "role": "buyer", "action": "counter", "price": 600.0},
+    ]
+    result = check_convergence_pattern(transcript)
+    assert result.passed is False
+    assert len(result.evidence) == 1
+
+
+def test_run_all_checks_clean_transcript():
+    from app.picreds.constraints import run_all_checks
+    transcript = [
+        {"round": 1, "role": "seller", "action": "offer", "price": 900.0},
+        {"round": 1, "role": "buyer", "action": "counter", "price": 650.0},
+        {"round": 2, "role": "seller", "action": "counter", "price": 780.0},
+        {"round": 2, "role": "buyer", "action": "counter", "price": 720.0},
+        {"round": 3, "role": "seller", "action": "accept", "price": 720.0},
+    ]
+    results = run_all_checks(transcript, buyer_budget=1000.0, floor_price=600.0)
+    assert all(r.passed for r in results.values())
+    assert set(results.keys()) == {"buyer_budget", "seller_floor", "capitulation", "convergence"}
 
 
 # ---------------------------------------------------------------------------

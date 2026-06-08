@@ -236,7 +236,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-All 90 tests pass without Docker or a running tappd. Every external call (Claude API, tappd, SQLite path, memory sidecar) is either mocked or redirected to a temp file.
+All 95 tests pass without Docker or a running tappd. Every external call (Claude API, tappd, SQLite path, memory sidecar) is either mocked or redirected to a temp file.
 
 ```
 tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests
@@ -245,7 +245,7 @@ tests/test_tee.py            10 tests  — KMS + TDX quote HTTP calls, report_da
 tests/test_props.py          23 tests  — Props verifier: all pure helpers + failure paths + route gate
 tests/test_dkim_verifier.py  19 tests  — DKIM email proof: parsing, DNS-over-HTTPS, verification paths
 tests/test_memory.py          4 tests  — Contexto memory client: add, search, hash, sidecar-down resilience
-tests/test_picreds.py         6 tests  — πCreds: auditor mocks, credential hashing, failure isolation
+tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
 ```

@@ -59,6 +59,7 @@ ARCHITECTURE.md
 CONTEXTO_INTEGRATION.md
 dealproof_attested_memory.md
 dealproof_attestation_first.md
+PICREDS_EVAL_HARDENING.md
 DEALPROOF_NEXT5DAYS.md
 task2_attest_endpoint.md
 task3_verify_attestation.md
@@ -77,7 +78,7 @@ PATCHES_APPLIED.md
 SETUP.md
 TESTING.md
 VIDEO_SCRIPT.md
-CLAUDE.md
+CLAUDE.old.md
 DKIM_DOH_CHANGES.md
 medium_part2_draft.md
 
