@@ -316,7 +316,10 @@ Three scenarios covering normal agreement, tight-margin negotiation (likely arbi
 
 Swagger UI: `http://localhost:8000/docs` → POST /api/deals/run → Try it out
 
-**Vision — full payload (Props verification + all optional fields activated)**
+All three payloads include `seller_proof` (activates `data_verification_attestation`).
+`seller_email_eml` and escrow fields require real infrastructure and are not included here.
+
+**Vision dataset**
 ```json
 {
   "buyer_budget": 1000.0,
@@ -338,11 +341,51 @@ Swagger UI: `http://localhost:8000/docs` → POST /api/deals/run → Try it out
   }
 }
 ```
-Note: `data_hash` must equal `seller_proof.root_hash`. Root hash is `SHA-256(4-byte-length-prefix + concat(bytes(chunk_hash) for each chunk))`.
 
-PowerShell one-liner (full payload with Props):
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/deals/run" -ContentType "application/json" -Body '{"buyer_budget":1000.0,"buyer_requirements":"10 GB COCO-style labelled image dataset for CV fine-tuning, min 500k images, 80 categories","data_description":"10 GB curated COCO dataset, 520k images, bounding boxes and segmentation masks, quality-verified 2024","data_hash":"bab5be0d0c6bf806abc221e5b11ae1e1ce358a36caf475a12f01ba28c100cd7f","floor_price":600.0,"seller_proof":{"root_hash":"bab5be0d0c6bf806abc221e5b11ae1e1ce358a36caf475a12f01ba28c100cd7f","chunk_hashes":["cdf9022fcd89c33c678d3953ca5a91a5f33dfa34a65a2726f9eb4065c1e4359e","bc49012e270cf0efccb1bc84d65a01a10b69c0240ffa5faa2d444e63cae2e6f3","23bf3cabce281a9f6a27b002861e55aca8cc7634d9f14bc42434ef43f7f61d16","2b2c3dba6b61251fdb8e682c95025e7d2ad9787d15d8f3d8309c4540efffdd27","8b7420713d60efa93a2d25f373b5a04d18bb3f70c93d266a961c77d3170f6012"],"chunk_count":5,"algorithm":"sha256"}}'
+**Medical imaging**
+```json
+{
+  "buyer_budget": 1200.0,
+  "buyer_requirements": "10 GB DICOM medical imaging dataset for radiology AI, fully de-identified, HIPAA compliant, radiologist labels",
+  "data_description": "10 GB de-identified DICOM dataset, 12000 studies chest/abdomen/brain MRI, double-blind radiologist labels, IRB-cleared 2024",
+  "data_hash": "09f269cc45fd0121ecc5053f2bfc501715612d46bb4a673a22f7bde4ac770b87",
+  "floor_price": 800.0,
+  "seller_proof": {
+    "root_hash": "09f269cc45fd0121ecc5053f2bfc501715612d46bb4a673a22f7bde4ac770b87",
+    "chunk_hashes": [
+      "956ef9a27e28823411fba7928ba0ad965a1488cb79e85f98093b94b6ea40f7ca",
+      "4296bc42d027c79b78c2e9d133a3fd2295a80f9fcbcd61128b958be943227b44",
+      "1926ec265e3c7efb9333dde8ef35478e9e7ba6e59d41ad469a99c0d248dc95cb",
+      "010e38f35867157bfed572fb2744876b2c5b84500024485b9f7b6c800a3a0675",
+      "3e8f0a0a77655beedd828bad7872f81ec28885bc5b0e38242e0d6497075f4775"
+    ],
+    "chunk_count": 5,
+    "algorithm": "sha256"
+  }
+}
+```
+
+**Financial data — tight margin, arbitration likely on deadlock**
+```json
+{
+  "buyer_budget": 560.0,
+  "buyer_requirements": "5-year tick-by-tick FX data for quant model, EUR/USD and GBP/USD, bid/ask spread included",
+  "data_description": "5-year FX tick data 2019-2024, 8 major pairs, level-2 order book, 2.1B rows, Tier-1 prime broker feed",
+  "data_hash": "d3923cfa91f05d890dca0d9ec43d3b12f15dc22af586f60c53e2d24df68e2192",
+  "floor_price": 500.0,
+  "seller_proof": {
+    "root_hash": "d3923cfa91f05d890dca0d9ec43d3b12f15dc22af586f60c53e2d24df68e2192",
+    "chunk_hashes": [
+      "55390a7df2151cf46a5f910a76777ab22a3b6d80f2aa9aab65c0c917e16eeed9",
+      "9db68cbd4a100bf4b3a858e3a0bd206caa3036037dccb269ea35a24b34bbc557",
+      "3a305e2fce951c2875f1319f277c08141ad20ca022c389994fb3b875817d0dcd",
+      "1c97f34657872bc9d6fd5c3c38f695cf891f027c173191206ec3f60c93eb58bf",
+      "417aaf6b45bbabebfeed588f2d1f6dafa5ed48b5082d68d8f0b6ecb140168143"
+    ],
+    "chunk_count": 5,
+    "algorithm": "sha256"
+  }
+}
 ```
 
 **Vision — standard agreement**
