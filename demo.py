@@ -477,6 +477,23 @@ def run_demo(base_url: str, scenario_key: str, two_step: bool, include_proof: bo
                 print(f"  {BOLD('Combined hash:')}  {DIM(ph_short)}  {DIM('[in TDX report_data]')}")
             print()
 
+        # Auditor compliance report
+        audit_report = result_data.get("audit_report")
+        if audit_report:
+            print(f"  {BOLD(MAGENTA('[Auditor] TEE Compliance Witness:'))}")
+            summary = audit_report.get("summary", "")
+            short_summary = textwrap.shorten(summary, width=55, placeholder="…")
+            print(f"  {DIM(short_summary)}")
+            cred_hash = audit_report.get("credential_hash", "")
+            if cred_hash:
+                print(f"  {BOLD('Credential hash:')}  {DIM(cred_hash[:32])}…  {DIM('[in TDX report_data]')}")
+            print()
+
+        # Arbitrator flag
+        if result_data.get("arbitrated"):
+            print(f"  {YELLOW('⚖ Arbitrated')}  {DIM('— deadlock resolved by ArbitratorAgent')}")
+            print()
+
         # On-chain placeholder (Phase 4)
         print(f"  {BOLD('On-chain escrow:')}  {DIM('Phase 4 — not yet deployed')}")
         print(f"  {DIM('(Phase 4 will: deposit ETH to DealProof.sol → verify attestation → release payment)')}")

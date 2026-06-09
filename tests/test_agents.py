@@ -63,3 +63,82 @@ async def test_seller_opening_offer():
 
     assert result["action"] == "offer"
     assert result["price"] == 700.0
+
+
+# ---------------------------------------------------------------------------
+# AuditorAgent tests
+# ---------------------------------------------------------------------------
+
+TRANSCRIPT = [
+    {"round": 1, "role": "seller", "action": "offer", "price": 900.0},
+    {"round": 1, "role": "buyer", "action": "counter", "price": 650.0},
+    {"round": 2, "role": "seller", "action": "counter", "price": 780.0},
+    {"round": 2, "role": "buyer", "action": "accept", "price": 780.0},
+]
+
+AUDIT_LLM_RESPONSE = {
+    "genuine_negotiation": True,
+    "monotonic_convergence": True,
+    "within_bounds": True,
+    "summary": "Both parties engaged in genuine back-and-forth converging to a fair price.",
+}
+
+
+@pytest.mark.asyncio
+async def test_auditor_produces_valid_report():
+    from app.agents.auditor import AuditorAgent
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(
+            return_value=_mock_response(json.dumps(AUDIT_LLM_RESPONSE))
+        )
+        agent = AuditorAgent()
+        report = await agent.audit(TRANSCRIPT, buyer_budget=1000.0, floor_price=600.0, final_price=780.0)
+
+    assert report is not None
+    assert report.genuine_negotiation is True
+    assert report.monotonic_convergence is True
+    assert report.within_bounds is True
+    assert report.round_count == 2
+    assert report.final_price == 780.0
+    assert isinstance(report.summary, str)
+    assert len(report.credential_hash) == 64  # SHA-256 hex
+
+
+@pytest.mark.asyncio
+async def test_auditor_returns_none_on_failure():
+    from app.agents.auditor import AuditorAgent
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(side_effect=Exception("API unavailable"))
+        agent = AuditorAgent()
+        report = await agent.audit(TRANSCRIPT, buyer_budget=1000.0, floor_price=600.0, final_price=780.0)
+
+    assert report is None
+
+
+@pytest.mark.asyncio
+async def test_auditor_credential_hash_changes_with_summary():
+    from app.agents.auditor import AuditorAgent
+
+    response_a = dict(AUDIT_LLM_RESPONSE, summary="Parties reached agreement efficiently.")
+    response_b = dict(AUDIT_LLM_RESPONSE, summary="Protracted negotiation with many concessions.")
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(json.dumps(response_a)))
+        agent = AuditorAgent()
+        report_a = await agent.audit(TRANSCRIPT, buyer_budget=1000.0, floor_price=600.0, final_price=780.0)
+
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(json.dumps(response_b)))
+        report_b = await agent.audit(TRANSCRIPT, buyer_budget=1000.0, floor_price=600.0, final_price=780.0)
+
+    assert report_a is not None
+    assert report_b is not None
+    assert report_a.credential_hash != report_b.credential_hash

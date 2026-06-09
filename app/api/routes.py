@@ -26,6 +26,8 @@ from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
+from app.agents.auditor import AuditorAgent
+from app.agents.arbitrator import ArbitratorAgent
 from app.tee.attestation import get_enclave_quote
 from app.props.verifier import verify_data_authenticity
 from app.dkim.verifier import verify_email_proof
@@ -219,7 +221,10 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     )
 
     result = await run_negotiation(
-        buyer, seller, data_hash=data_hash_for_attestation, memory_hash=memory_hash
+        buyer, seller,
+        data_hash=data_hash_for_attestation,
+        memory_hash=memory_hash,
+        arbitrator=ArbitratorAgent(),
     )
 
     # ------------------------------------------------------------------ #
@@ -235,6 +240,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     memory_hash_post: str | None = None
     picreds_raw: list[dict] = []
     picreds_hash: str | None = None
+    audit_report: dict | None = None
+    audit_credential_hash: str | None = None
     if result.agreed:
         try:
             outcome_messages = [
@@ -268,8 +275,6 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         # Conduct credential: review the transcript and certify neither agent
         #   violated their hard constraints during this negotiation.
         # ------------------------------------------------------------------ #
-        picreds_raw: list[dict] = []
-        picreds_hash: str | None = None
         try:
             buyer_code_hash = hashlib.sha256(buyer.system_prompt.encode()).hexdigest()
             seller_code_hash = hashlib.sha256(seller.system_prompt.encode()).hexdigest()
@@ -295,13 +300,40 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         except Exception as exc:
             logger.warning(f"Deal {deal_id}: πCreds audit failed (non-fatal) — {exc}")
 
+        # ------------------------------------------------------------------ #
+        # Step A — Auditor: TEE compliance witness (non-fatal)
+        # ------------------------------------------------------------------ #
+        try:
+            transcript_data_audit = [
+                {"round": r.round, "role": r.role, "action": r.action, "price": r.price}
+                for r in result.transcript
+            ]
+            audit = await AuditorAgent().audit(
+                transcript_data_audit, payload.buyer_budget, payload.floor_price, result.final_price
+            )
+            if audit is not None:
+                audit_report = {
+                    "genuine_negotiation": audit.genuine_negotiation,
+                    "monotonic_convergence": audit.monotonic_convergence,
+                    "within_bounds": audit.within_bounds,
+                    "round_count": audit.round_count,
+                    "final_price": audit.final_price,
+                    "summary": audit.summary,
+                    "credential_hash": audit.credential_hash,
+                }
+                audit_credential_hash = audit.credential_hash
+                logger.info(f"Deal {deal_id}: Auditor report produced")
+        except Exception as exc:
+            logger.warning(f"Deal {deal_id}: Auditor failed (non-fatal) — {exc}")
+
         # Re-attest with the full evidence chain:
-        #   deal terms + memory state A→B + πCreds hash
+        #   deal terms + memory state A→B + πCreds hash + audit credential hash
         # Fires when any of the above produced real content.
         _post_parts = (memory_hash_post or "").split(":")
         _has_memory = len(_post_parts) == 2 and all(_post_parts)
         _has_picreds = bool(picreds_hash)
-        if (_has_memory or _has_picreds) and result.final_price is not None:
+        _has_audit = bool(audit_credential_hash)
+        if (_has_memory or _has_picreds or _has_audit) and result.final_price is not None:
             try:
                 from app.tee.attestation import sign_result as _sign_result
                 sign_payload: dict = {"final_price": result.final_price, "terms": result.terms or {}}
@@ -317,6 +349,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
                 if picreds_hash:
                     sign_payload["picreds_hash"] = picreds_hash
                     sign_payload["picreds_attested"] = True
+                if audit_credential_hash:
+                    sign_payload["audit_credential_hash"] = audit_credential_hash
                 result.attestation = await _sign_result(sign_payload)
                 logger.info(f"Deal {deal_id}: re-attested with full evidence chain")
             except Exception as exc:
@@ -363,6 +397,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         picreds=[PiCred(**{k: v for k, v in p.items()}) for p in picreds_raw] if picreds_raw else None,
         picreds_hash=picreds_hash,
         picreds_attested=bool(picreds_hash and result.agreed),
+        audit_report=audit_report,
+        arbitrated=result.arbitrated,
         transcript=[
             NegotiationRound(
                 round=r.round,

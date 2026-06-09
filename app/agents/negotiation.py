@@ -15,10 +15,14 @@ Changes from Phase 2:
 """
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.tee.attestation import sign_result
+
+if TYPE_CHECKING:
+    from app.agents.arbitrator import ArbitratorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,7 @@ class NegotiationResult:
     terms: dict | None = None
     attestation: str | None = None  # TDX quote from tappd (Phase 2+); includes data_hash when Phase 3 proof present
     transcript: list[NegotiationRound] = field(default_factory=list)
+    arbitrated: bool = False  # True when ArbitratorAgent resolved a deadlock
 
 
 def _normalise_action(response: dict, valid: set[str], default: str) -> dict:
@@ -71,6 +76,7 @@ async def run_negotiation(
     max_rounds: int = 10,
     data_hash: str | None = None,  # Phase 3: from Props verification; embedded in the deal attestation
     memory_hash: str = "",  # SHA-256 of buyer+seller memory state; included in attestation when non-empty
+    arbitrator: "ArbitratorAgent | None" = None,  # when set, resolves deadlocks instead of returning agreed=False
 ) -> NegotiationResult:
     history: list[dict] = []
     transcript: list[NegotiationRound] = []
@@ -180,6 +186,30 @@ async def run_negotiation(
             )
 
     logger.info("Max rounds reached without agreement.")
+
+    if arbitrator is not None:
+        logger.info("Attempting arbitration to resolve deadlock.")
+        transcript_data = [
+            {"round": r.round, "role": r.role, "action": r.action, "price": r.price}
+            for r in transcript
+        ]
+        arbitration = await arbitrator.arbitrate(transcript_data, buyer.budget, seller.floor_price)
+        if arbitration is not None:
+            logger.info(f"Arbitrated settlement at {arbitration.proposed_price} — requesting TEE attestation")
+            attestation = await sign_result(
+                _build_sign_payload(arbitration.proposed_price, {}, data_hash),
+                memory_hash=memory_hash,
+            )
+            return NegotiationResult(
+                agreed=True,
+                final_price=arbitration.proposed_price,
+                terms={},
+                attestation=attestation,
+                transcript=transcript,
+                arbitrated=True,
+            )
+        logger.warning("Arbitration returned None — falling back to no agreement.")
+
     return NegotiationResult(agreed=False, transcript=transcript)
 
 

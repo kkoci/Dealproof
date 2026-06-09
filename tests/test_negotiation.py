@@ -154,3 +154,116 @@ async def test_negotiation_fails_on_reject():
 
     assert result.agreed is False
     assert result.attestation is None
+
+
+# ---------------------------------------------------------------------------
+# Arbitrator tests
+# ---------------------------------------------------------------------------
+
+def _make_deadlock_agents():
+    from app.agents.buyer import BuyerAgent
+    from app.agents.seller import SellerAgent
+    buyer = BuyerAgent(budget=1000.0, requirements="test data")
+    seller = SellerAgent(floor_price=500.0, data_description="test dataset")
+    return buyer, seller
+
+
+@pytest.mark.asyncio
+async def test_arbitrator_called_when_max_rounds_exhausted():
+    from app.agents.negotiation import run_negotiation
+    from app.agents.arbitrator import ArbitratorAgent, ArbitrationResult
+
+    buyer, seller = _make_deadlock_agents()
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        # Agents counter forever — never accept
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(
+            json.dumps({"action": "counter", "price": 750.0, "terms": {}, "reasoning": "No deal."})
+        ))
+
+        arbitrator = ArbitratorAgent()
+        arbitrator.arbitrate = AsyncMock(
+            return_value=ArbitrationResult(proposed_price=725.0, rationale="Fair midpoint.")
+        )
+
+        with patch("app.agents.negotiation.sign_result", new_callable=AsyncMock) as mock_sign:
+            mock_sign.return_value = "arbitrated-quote"
+            result = await run_negotiation(buyer, seller, max_rounds=1, arbitrator=arbitrator)
+
+    assert result.agreed is True
+    assert result.arbitrated is True
+    arbitrator.arbitrate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_arbitrated_deal_price_and_flags():
+    from app.agents.negotiation import run_negotiation
+    from app.agents.arbitrator import ArbitratorAgent, ArbitrationResult
+
+    buyer, seller = _make_deadlock_agents()
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(
+            json.dumps({"action": "counter", "price": 750.0, "terms": {}, "reasoning": "Still countering."})
+        ))
+
+        arbitrator = ArbitratorAgent()
+        arbitrator.arbitrate = AsyncMock(
+            return_value=ArbitrationResult(proposed_price=725.0, rationale="Split the difference.")
+        )
+
+        with patch("app.agents.negotiation.sign_result", new_callable=AsyncMock) as mock_sign:
+            mock_sign.return_value = "arb-quote"
+            result = await run_negotiation(buyer, seller, max_rounds=1, arbitrator=arbitrator)
+
+    assert result.final_price == 725.0
+    assert result.arbitrated is True
+    assert result.attestation == "arb-quote"
+
+
+@pytest.mark.asyncio
+async def test_arbitrator_failure_falls_back_to_no_agreement():
+    from app.agents.negotiation import run_negotiation
+    from app.agents.arbitrator import ArbitratorAgent
+
+    buyer, seller = _make_deadlock_agents()
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(
+            json.dumps({"action": "counter", "price": 750.0, "terms": {}, "reasoning": "Still countering."})
+        ))
+
+        arbitrator = ArbitratorAgent()
+        arbitrator.arbitrate = AsyncMock(return_value=None)
+
+        result = await run_negotiation(buyer, seller, max_rounds=1, arbitrator=arbitrator)
+
+    assert result.agreed is False
+    assert result.arbitrated is False
+
+
+@pytest.mark.asyncio
+async def test_arbitrator_price_clamped_within_bounds():
+    from app.agents.arbitrator import ArbitratorAgent
+
+    with patch("anthropic.AsyncAnthropic") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+
+        # LLM returns price above buyer_budget
+        mock_client.messages.create = AsyncMock(return_value=_mock_response(
+            json.dumps({"price": 9999.0, "rationale": "Way too high."})
+        ))
+        agent = ArbitratorAgent()
+        result = await agent.arbitrate([], buyer_budget=1000.0, floor_price=500.0)
+
+    assert result is not None
+    assert result.proposed_price <= 1000.0
+    assert result.proposed_price >= 500.0

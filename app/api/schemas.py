@@ -154,6 +154,10 @@ class DealResult(BaseModel):
     picreds: list[PiCred] | None = None
     picreds_hash: str | None = None  # combined SHA-256 of all credentials, in TDX report_data
     picreds_attested: bool = False
+    # Auditor: read-only TEE witness compliance report
+    audit_report: dict | None = None
+    # Arbitrator: True when a deadlocked negotiation was resolved by ArbitratorAgent
+    arbitrated: bool = False
     transcript: list[NegotiationRound] = []
 
 

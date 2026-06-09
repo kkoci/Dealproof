@@ -974,6 +974,9 @@ Dealproof/
 | 7 | DCAP quote parsing (header + report_data extraction); full on-chain cert chain verification | 🔄 Partial — quote parsing done; on-chain verifier contract pending |
 | 8 | Contexto attested memory — sidecar integration, memory_hash A→B in TDX attestation, 90 tests | ✅ Complete |
 | 9 | πCreds — LLM-inferred policy + conduct credentials attested in TDX quote | ✅ Complete |
+| 10 | Auditor agent — read-only TEE compliance witness; credential_hash in TDX report_data | ✅ Complete |
+| 11 | Arbitrator agent — deadlock resolution; arbitrated settlement attested in TDX quote | ✅ Complete |
+| 12 | DCAP on-chain verifier contract | 🔜 Next |
 
 ---
 
