@@ -148,6 +148,10 @@ picreds_attested              bool
 audit_report                  {genuine_negotiation, monotonic_convergence, within_bounds,
                                round_count, final_price, summary, credential_hash} or null
 arbitrated                    bool — true when ArbitratorAgent resolved a deadlock
+memory_context_hash           SHA-256 of recalled memories injected into agent prompts
+                               proves what the agents remembered, not just that state changed
+memory_write_hash             SHA-256 of outcome_messages written to memory post-deal
+                               proves this deal caused the A→B state transition
 transcript                    list of negotiation rounds
 ```
 

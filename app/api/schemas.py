@@ -158,6 +158,13 @@ class DealResult(BaseModel):
     audit_report: dict | None = None
     # Arbitrator: True when a deadlocked negotiation was resolved by ArbitratorAgent
     arbitrated: bool = False
+    # Memory causal chain — closes the two verifiability gaps:
+    #   memory_context_hash: SHA-256 of the recalled memories injected into agent prompts
+    #                        proves *what* the agents remembered, not just that memory state changed
+    #   memory_write_hash:   SHA-256 of the outcome_messages written post-deal
+    #                        proves *this deal's outcome* caused the A→B state transition
+    memory_context_hash: str | None = None
+    memory_write_hash: str | None = None
     transcript: list[NegotiationRound] = []
 
 

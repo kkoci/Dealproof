@@ -91,7 +91,8 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 │         │           │  TEE Attestation  (if agreed)            │   │
 │         │           │  tappd: POST /prpc/Tappd.TdxQuote        │   │
 │         │           │  report_data = SHA-256(                  │   │
-│         │           │    deal + hashA + hashB + picreds_hash)  │   │
+│         │           │    deal + hashA + hashB + picreds_hash   │   │
+│         │           │    + audit_hash + ctx_hash + write_hash) │   │
 │         │           └──────────────────┬───────────────────────┘   │
 │         │                              │ TDX quote                 │
 │  ┌──────▼──────┐    ┌──────────────────▼───────────────────────┐   │
@@ -99,6 +100,7 @@ The TEE attestation is an Intel TDX quote verifiable by anyone against Intel's p
 │  │  (aiosqlite)│    │  attestation + data_verification_att     │   │
 │  └─────────────┘    │  memory_hash (A) + memory_hash_post (B)  │   │
 │                     │  picreds + picreds_hash                  │   │
+│                     │  memory_context_hash + memory_write_hash │   │
 │                     └──────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────┘
          │
@@ -631,9 +633,11 @@ Returns the Props data verification record. Only present when `seller_proof` was
   "memory_hash_post": "<buyer_hash_post>:<seller_hash_post>",
   "memory_attested":  true,
   "picreds": [...],
-  "picreds_hash":     "64-char-sha256-hex",
-  "picreds_attested": true,
-  "escrow_tx":        null,
+  "picreds_hash":          "64-char-sha256-hex",
+  "picreds_attested":      true,
+  "memory_context_hash":   "64-char-sha256-hex",
+  "memory_write_hash":     "64-char-sha256-hex",
+  "escrow_tx":             null,
   "completion_tx":    null,
   "transcript": [
     {
@@ -651,6 +655,8 @@ Returns the Props data verification record. Only present when `seller_proof` was
 `dkim_verification` is `null` when `seller_email_eml` was not provided.
 `memory_hash` / `memory_hash_post` / `memory_attested` are set only when the Contexto sidecar is reachable.
 `picreds` / `picreds_hash` / `picreds_attested` are set only when the πCreds audit succeeds.
+`memory_context_hash` — SHA-256 of the recalled memories injected into agent prompts; proves what the agents remembered before negotiating.
+`memory_write_hash` — SHA-256 of the outcome written to memory post-deal; proves this specific deal caused the A→B state transition.
 
 ---
 

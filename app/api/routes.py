@@ -16,6 +16,7 @@ Changes from Phase 3:
 Changes from Phase 2→3 are preserved unchanged.
 """
 import hashlib
+import json
 import time
 import uuid
 import logging
@@ -203,6 +204,18 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     except Exception as exc:
         logger.warning(f"Deal {deal_id}: memory hash failed (non-fatal) — {exc}")
 
+    # Hash the memory context injected into each agent's prompt.
+    # Proves which recalled memories shaped agent behaviour — not just that
+    # memory state changed, but what content the agents actually received.
+    memory_context_hash: str | None = None
+    if buyer_memory_context or seller_memory_context:
+        memory_context_hash = hashlib.sha256(
+            json.dumps(
+                {"buyer": buyer_memory_context, "seller": seller_memory_context},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+
     # ------------------------------------------------------------------ #
     # Step 3 — negotiation loop
     # ------------------------------------------------------------------ #
@@ -238,6 +251,7 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     #   "Code X ran on memory state A, reached outcome Y, and produced memory state B."
     # ------------------------------------------------------------------ #
     memory_hash_post: str | None = None
+    memory_write_hash: str | None = None
     picreds_raw: list[dict] = []
     picreds_hash: str | None = None
     audit_report: dict | None = None
@@ -248,6 +262,11 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
                 {"role": "user", "content": f"Deal context: {payload.buyer_requirements}. Data: {payload.data_description}."},
                 {"role": "assistant", "content": f"Agreed at price {result.final_price}. Terms: {result.terms}."},
             ]
+            # Hash the exact content written to memory — proves this specific
+            # deal outcome caused the A→B state transition, not a concurrent write.
+            memory_write_hash = hashlib.sha256(
+                json.dumps(outcome_messages, sort_keys=True).encode()
+            ).hexdigest()
             await add_memories("buyer", outcome_messages, user_id=deal_id)
             await add_memories("seller", outcome_messages, user_id=deal_id)
         except httpx.HTTPStatusError as exc:
@@ -333,7 +352,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         _has_memory = len(_post_parts) == 2 and all(_post_parts)
         _has_picreds = bool(picreds_hash)
         _has_audit = bool(audit_credential_hash)
-        if (_has_memory or _has_picreds or _has_audit) and result.final_price is not None:
+        _has_memory_context = bool(memory_context_hash)
+        if (_has_memory or _has_picreds or _has_audit or _has_memory_context) and result.final_price is not None:
             try:
                 from app.tee.attestation import sign_result as _sign_result
                 sign_payload: dict = {"final_price": result.final_price, "terms": result.terms or {}}
@@ -351,6 +371,10 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
                     sign_payload["picreds_attested"] = True
                 if audit_credential_hash:
                     sign_payload["audit_credential_hash"] = audit_credential_hash
+                if memory_context_hash:
+                    sign_payload["memory_context_hash"] = memory_context_hash
+                if memory_write_hash:
+                    sign_payload["memory_write_hash"] = memory_write_hash
                 result.attestation = await _sign_result(sign_payload)
                 logger.info(f"Deal {deal_id}: re-attested with full evidence chain")
             except Exception as exc:
@@ -399,6 +423,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         picreds_attested=bool(picreds_hash and result.agreed),
         audit_report=audit_report,
         arbitrated=result.arbitrated,
+        memory_context_hash=memory_context_hash,
+        memory_write_hash=memory_write_hash,
         transcript=[
             NegotiationRound(
                 round=r.round,
