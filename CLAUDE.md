@@ -145,8 +145,8 @@ memory_attested               bool
 picreds                       list[DealProofCredential] — policy×2, conduct×1
 picreds_hash                  SHA-256 of all credentials, embedded in TDX report_data
 picreds_attested              bool
-audit_report                  {genuine_negotiation, monotonic_convergence, within_bounds,
-                               round_count, final_price, summary, credential_hash} or null
+audit_report                  {genuine_negotiation, round_count, final_price,
+                               summary, credential_hash} or null
 arbitrated                    bool — true when ArbitratorAgent resolved a deadlock
 memory_context_hash           SHA-256 of recalled memories injected into agent prompts
                                proves what the agents remembered, not just that state changed
@@ -238,14 +238,17 @@ Makes one Claude call; returns `AuditReport` or `None` on failure.
 ```python
 @dataclass
 class AuditReport:
-    genuine_negotiation: bool   # authentic back-and-forth vs scripted
-    monotonic_convergence: bool # buyer up / seller down throughout
-    within_bounds: bool         # final_price ∈ [floor_price, buyer_budget]
+    genuine_negotiation: bool   # qualitative — did agents bargain authentically?
     round_count: int
     final_price: float
     summary: str                # one-sentence characterisation
     credential_hash: str        # SHA-256(fields, sort_keys=True) — in TDX report_data
 ```
+
+Structural checks (`monotonic_convergence`, `within_bounds`, `capitulation`) are intentionally
+absent — they belong in `app/picreds/constraints.py` where they run deterministically.
+An LLM can misfire on these (confirmed in production: Auditor incorrectly flagged buyer opening
+below seller floor as a convergence failure). The Auditor's scope is qualitative only.
 
 The Auditor is independent of πCreds — it receives the same transcript but has no knowledge
 of the πCreds findings. It is an additional attestation layer, not a replacement.

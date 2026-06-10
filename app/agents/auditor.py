@@ -4,6 +4,11 @@ AuditorAgent — read-only TEE witness.
 Receives the full negotiation transcript after settlement.
 Produces a structured compliance report signed into the TDX quote.
 Does not participate in negotiation rounds.
+
+Scope: qualitative assessment only — genuine_negotiation and summary.
+Structural checks (convergence, bounds, capitulation) belong exclusively
+in app/picreds/constraints.py where they run deterministically from the
+transcript without LLM judgment, which can misfire on edge cases.
 """
 import json
 import hashlib
@@ -27,20 +32,17 @@ Transcript:
 {transcript}
 ---
 
-Assess:
-1. genuine_negotiation — did both parties engage in authentic back-and-forth, or was it immediate/scripted capitulation?
-2. monotonic_convergence — did buyer offers trend up and seller offers trend down throughout?
-3. within_bounds — is the final price between floor_price and buyer_budget (inclusive)?
+Assess whether the negotiation reflects genuine autonomous bargaining — did both parties engage in authentic back-and-forth, or was it immediate/scripted capitulation? Look for evidence of independent strategic reasoning, meaningful concessions, and genuine adversarial positioning.
+
+Do NOT assess price convergence or bounds — those are verified separately by deterministic constraint checks.
 
 Respond with valid JSON only, no extra text:
-{{"genuine_negotiation": true|false, "monotonic_convergence": true|false, "within_bounds": true|false, "summary": "<one sentence describing the negotiation character>"}}"""
+{{"genuine_negotiation": true|false, "summary": "<one sentence describing the negotiation character>"}}"""
 
 
 @dataclass
 class AuditReport:
     genuine_negotiation: bool
-    monotonic_convergence: bool
-    within_bounds: bool
     round_count: int
     final_price: float
     summary: str
@@ -84,8 +86,6 @@ class AuditorAgent:
 
             fields = {
                 "genuine_negotiation": bool(data.get("genuine_negotiation", True)),
-                "monotonic_convergence": bool(data.get("monotonic_convergence", True)),
-                "within_bounds": bool(data.get("within_bounds", True)),
                 "round_count": round_count,
                 "final_price": final_price,
                 "summary": str(data.get("summary", "")),

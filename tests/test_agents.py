@@ -78,8 +78,6 @@ TRANSCRIPT = [
 
 AUDIT_LLM_RESPONSE = {
     "genuine_negotiation": True,
-    "monotonic_convergence": True,
-    "within_bounds": True,
     "summary": "Both parties engaged in genuine back-and-forth converging to a fair price.",
 }
 
@@ -99,8 +97,6 @@ async def test_auditor_produces_valid_report():
 
     assert report is not None
     assert report.genuine_negotiation is True
-    assert report.monotonic_convergence is True
-    assert report.within_bounds is True
     assert report.round_count == 2
     assert report.final_price == 780.0
     assert isinstance(report.summary, str)
@@ -125,8 +121,8 @@ async def test_auditor_returns_none_on_failure():
 async def test_auditor_credential_hash_changes_with_summary():
     from app.agents.auditor import AuditorAgent
 
-    response_a = dict(AUDIT_LLM_RESPONSE, summary="Parties reached agreement efficiently.")
-    response_b = dict(AUDIT_LLM_RESPONSE, summary="Protracted negotiation with many concessions.")
+    response_a = {"genuine_negotiation": True, "summary": "Parties reached agreement efficiently."}
+    response_b = {"genuine_negotiation": True, "summary": "Protracted negotiation with many concessions."}
 
     with patch("anthropic.AsyncAnthropic") as mock_cls:
         mock_client = MagicMock()
