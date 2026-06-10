@@ -256,6 +256,7 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     picreds_hash: str | None = None
     audit_report: dict | None = None
     audit_credential_hash: str | None = None
+    audit_error: str | None = None
     if result.agreed:
         try:
             outcome_messages = [
@@ -283,6 +284,10 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
             seller_hash_post = await get_memory_hash("seller")
             memory_hash_post = f"{buyer_hash_post.get('hash', '')}:{seller_hash_post.get('hash', '')}"
             logger.info(f"Deal {deal_id}: post-deal memory hash captured")
+            # If state didn't change, the write had no effect — null the write hash
+            # so it doesn't falsely imply causality (e.g. duplicate deal submission).
+            if memory_hash_post == memory_hash:
+                memory_write_hash = None
         except Exception as exc:
             logger.warning(f"Deal {deal_id}: post-deal memory hash failed (non-fatal) — {exc}")
 
@@ -333,8 +338,6 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
             if audit is not None:
                 audit_report = {
                     "genuine_negotiation": audit.genuine_negotiation,
-                    "monotonic_convergence": audit.monotonic_convergence,
-                    "within_bounds": audit.within_bounds,
                     "round_count": audit.round_count,
                     "final_price": audit.final_price,
                     "summary": audit.summary,
@@ -343,7 +346,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
                 audit_credential_hash = audit.credential_hash
                 logger.info(f"Deal {deal_id}: Auditor report produced")
         except Exception as exc:
-            logger.warning(f"Deal {deal_id}: Auditor failed (non-fatal) — {exc}")
+            audit_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"Deal {deal_id}: Auditor failed (non-fatal) — {audit_error}")
 
         # Re-attest with the full evidence chain:
         #   deal terms + memory state A→B + πCreds hash + audit credential hash
@@ -422,6 +426,7 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         picreds_hash=picreds_hash,
         picreds_attested=bool(picreds_hash and result.agreed),
         audit_report=audit_report,
+        audit_error=audit_error,
         arbitrated=result.arbitrated,
         memory_context_hash=memory_context_hash,
         memory_write_hash=memory_write_hash,

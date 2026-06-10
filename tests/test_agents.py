@@ -104,7 +104,7 @@ async def test_auditor_produces_valid_report():
 
 
 @pytest.mark.asyncio
-async def test_auditor_returns_none_on_failure():
+async def test_auditor_raises_on_failure():
     from app.agents.auditor import AuditorAgent
 
     with patch("anthropic.AsyncAnthropic") as mock_cls:
@@ -112,9 +112,8 @@ async def test_auditor_returns_none_on_failure():
         mock_cls.return_value = mock_client
         mock_client.messages.create = AsyncMock(side_effect=Exception("API unavailable"))
         agent = AuditorAgent()
-        report = await agent.audit(TRANSCRIPT, buyer_budget=1000.0, floor_price=600.0, final_price=780.0)
-
-    assert report is None
+        with pytest.raises(Exception, match="API unavailable"):
+            await agent.audit(TRANSCRIPT, buyer_budget=1000.0, floor_price=600.0, final_price=780.0)
 
 
 @pytest.mark.asyncio

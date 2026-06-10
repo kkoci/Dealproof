@@ -97,5 +97,5 @@ class AuditorAgent:
             return AuditReport(**fields, credential_hash=credential_hash)
 
         except Exception as exc:
-            logger.warning(f"AuditorAgent: audit failed (non-fatal) — {exc}")
-            return None
+            logger.warning(f"AuditorAgent: audit failed (non-fatal) — {type(exc).__name__}: {exc}")
+            raise

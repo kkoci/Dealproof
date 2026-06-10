@@ -156,6 +156,7 @@ class DealResult(BaseModel):
     picreds_attested: bool = False
     # Auditor: read-only TEE witness compliance report
     audit_report: dict | None = None
+    audit_error: str | None = None  # populated when AuditorAgent fails — surfaces exception without log access
     # Arbitrator: True when a deadlocked negotiation was resolved by ArbitratorAgent
     arbitrated: bool = False
     # Memory causal chain — closes the two verifiability gaps:
