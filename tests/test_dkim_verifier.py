@@ -344,10 +344,7 @@ EML_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.eml")
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not os.path.exists(EML_FIXTURE),
-    reason="sample.eml not yet provided — place a real Gmail .eml in tests/fixtures/",
-)
+@pytest.mark.skip(reason="live integration test — requires real Gmail .eml, DNS access, and valid DKIM signature")
 async def test_real_gmail_dkim_roundtrip():
     """
     Full end-to-end test using a real Gmail .eml file.
