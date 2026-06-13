@@ -208,6 +208,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M6 | Arc on-chain credential anchoring — ArcIDRegistry.register() via web3.py | ✅ Complete |
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
+| M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 
 ---
 
