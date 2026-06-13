@@ -49,6 +49,7 @@ from app.picreds.auditor import audit_agent_policy, audit_deal_conduct
 from app.picreds.credential import make_credential, hash_credentials
 from app.props.transcript_hasher import hash_transcript, compute_corpus_root
 from app.agents.data_credential import DataCredentialAgent
+from app.contract.arc_anchor import anchor_credential_on_arc, ArcNotConfigured
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -806,9 +807,41 @@ async def issue_credential(deal_id: str) -> CredentialResponse:
     attestation = await sign_result(sign_payload)
     logger.info(f"Deal {deal_id}: TeamDynamicsCredential issued and attested")
 
+    # Arc on-chain anchoring (non-fatal — same resilience pattern as escrow)
+    arc_tx_hash: str | None = None
+    credential_hash = hashlib.sha256(
+        json.dumps(sign_payload, sort_keys=True).encode()
+    ).hexdigest()
+    try:
+        arc_result = await anchor_credential_on_arc(deal_id, credential_hash, attestation)
+        arc_tx_hash = arc_result["tx_hash"]
+        await db.save_arc_anchor(deal_id, arc_result["tx_hash"], arc_result["arc_record_id"])
+        logger.info(f"Deal {deal_id}: credential anchored on Arc — tx {arc_tx_hash}")
+    except ArcNotConfigured as exc:
+        logger.warning(f"Deal {deal_id}: Arc not configured — {exc}")
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: Arc anchoring failed (non-fatal) — {exc}")
+
     return CredentialResponse(
         deal_id=deal_id,
         credential=credential,
         attestation=attestation,
         verifiable=True,
+        arc_tx_hash=arc_tx_hash,
     )
+
+
+@router.get("/deals/{deal_id}/arc")
+async def get_arc_anchor(deal_id: str) -> dict:
+    """Return the Arc on-chain anchor record for a deal's credential."""
+    row = await db.get_arc_anchor(deal_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No Arc anchor found — credential may not have been issued or Arc was not configured",
+        )
+    return {
+        "deal_id": deal_id,
+        "tx_hash": row["tx_hash"],
+        "arc_record_id": row["record_id"],
+    }

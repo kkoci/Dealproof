@@ -138,6 +138,46 @@ async def claim_deal_for_negotiation(deal_id: str) -> bool:
         return cursor.rowcount == 1
 
 
+async def create_arc_anchors_table() -> None:
+    """Create the arc_anchors table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS arc_anchors (
+                deal_id    TEXT PRIMARY KEY,
+                tx_hash    TEXT NOT NULL,
+                record_id  TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_arc_anchor(deal_id: str, tx_hash: str, record_id: str) -> None:
+    """Persist an Arc anchor record. INSERT OR REPLACE — idempotent."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO arc_anchors (deal_id, tx_hash, record_id) VALUES (?, ?, ?)",
+            (deal_id, tx_hash, record_id),
+        )
+        await db.commit()
+
+
+async def get_arc_anchor(deal_id: str) -> dict | None:
+    """Fetch the Arc anchor record for a deal. Returns {deal_id, tx_hash, record_id} or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT deal_id, tx_hash, record_id FROM arc_anchors WHERE deal_id = ?",
+            (deal_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+    return {"deal_id": row[0], "tx_hash": row[1], "record_id": row[2]}
+
+
 async def create_transcript_corpora_table() -> None:
     """Create the transcript_corpora table if it does not exist."""
     async with aiosqlite.connect(DB_PATH) as db:

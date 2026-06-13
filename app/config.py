@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://localhost:4011"
     openai_api_key: str = ""
 
+    # Arc on-chain credential anchoring (ETHGlobal M6)
+    arc_rpc_url: str = ""                # ARC_RPC_URL
+    arc_chain_id: int = 0                # ARC_CHAIN_ID
+    arcid_registry_address: str = ""     # ARCID_REGISTRY_ADDRESS
+
     # App
     debug: bool = True
     log_level: str = "INFO"
