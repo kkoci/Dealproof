@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://localhost:4011"
     openai_api_key: str = ""
 
+    # Hedera HCS deal outcome publishing (ETHGlobal M7)
+    hedera_account_id: str = ""    # HEDERA_ACCOUNT_ID  e.g. "0.0.123456"
+    hedera_private_key: str = ""   # HEDERA_PRIVATE_KEY
+    hedera_topic_id: str = ""      # HEDERA_TOPIC_ID    e.g. "0.0.789012"
+    hedera_network: str = "testnet"  # HEDERA_NETWORK
+
     # ENS agent identity (ETHGlobal M8)
     ens_rpc_url: str = ""    # Ethereum mainnet RPC for ENS resolution; defaults to cloudflare-eth.com
 
