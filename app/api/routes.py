@@ -27,6 +27,7 @@ from app.api.schemas import (
     DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification,
     AttestationResponse, PiCred,
     CorpusIngest, CorpusIngestResponse,
+    TeamCredential, CredentialResponse,
 )
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
@@ -47,6 +48,7 @@ from app.memory.client import search_memories, add_memories, get_memory_hash
 from app.picreds.auditor import audit_agent_policy, audit_deal_conduct
 from app.picreds.credential import make_credential, hash_credentials
 from app.props.transcript_hasher import hash_transcript, compute_corpus_root
+from app.agents.data_credential import DataCredentialAgent
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -749,4 +751,65 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
         corpus_root=corpus_root,
         seller_proof=seller_proof,
         summaries_available=summaries_available,
+    )
+
+
+@router.post("/deals/{deal_id}/credential", response_model=CredentialResponse, status_code=200)
+async def issue_credential(deal_id: str) -> CredentialResponse:
+    """
+    Issue a TEE-attested TeamDynamicsCredential for an agreed deal.
+
+    Requires:
+    - Deal must be in 'agreed' status
+    - Deal's data_hash must match a corpus ingested via POST /api/transcripts/ingest
+
+    Runs DataCredentialAgent on the stored conversations inside the TEE and
+    returns a TDX-attested credential. Assessment failures are attested
+    transparently — {"error": "assessment_failed"} is a valid attested subject.
+    """
+    from datetime import datetime
+    from app.tee.attestation import sign_result as _sign_result
+
+    row = await db.get_deal(deal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    if row["status"] != "agreed":
+        raise HTTPException(status_code=409, detail="Deal is not agreed — credential requires an agreed deal")
+
+    corpus_root = row["payload"].get("data_hash")
+    if not corpus_root:
+        raise HTTPException(status_code=404, detail="Deal has no data_hash — cannot look up corpus")
+
+    corpus = await db.get_corpus_by_root(corpus_root)
+    if corpus is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No corpus found for this deal's data_hash — ingest via POST /api/transcripts/ingest first",
+        )
+
+    assessment = await DataCredentialAgent().assess(corpus["conversations"])
+
+    issued_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    credential = TeamCredential(
+        issued_at=issued_at,
+        deal_id=deal_id,
+        corpus_root=corpus_root,
+        subject=assessment,
+    )
+
+    sign_payload = {
+        "credential_type": credential.credential_type,
+        "deal_id": deal_id,
+        "corpus_root": corpus_root,
+        "issued_at": issued_at,
+        "subject": assessment,
+    }
+    attestation = await _sign_result(sign_payload)
+    logger.info(f"Deal {deal_id}: TeamDynamicsCredential issued and attested")
+
+    return CredentialResponse(
+        deal_id=deal_id,
+        credential=credential,
+        attestation=attestation,
+        verifiable=True,
     )

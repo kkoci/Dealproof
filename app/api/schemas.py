@@ -212,6 +212,24 @@ class CorpusIngestResponse(BaseModel):
     summaries_available: int         # count of conversations with pre-generated summaries
 
 
+class TeamCredential(BaseModel):
+    credential_type: str = "TeamDynamicsCredential"
+    issuer: str = "DealProof/DataCredentialAgent"
+    issued_at: str       # ISO 8601 UTC
+    deal_id: str
+    corpus_root: str     # data_hash from the deal = Merkle root of corpus
+    subject: dict        # DataCredentialAgent.assess() output — attested as-is
+
+
+class CredentialResponse(BaseModel):
+    deal_id: str
+    credential: TeamCredential
+    attestation: str                          # TDX quote hex
+    verifiable: bool
+    arc_tx_hash: str | None = None            # populated by Milestone 6
+    hedera_transaction_id: str | None = None  # populated by Milestone 7
+
+
 class DealStatus(BaseModel):
     deal_id: str
     status: str  # "pending" | "negotiating" | "agreed" | "failed" | "verification_failed"

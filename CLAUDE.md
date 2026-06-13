@@ -202,7 +202,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M1 | Transcript corpus hasher — `app/props/transcript_hasher.py` | ✅ Complete |
 | M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | ✅ Complete |
 | M3 | DataCredentialAgent — TEE-attested team dynamics credential | ✅ Complete |
-| M4 | Credential endpoint — `POST /api/deals/{id}/credential` | 🔜 Next |
+| M4 | Credential endpoint — `POST /api/deals/{id}/credential` | ✅ Complete |
 | M5 | Tests — transcript hasher + ingestion + credential endpoint | 🔜 Next |
 | M6 | Arc on-chain credential anchoring | 🔜 Next |
 | M7 | Hedera HCS autonomous deal outcome publishing | 🔜 Next |
