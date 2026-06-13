@@ -207,7 +207,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M5 | Tests — transcript hasher + ingestion + credential endpoint | ✅ Complete |
 | M6 | Arc on-chain credential anchoring — ArcIDRegistry.register() via web3.py | ✅ Complete |
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
-| M8 | ENS resolution endpoint + `dealproof.ai` records | 🔜 Next |
+| M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
 
 ---
 

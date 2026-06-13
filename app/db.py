@@ -52,6 +52,15 @@ async def init_db() -> None:
             await db.execute("ALTER TABLE deals ADD COLUMN verification TEXT")
         except Exception:
             pass  # column already present — no action needed
+        # ETHGlobal M8: ENS agent identity columns
+        try:
+            await db.execute("ALTER TABLE deals ADD COLUMN buyer_ens TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE deals ADD COLUMN seller_ens TEXT")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -136,6 +145,37 @@ async def claim_deal_for_negotiation(deal_id: str) -> bool:
         )
         await db.commit()
         return cursor.rowcount == 1
+
+
+async def update_deal_ens(deal_id: str, buyer_ens: str | None, seller_ens: str | None) -> None:
+    """Persist resolved ENS names for a deal's buyer and seller agents."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE deals SET buyer_ens = ?, seller_ens = ? WHERE id = ?",
+            (buyer_ens, seller_ens, deal_id),
+        )
+        await db.commit()
+
+
+async def get_all_deals_ens() -> list[dict]:
+    """Return all deals with their ENS and address fields for GET /api/ens/agents."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id, payload, buyer_ens, seller_ens FROM deals ORDER BY created_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    result = []
+    for row in rows:
+        payload = json.loads(row[1]) if row[1] else {}
+        result.append({
+            "deal_id": row[0],
+            "buyer_address": payload.get("buyer_address"),
+            "buyer_ens": row[2],
+            "seller_address": payload.get("seller_address"),
+            "seller_ens": row[3],
+        })
+    return result
 
 
 async def create_hedera_messages_table() -> None:

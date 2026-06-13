@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://localhost:4011"
     openai_api_key: str = ""
 
+    # ENS agent identity (ETHGlobal M8)
+    ens_rpc_url: str = ""    # Ethereum mainnet RPC for ENS resolution; defaults to cloudflare-eth.com
+
     # Arc on-chain credential anchoring (ETHGlobal M6)
     arc_rpc_url: str = ""                # ARC_RPC_URL
     arc_chain_id: int = 0                # ARC_CHAIN_ID

@@ -53,6 +53,11 @@ class DealCreate(BaseModel):
             "immediately after verification and is never persisted."
         ),
     )
+    # ETHGlobal M8: optional buyer address for ENS resolution
+    buyer_address: Optional[str] = Field(
+        default=None,
+        description="Ethereum address of the buyer. When provided, resolved to ENS name if one exists.",
+    )
     # Phase 4: optional on-chain escrow fields
     seller_address: Optional[str] = Field(
         default=None,
@@ -167,6 +172,9 @@ class DealResult(BaseModel):
     memory_context_hash: str | None = None
     memory_write_hash: str | None = None
     hedera_transaction_id: str | None = None  # Hedera HCS deal outcome publish tx
+    # ENS agent identities (ETHGlobal M8)
+    buyer_ens: str | None = None    # ENS name for buyer address, if set
+    seller_ens: str | None = None   # ENS name for seller address, if set
     transcript: list[NegotiationRound] = []
 
 
@@ -229,6 +237,20 @@ class CredentialResponse(BaseModel):
     verifiable: bool
     arc_tx_hash: str | None = None            # populated by Milestone 6
     hedera_transaction_id: str | None = None  # populated by Milestone 7
+
+
+class AgentENSRecord(BaseModel):
+    deal_id: str
+    buyer_address: str | None = None
+    buyer_ens: str | None = None
+    seller_address: str | None = None
+    seller_ens: str | None = None
+
+
+class ENSAgentsResponse(BaseModel):
+    agents: list[AgentENSRecord]
+    total: int
+    resolved: int    # count of deals with at least one ENS name
 
 
 class DealStatus(BaseModel):

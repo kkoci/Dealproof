@@ -51,6 +51,8 @@ from app.props.transcript_hasher import hash_transcript, compute_corpus_root
 from app.agents.data_credential import DataCredentialAgent
 from app.contract.arc_anchor import anchor_credential_on_arc, ArcNotConfigured
 from app.contract.hedera_hcs import publish_deal_outcome, HederaNotConfigured
+from app.ens.resolver import resolve_ens_name
+from app.api.schemas import AgentENSRecord, ENSAgentsResponse
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -481,6 +483,24 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
     except Exception as exc:
         logger.warning(f"Deal {deal_id}: Hedera publish failed (non-fatal) — {exc}")
 
+    # ENS agent identity resolution (non-fatal)
+    try:
+        buyer_ens: str | None = None
+        seller_ens: str | None = None
+        buyer_addr = payload.buyer_address
+        seller_addr = payload.seller_address
+        if buyer_addr:
+            buyer_ens = await resolve_ens_name(buyer_addr)
+        if seller_addr:
+            seller_ens = await resolve_ens_name(seller_addr)
+        if buyer_ens or seller_ens:
+            await db.update_deal_ens(deal_id, buyer_ens, seller_ens)
+            logger.info(f"Deal {deal_id}: ENS resolved — buyer={buyer_ens}, seller={seller_ens}")
+        deal_result.buyer_ens = buyer_ens
+        deal_result.seller_ens = seller_ens
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: ENS resolution failed (non-fatal) — {exc}")
+
     return deal_result
 
 
@@ -887,3 +907,40 @@ async def get_arc_anchor(deal_id: str) -> dict:
         "tx_hash": row["tx_hash"],
         "arc_record_id": row["record_id"],
     }
+
+
+# ---------------------------------------------------------------------------
+# ETHGlobal M8 — ENS agent identity
+# ---------------------------------------------------------------------------
+
+@router.get("/ens", response_model=dict)
+async def get_ens_identity() -> dict:
+    """Return the DealProof ENS identity and integration info."""
+    return {
+        "ens_name": "dealproof.eth",
+        "description": "TEE-attested AI agent negotiation protocol",
+        "agents_endpoint": "/api/ens/agents",
+        "github": "https://github.com/kkoci/Dealproof",
+        "ens_integration": "agent_identity",
+    }
+
+
+@router.get("/ens/agents", response_model=ENSAgentsResponse)
+async def get_ens_agents() -> ENSAgentsResponse:
+    """
+    Return ENS identities for all DealProof deal participants.
+    Shows which agents have verifiable on-chain ENS names.
+    """
+    rows = await db.get_all_deals_ens()
+    agents = [
+        AgentENSRecord(
+            deal_id=row["deal_id"],
+            buyer_address=row.get("buyer_address"),
+            buyer_ens=row.get("buyer_ens"),
+            seller_address=row.get("seller_address"),
+            seller_ens=row.get("seller_ens"),
+        )
+        for row in rows
+    ]
+    resolved = sum(1 for a in agents if a.buyer_ens or a.seller_ens)
+    return ENSAgentsResponse(agents=agents, total=len(agents), resolved=resolved)
