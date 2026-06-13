@@ -335,6 +335,16 @@ POST /api/deals/{id}/credential
 
 ---
 
+## Deployment Notes
+
+**`docker-compose.phala.yml` is gitignored** — it contains production env var placeholders and must not be committed. The file lives only on disk and is uploaded manually to the Phala dashboard. After any change, rebuild and push only the app image:
+```
+docker compose build app && docker compose push app
+```
+Memory service (`kkoci/dealproof-memory`) is unchanged — push only when `memory-service/` changes.
+
+---
+
 ## What NOT to Build
 
 - **Negotiation transcript Merkle tree** — rejected. TDX quote over final state is sufficient.
