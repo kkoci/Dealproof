@@ -166,6 +166,7 @@ class DealResult(BaseModel):
     #                        proves *this deal's outcome* caused the A→B state transition
     memory_context_hash: str | None = None
     memory_write_hash: str | None = None
+    hedera_transaction_id: str | None = None  # Hedera HCS deal outcome publish tx
     transcript: list[NegotiationRound] = []
 
 

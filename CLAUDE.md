@@ -206,7 +206,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M4 | Credential endpoint — `POST /api/deals/{id}/credential` | ✅ Complete |
 | M5 | Tests — transcript hasher + ingestion + credential endpoint | ✅ Complete |
 | M6 | Arc on-chain credential anchoring — ArcIDRegistry.register() via web3.py | ✅ Complete |
-| M7 | Hedera HCS autonomous deal outcome publishing | 🔜 Next |
+| M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS resolution endpoint + `dealproof.ai` records | 🔜 Next |
 
 ---

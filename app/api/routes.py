@@ -50,6 +50,7 @@ from app.picreds.credential import make_credential, hash_credentials
 from app.props.transcript_hasher import hash_transcript, compute_corpus_root
 from app.agents.data_credential import DataCredentialAgent
 from app.contract.arc_anchor import anchor_credential_on_arc, ArcNotConfigured
+from app.contract.hedera_hcs import publish_deal_outcome, HederaNotConfigured
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -459,6 +460,27 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         verification=verification_dict,
     )
     logger.info(f"Deal {deal_id} finished: {final_status}")
+
+    # Hedera HCS deal outcome publish (non-fatal — called for all outcomes)
+    try:
+        attestation_hash = (
+            hashlib.sha256(result.attestation.encode()).hexdigest()
+            if result.attestation else ""
+        )
+        hedera_result = await publish_deal_outcome(deal_id, final_status, attestation_hash)
+        deal_result.hedera_transaction_id = hedera_result["transaction_id"]
+        await db.save_hedera_message(
+            deal_id,
+            hedera_result["transaction_id"],
+            hedera_result["topic_id"],
+            hedera_result["consensus_timestamp"],
+        )
+        logger.info(f"Deal {deal_id}: outcome published to Hedera HCS — {hedera_result['transaction_id']}")
+    except HederaNotConfigured:
+        logger.warning(f"Deal {deal_id}: Hedera not configured — skipping HCS publish")
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: Hedera publish failed (non-fatal) — {exc}")
+
     return deal_result
 
 
@@ -829,6 +851,26 @@ async def issue_credential(deal_id: str) -> CredentialResponse:
         verifiable=True,
         arc_tx_hash=arc_tx_hash,
     )
+
+
+@router.get("/deals/{deal_id}/hedera")
+async def get_hedera_record(deal_id: str) -> dict:
+    """Return the Hedera HCS record for a deal's outcome."""
+    row = await db.get_hedera_message(deal_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No Hedera HCS record — deal outcome may not have been published or Hedera was not configured",
+        )
+    network = settings.hedera_network
+    hashscan_url = f"https://hashscan.io/{network}/transaction/{row['transaction_id']}"
+    return {
+        "deal_id": deal_id,
+        "transaction_id": row["transaction_id"],
+        "topic_id": row["topic_id"],
+        "consensus_timestamp": row["consensus_timestamp"],
+        "hashscan_url": hashscan_url,
+    }
 
 
 @router.get("/deals/{deal_id}/arc")

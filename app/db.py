@@ -138,6 +138,59 @@ async def claim_deal_for_negotiation(deal_id: str) -> bool:
         return cursor.rowcount == 1
 
 
+async def create_hedera_messages_table() -> None:
+    """Create the hedera_messages table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hedera_messages (
+                deal_id              TEXT PRIMARY KEY,
+                transaction_id       TEXT NOT NULL,
+                topic_id             TEXT NOT NULL,
+                consensus_timestamp  TEXT,
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_hedera_message(
+    deal_id: str,
+    transaction_id: str,
+    topic_id: str,
+    consensus_timestamp: str,
+) -> None:
+    """Persist a Hedera HCS message record. INSERT OR REPLACE — idempotent."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO hedera_messages "
+            "(deal_id, transaction_id, topic_id, consensus_timestamp) VALUES (?, ?, ?, ?)",
+            (deal_id, transaction_id, topic_id, consensus_timestamp),
+        )
+        await db.commit()
+
+
+async def get_hedera_message(deal_id: str) -> dict | None:
+    """Fetch the Hedera HCS record for a deal. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT deal_id, transaction_id, topic_id, consensus_timestamp "
+            "FROM hedera_messages WHERE deal_id = ?",
+            (deal_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+    return {
+        "deal_id": row[0],
+        "transaction_id": row[1],
+        "topic_id": row[2],
+        "consensus_timestamp": row[3],
+    }
+
+
 async def create_arc_anchors_table() -> None:
     """Create the arc_anchors table if it does not exist."""
     async with aiosqlite.connect(DB_PATH) as db:

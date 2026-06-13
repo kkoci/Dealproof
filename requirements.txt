@@ -14,3 +14,5 @@ dkimpy==1.1.5
 dnspython==2.7.0
 # Phase 7: Full Intel DCAP verification (cert chain + ECDSA sig checks)
 cryptography>=42.0.0
+# ETHGlobal M7: Hedera HCS deal outcome publishing
+hiero_sdk_python
