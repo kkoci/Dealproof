@@ -62,6 +62,9 @@ dealproof_attestation_first.md
 PICREDS_EVAL_HARDENING.md
 AGENTS_EXTENSION.md
 DEALPROOF_NEXT5DAYS.md
+DEALPROOF_ETHGLOBAL_MILESTONES_v2.md
+MILESTONE_1_PLAN.md
+MILESTONE_2_PLAN.md
 PHALA_TEST_RUNS.md
 task2_attest_endpoint.md
 task3_verify_attestation.md
@@ -92,3 +95,6 @@ tests/fixtures/sample.eml
 
 # Powershell
 test_dkim_live.ps1
+
+# Tiny Cloud
+TinyCloud/

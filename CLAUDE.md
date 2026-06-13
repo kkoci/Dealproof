@@ -32,7 +32,8 @@ Before starting any task, read in this order:
 | AI agents | Claude claude-sonnet-4-6 via `anthropic.AsyncAnthropic` |
 | TEE runtime | Phala Cloud CVM (Intel TDX) |
 | TEE attestation | dstack tappd — `POST /prpc/Tappd.TdxQuote` |
-| Data provenance | Props-inspired Merkle root verification |
+| Data provenance | Props-inspired Merkle root verification + transcript corpus hashing |
+| TinyCloud | Listen transcript store (KV + SQL on Phala TEE) — ETHGlobal NYC integration |
 | Seller identity | DKIM email proof — `dkimpy` + DNS-over-HTTPS |
 | Attested memory | Contexto `@ekai/memory` sidecar (port 4011) |
 | πCreds | LLM-inferred policy + conduct credentials |
@@ -121,6 +122,7 @@ app/agents/arbitrator.py   ArbitratorAgent — deadlock resolver, price clamped 
 app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
+app/props/transcript_hasher.py  TinyCloud transcript → Merkle root (ETHGlobal M1)
 app/dkim/verifier.py       DKIM email proof (dkimpy + DoH)
 app/memory/client.py       Contexto sidecar client (search, add, get_memory_hash)
 app/picreds/auditor.py     LLM audit: audit_agent_policy(), audit_deal_conduct()
@@ -192,7 +194,16 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | 9 | πCreds — LLM policy + conduct credentials attested in TDX quote | ✅ Complete |
 | 10 | Auditor agent — read-only TEE compliance witness; credential_hash in TDX report_data | ✅ Complete |
 | 11 | Arbitrator agent — deadlock resolution; arbitrated settlement attested in TDX quote | ✅ Complete |
-| 12 | DCAP on-chain verifier contract | 🔜 Next |
+| 12 | DCAP on-chain verifier contract | 🔜 Pending |
+| **ETHGlobal NYC — TinyCloud Integration** | | |
+| M1 | Transcript corpus hasher — `app/props/transcript_hasher.py` | ✅ Complete |
+| M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | 🔜 Next |
+| M3 | DataCredentialAgent — TEE-attested team dynamics credential | 🔜 Next |
+| M4 | Credential endpoint — `POST /api/deals/{id}/credential` | 🔜 Next |
+| M5 | Tests — transcript hasher + ingestion + credential endpoint | 🔜 Next |
+| M6 | Arc on-chain credential anchoring | 🔜 Next |
+| M7 | Hedera HCS autonomous deal outcome publishing | 🔜 Next |
+| M8 | ENS resolution endpoint + `dealproof.ai` records | 🔜 Next |
 
 ---
 
@@ -276,6 +287,46 @@ that don't want arbitration to activate).
 
 **`arbitration_enabled` flag is intentionally absent** — the arbitrator is always active
 when an `ArbitratorAgent` instance is passed. Control it by passing `None` instead.
+
+---
+
+## ETHGlobal NYC — TinyCloud Integration
+
+**Context:** DealProof integrates with TinyCloud's Listen app. Listen stores Fireflies/Google Meet
+transcripts in TinyCloud KV/SQL on a Phala TEE CVM (`api.listen.tinycloud.xyz`). DealProof runs
+on its own Phala TEE CVM. Both are TEE-native — two attested processes, verifiable end-to-end.
+
+**TinyCloud repos:** `TinyCloud/feed` (CLI read tooling) + `TinyCloud/listen` (transcript backend)
+
+**TinyCloud transcript data shape** (`NormalizedTranscriptSentence`):
+```python
+{
+    "index": int,             # 0-based position
+    "speaker_id": str,        # slugified name e.g. "alice-johnson"
+    "speaker_name": str,      # human-readable
+    "text": str,
+    "start_time": float | None,
+    "end_time": float | None,
+    "language": str | None,   # null → coerce to "en"
+}
+```
+Stored in TinyCloud KV at: `xyz.tinycloud.listen/transcript/{conversationId}`
+Conversations in SQL at: `xyz.tinycloud.listen/conversations` (`conversation` table)
+258/282 conversations have pre-generated `summary` — prefer summary over raw sentences for tokens.
+
+**Demo flow:**
+```
+POST /api/transcripts/ingest  (corpus_id, mode, conversations or tinycloud_session_token)
+  → corpus_root, seller_proof
+
+POST /api/deals/run  (data_hash: corpus_root, seller_proof, buyer_budget, ...)
+  → deal_id, attestation
+
+POST /api/deals/{id}/credential
+  → TeamDynamicsCredential + TDX quote + Arc tx + Hedera tx
+```
+
+**Prize targets:** ENS ($4k) + Arc ($2k) + Hedera ($3k) + Unlink ($1k) + World ($2.5k) = $12.5k
 
 ---
 
