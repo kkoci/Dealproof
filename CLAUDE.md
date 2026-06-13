@@ -119,6 +119,7 @@ app/agents/seller.py       SellerAgent (claude-sonnet-4-6, accepts verified_doma
 app/agents/negotiation.py  run_negotiation() loop + first-pass sign_result() + arbitrator wiring
 app/agents/auditor.py      AuditorAgent — read-only TEE witness, AuditReport + credential_hash
 app/agents/arbitrator.py   ArbitratorAgent — deadlock resolver, price clamped to [floor, budget]
+app/agents/data_credential.py  DataCredentialAgent — team dynamics credential from TinyCloud corpus (ETHGlobal M3)
 app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
@@ -200,7 +201,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | **ETHGlobal NYC — TinyCloud Integration** | | |
 | M1 | Transcript corpus hasher — `app/props/transcript_hasher.py` | ✅ Complete |
 | M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | ✅ Complete |
-| M3 | DataCredentialAgent — TEE-attested team dynamics credential | 🔜 Next — prepare plan first |
+| M3 | DataCredentialAgent — TEE-attested team dynamics credential | ✅ Complete |
 | M4 | Credential endpoint — `POST /api/deals/{id}/credential` | 🔜 Next |
 | M5 | Tests — transcript hasher + ingestion + credential endpoint | 🔜 Next |
 | M6 | Arc on-chain credential anchoring | 🔜 Next |
