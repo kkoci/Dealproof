@@ -162,7 +162,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (102 tests — all pass without Docker or tappd)
+## Test Suite (109 tests — all pass without Docker or tappd)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -174,6 +174,7 @@ tests/test_memory.py          4   Contexto client: add, search, hash, sidecar-do
 tests/test_picreds.py        11   πCreds: constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
+tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 ```
 
 **Resilience guarantees:**
@@ -203,7 +204,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | ✅ Complete |
 | M3 | DataCredentialAgent — TEE-attested team dynamics credential | ✅ Complete |
 | M4 | Credential endpoint — `POST /api/deals/{id}/credential` | ✅ Complete |
-| M5 | Tests — transcript hasher + ingestion + credential endpoint | 🔜 Next |
+| M5 | Tests — transcript hasher + ingestion + credential endpoint | ✅ Complete |
 | M6 | Arc on-chain credential anchoring | 🔜 Next |
 | M7 | Hedera HCS autonomous deal outcome publishing | 🔜 Next |
 | M8 | ENS resolution endpoint + `dealproof.ai` records | 🔜 Next |

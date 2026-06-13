@@ -34,7 +34,7 @@ from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
 from app.agents.auditor import AuditorAgent
 from app.agents.arbitrator import ArbitratorAgent
-from app.tee.attestation import get_enclave_quote
+from app.tee.attestation import get_enclave_quote, sign_result
 from app.props.verifier import verify_data_authenticity
 from app.dkim.verifier import verify_email_proof
 from app.tee.dcap import parse_tdx_quote
@@ -768,7 +768,6 @@ async def issue_credential(deal_id: str) -> CredentialResponse:
     transparently — {"error": "assessment_failed"} is a valid attested subject.
     """
     from datetime import datetime
-    from app.tee.attestation import sign_result as _sign_result
 
     row = await db.get_deal(deal_id)
     if row is None:
@@ -804,7 +803,7 @@ async def issue_credential(deal_id: str) -> CredentialResponse:
         "issued_at": issued_at,
         "subject": assessment,
     }
-    attestation = await _sign_result(sign_payload)
+    attestation = await sign_result(sign_payload)
     logger.info(f"Deal {deal_id}: TeamDynamicsCredential issued and attested")
 
     return CredentialResponse(
