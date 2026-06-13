@@ -138,6 +138,55 @@ async def claim_deal_for_negotiation(deal_id: str) -> bool:
         return cursor.rowcount == 1
 
 
+async def create_transcript_corpora_table() -> None:
+    """Create the transcript_corpora table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transcript_corpora (
+                corpus_id          TEXT PRIMARY KEY,
+                conversations_json TEXT NOT NULL,
+                corpus_root        TEXT NOT NULL,
+                created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_corpus(corpus_id: str, conversations: list[dict], corpus_root: str) -> None:
+    """Persist a corpus. INSERT OR REPLACE — idempotent re-ingestion of the same corpus_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO transcript_corpora (corpus_id, conversations_json, corpus_root) VALUES (?, ?, ?)",
+            (corpus_id, json.dumps(conversations), corpus_root),
+        )
+        await db.commit()
+
+
+async def get_corpus_by_root(corpus_root: str) -> dict | None:
+    """
+    Fetch a corpus by its Merkle root hash.
+    Used by the credential endpoint to look up conversations by data_hash.
+    Returns {corpus_id, conversations (list), corpus_root} or None.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT corpus_id, conversations_json, corpus_root FROM transcript_corpora WHERE corpus_root = ?",
+            (corpus_root,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "corpus_id": row[0],
+        "conversations": json.loads(row[1]),
+        "corpus_root": row[2],
+    }
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

@@ -123,6 +123,8 @@ app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
 app/props/transcript_hasher.py  TinyCloud transcript → Merkle root (ETHGlobal M1)
+TinyCloud/feed/                 TinyCloud CLI read tooling (reference only)
+TinyCloud/listen/               TinyCloud Listen backend — source of truth for data shapes
 app/dkim/verifier.py       DKIM email proof (dkimpy + DoH)
 app/memory/client.py       Contexto sidecar client (search, add, get_memory_hash)
 app/picreds/auditor.py     LLM audit: audit_agent_policy(), audit_deal_conduct()
@@ -197,8 +199,8 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | 12 | DCAP on-chain verifier contract | 🔜 Pending |
 | **ETHGlobal NYC — TinyCloud Integration** | | |
 | M1 | Transcript corpus hasher — `app/props/transcript_hasher.py` | ✅ Complete |
-| M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | 🔜 Next |
-| M3 | DataCredentialAgent — TEE-attested team dynamics credential | 🔜 Next |
+| M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | ✅ Complete |
+| M3 | DataCredentialAgent — TEE-attested team dynamics credential | 🔜 Next — prepare plan first |
 | M4 | Credential endpoint — `POST /api/deals/{id}/credential` | 🔜 Next |
 | M5 | Tests — transcript hasher + ingestion + credential endpoint | 🔜 Next |
 | M6 | Arc on-chain credential anchoring | 🔜 Next |

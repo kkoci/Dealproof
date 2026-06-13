@@ -169,6 +169,49 @@ class DealResult(BaseModel):
     transcript: list[NegotiationRound] = []
 
 
+# ---------------------------------------------------------------------------
+# ETHGlobal NYC — TinyCloud corpus ingestion (Milestone 2)
+# ---------------------------------------------------------------------------
+
+class TranscriptSentence(BaseModel):
+    """One normalised sentence from TinyCloud Listen KV blob."""
+    index: int
+    speaker_id: str
+    speaker_name: str
+    text: str
+    start_time: float | None = None
+    end_time: float | None = None
+    language: str | None = "en"
+
+
+class TinyCloudConversation(BaseModel):
+    """One TinyCloud conversation row + its transcript sentences."""
+    id: str
+    title: str
+    source: str                              # "fireflies" | "google_meet" | "manual" | ...
+    started_at: str
+    summary: str | None = None               # pre-generated Fireflies summary — prefer over raw sentences
+    sentences: list[TranscriptSentence] = [] # empty when only summary is available
+
+
+class CorpusIngest(BaseModel):
+    corpus_id: str
+    mode: str = "direct"                     # "direct" | "tinycloud"
+    # direct mode: provide conversations inline
+    conversations: list[TinyCloudConversation] = []
+    # tinycloud mode: fetch at runtime from TinyCloud node
+    tinycloud_session_token: str | None = None
+    tinycloud_host: str = "https://node.tinycloud.xyz"
+
+
+class CorpusIngestResponse(BaseModel):
+    corpus_id: str
+    conversation_count: int
+    corpus_root: str
+    seller_proof: dict               # plug directly into POST /api/deals
+    summaries_available: int         # count of conversations with pre-generated summaries
+
+
 class DealStatus(BaseModel):
     deal_id: str
     status: str  # "pending" | "negotiating" | "agreed" | "failed" | "verification_failed"

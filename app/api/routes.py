@@ -23,7 +23,11 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification, AttestationResponse, PiCred
+from app.api.schemas import (
+    DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification,
+    AttestationResponse, PiCred,
+    CorpusIngest, CorpusIngestResponse,
+)
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
@@ -42,6 +46,7 @@ import app.db as db
 from app.memory.client import search_memories, add_memories, get_memory_hash
 from app.picreds.auditor import audit_agent_policy, audit_deal_conduct
 from app.picreds.credential import make_credential, hash_credentials
+from app.props.transcript_hasher import hash_transcript, compute_corpus_root
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -623,3 +628,125 @@ async def get_verification(deal_id: str) -> dict:
             detail="No verification record — deal was created without a seller_proof",
         )
     return {"deal_id": deal_id, "verification": row["verification"]}
+
+
+# ---------------------------------------------------------------------------
+# ETHGlobal NYC — TinyCloud corpus ingestion (Milestone 2)
+# ---------------------------------------------------------------------------
+
+def _hash_conversation(conversation: dict) -> str | None:
+    """
+    Hash one TinyCloud conversation to a 64-char hex string.
+    Prefers sentences; falls back to a synthetic sentence from summary.
+    Returns None if neither is available (caller skips this conversation).
+    """
+    sentences = conversation.get("sentences") or []
+    if sentences:
+        return hash_transcript([
+            {k: s.get(k) for k in ("index", "speaker_id", "speaker_name", "text", "start_time", "end_time", "language")}
+            for s in sentences
+        ])
+    summary = conversation.get("summary")
+    if summary:
+        synthetic = {
+            "index": 0, "speaker_id": "summary", "speaker_name": "Summary",
+            "text": summary, "start_time": None, "end_time": None, "language": "en",
+        }
+        return hash_transcript([synthetic])
+    return None
+
+
+@router.post("/transcripts/ingest", response_model=CorpusIngestResponse, status_code=200)
+async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
+    """
+    Ingest a TinyCloud transcript corpus and compute a Merkle root suitable
+    for use as data_hash in POST /api/deals/run.
+
+    direct mode   — supply conversations inline (no TinyCloud auth needed)
+    tinycloud mode — fetch conversations + transcripts live from TinyCloud node
+                     using tinycloud_session_token
+    """
+    if payload.mode == "tinycloud":
+        if not payload.tinycloud_session_token:
+            raise HTTPException(status_code=400, detail="tinycloud_session_token required for tinycloud mode")
+
+        conversations_raw: list[dict] = []
+        headers = {"Authorization": f"Bearer {payload.tinycloud_session_token}"}
+        host = payload.tinycloud_host.rstrip("/")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Step 1: fetch conversation rows via SQL
+                sql_resp = await client.post(
+                    f"{host}/v1/sql",
+                    json={
+                        "database": "xyz.tinycloud.listen/conversations",
+                        "query": "SELECT id, title, source, started_at, summary FROM conversation LIMIT 300",
+                    },
+                    headers=headers,
+                )
+                sql_resp.raise_for_status()
+                rows = sql_resp.json().get("rows", [])
+
+                # Step 2: fetch transcript KV blob per conversation
+                for row in rows:
+                    conv = {
+                        "id": row["id"],
+                        "title": row.get("title", ""),
+                        "source": row.get("source", ""),
+                        "started_at": row.get("started_at", ""),
+                        "summary": row.get("summary"),
+                        "sentences": [],
+                    }
+                    kv_key = f"xyz.tinycloud.listen/transcript/{row['id']}"
+                    try:
+                        kv_resp = await client.get(f"{host}/v1/kv/{kv_key}", headers=headers)
+                        if kv_resp.status_code == 200:
+                            conv["sentences"] = kv_resp.json()
+                    except Exception:
+                        pass  # KV miss — summary fallback handled in _hash_conversation
+                    conversations_raw.append(conv)
+
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: HTTP {exc.response.status_code}")
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: {exc}")
+
+    else:
+        # direct mode — use conversations from request body
+        conversations_raw = [c.model_dump() for c in payload.conversations]
+
+    # Hash each conversation
+    per_conv_hashes: list[str] = []
+    hashable_convs: list[dict] = []
+    summaries_available = sum(1 for c in conversations_raw if c.get("summary"))
+
+    for conv in conversations_raw:
+        h = _hash_conversation(conv)
+        if h is not None:
+            per_conv_hashes.append(h)
+            hashable_convs.append(conv)
+        else:
+            logger.warning(f"Corpus {payload.corpus_id}: skipping conversation {conv.get('id')} — no sentences or summary")
+
+    if not per_conv_hashes:
+        raise HTTPException(status_code=400, detail="Corpus produced no hashable content — all conversations lack sentences and summary")
+
+    corpus_root = compute_corpus_root(per_conv_hashes)
+    seller_proof = {
+        "root_hash": corpus_root,
+        "chunk_hashes": per_conv_hashes,
+        "chunk_count": len(per_conv_hashes),
+        "algorithm": "sha256",
+    }
+
+    await db.save_corpus(payload.corpus_id, hashable_convs, corpus_root)
+    logger.info(f"Corpus {payload.corpus_id}: ingested {len(hashable_convs)} conversations, root={corpus_root[:16]}...")
+
+    return CorpusIngestResponse(
+        corpus_id=payload.corpus_id,
+        conversation_count=len(hashable_convs),
+        corpus_root=corpus_root,
+        seller_proof=seller_proof,
+        summaries_available=summaries_available,
+    )
