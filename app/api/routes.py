@@ -864,19 +864,33 @@ async def issue_credential(deal_id: str) -> CredentialResponse:
     except Exception as exc:
         logger.warning(f"Deal {deal_id}: Arc anchoring failed (non-fatal) — {exc}")
 
+    # Populate hedera_transaction_id from the deal's HCS record if available
+    hedera_transaction_id: str | None = None
+    try:
+        hedera_row = await db.get_hedera_message(deal_id)
+        if hedera_row:
+            hedera_transaction_id = hedera_row["transaction_id"]
+    except Exception:
+        pass
+
     return CredentialResponse(
         deal_id=deal_id,
         credential=credential,
         attestation=attestation,
         verifiable=True,
         arc_tx_hash=arc_tx_hash,
+        hedera_transaction_id=hedera_transaction_id,
     )
 
 
 @router.get("/deals/{deal_id}/hedera")
 async def get_hedera_record(deal_id: str) -> dict:
     """Return the Hedera HCS record for a deal's outcome."""
-    row = await db.get_hedera_message(deal_id)
+    try:
+        row = await db.get_hedera_message(deal_id)
+    except Exception as exc:
+        logger.warning(f"GET /hedera: db lookup failed for {deal_id} — {exc}")
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
     if row is None:
         raise HTTPException(
             status_code=404,
