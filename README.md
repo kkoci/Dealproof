@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-All 95 tests pass without Docker or a running tappd. Every external call (Claude API, tappd, SQLite path, memory sidecar) is either mocked or redirected to a temp file.
+69 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar) is either mocked or redirected to a temp file.
 
 ```
 tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests

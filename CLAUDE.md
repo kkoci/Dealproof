@@ -162,7 +162,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (109 tests — all pass without Docker or tappd)
+## Test Suite (69 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -360,7 +360,7 @@ Memory service (`kkoci/dealproof-memory`) is unchanged — push only when `memor
 
 ### On every feature or fix
 
-1. Write or update tests for the changed behaviour — all 102 must still pass.
+1. Write or update tests for the changed behaviour — run `pytest` and confirm 0 failures.
 2. Run `pytest tests/ -v` before marking anything done.
 3. Update the relevant section of `README.md` if phase status or test count changes.
 4. Never break the resilience guarantees (memory/πCreds/DKIM/Auditor/Arbitrator all non-fatal).
