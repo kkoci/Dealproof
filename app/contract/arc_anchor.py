@@ -98,8 +98,13 @@ def _anchor_sync(deal_id: str, credential_hash: str, attestation_hex: str) -> di
     signed_msg = w3.eth.account.sign_message(msg, settings.private_key)
     report_data_sig = signed_msg.signature
 
-    # Build the raw DCAP quote bytes from the hex attestation string
-    quote_hex = attestation_hex.lstrip("0x")
+    # Build the raw DCAP quote bytes from the hex attestation string.
+    # Strip any prefix and non-hex characters (whitespace, embedded newlines
+    # from JSON serialisation of long quote strings).
+    import re as _re
+    quote_hex = _re.sub(r"[^0-9a-fA-F]", "", attestation_hex)
+    if len(quote_hex) % 2:
+        quote_hex = quote_hex[:-1]  # ensure even length
     dcap_quote_bytes = bytes.fromhex(quote_hex)
 
     name = f"DealProof-Credential:{deal_id[:8]}"
