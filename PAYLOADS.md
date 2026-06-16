@@ -19,6 +19,8 @@ All payloads are copy-paste ready for `http://localhost:8000`.
 | Eval: healthy team dynamics | `POST /api/transcripts/ingest` | [Synthetic evals](#synthetic-evals) |
 | Eval: conflict-heavy team | `POST /api/transcripts/ingest` | [Synthetic evals](#synthetic-evals) |
 | Eval: summary-only corpus | `POST /api/transcripts/ingest` | [Synthetic evals](#synthetic-evals) |
+| IoT sensor dataset (quality-aware deal) | `POST /api/deals/run` | [Structured datasets](#structured-datasets) |
+| Full kitchen-sink (every field active) | `POST /api/deals/run` | [Full kitchen-sink payload](#full-kitchen-sink-payload) |
 
 ---
 
@@ -633,4 +635,307 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/transcripts/inges
 
 # Eval: healthy team (ingest)
 Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/transcripts/ingest" -ContentType "application/json" -Body '{"corpus_id":"eval-healthy-team","mode":"direct","conversations":[{"id":"eval-healthy-c1","title":"Sprint review","source":"recorder","started_at":"2026-06-02T10:00:00Z","sentences":[{"index":0,"speaker_id":"alice","speaker_name":"Alice","text":"What did we ship this week?","start_time":0,"end_time":3,"language":"en"},{"index":1,"speaker_id":"bob","speaker_name":"Bob","text":"Rate limiter is live, zero incidents.","start_time":4,"end_time":7,"language":"en"}]}]}'
+```
+
+---
+
+## Structured datasets
+
+Real data product payloads that exercise the full quality-assessment pipeline:
+`seller_proof` (Props Merkle) + `quality_metrics` (DataQualityAgent) + negotiation.
+
+### IoT industrial sensor dataset — quality-aware deal
+
+500-row dataset generated with `random.seed(42)`. Contains 7 columns, 5 chunks of 100
+rows each. Intentional quality issues baked in so the buyer has something to negotiate on.
+
+**Dataset facts:**
+- 500 rows, 5-minute interval sensor readings, 20 devices (SEN-001 … SEN-020)
+- Columns: `timestamp`, `device_id`, `temperature_c`, `humidity_pct`, `pressure_hpa`, `vibration_ms2`, `label`
+- `pressure_hpa`: 12.4% null (62 rows) — sensor dropout
+- `vibration_ms2`: 6.2% null (31 rows) — sensor dropout
+- Label distribution: 84.2% `normal`, 15.8% `anomaly`
+- All other columns: 0% null, schema valid
+
+**Chunk hashes** (SHA-256 of `json.dumps(rows, sort_keys=True).encode()` per 100-row batch):
+
+| Chunk | Hash |
+|-------|------|
+| 0 (rows 0–99) | `77089eda09c00d5fccabc1690e1a9e295c9ca71c2b7a205c6416bad89c1f005a` |
+| 1 (rows 100–199) | `8ea0fedbb4445f3915faa8f210995cb8ca0fc60a5d0793a4c32ab29009ded72d` |
+| 2 (rows 200–299) | `80c47114a42474f2ca72c11e1132cacc12ac8ae1ce4586c8198f634f488f05b2` |
+| 3 (rows 300–399) | `b1b3bec0955ffd86c3ead621abd8338dd455711dcc8698312de64cf44b014077` |
+| 4 (rows 400–499) | `d744683c6a0d8910e809bda6c01734f0c4e32947bc1c5a9e133fbd04cba19340` |
+
+**Merkle root:** `65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca`
+
+To regenerate: `python scripts/generate_iot_dataset.py` (produces the same hashes with `random.seed(42)`).
+
+---
+
+**Full deal payload** — Props verification + DataQualityAgent quality assessment + negotiation.
+The buyer receives TEE-attested quality findings (null rates, label imbalance) in its system
+prompt and can negotiate down based on them. Expected outcome: buyer cites 12.4% null in
+pressure column to justify a price below the seller's opening ask.
+
+```json
+{
+  "buyer_budget": 800.0,
+  "buyer_requirements": "500-row industrial IoT sensor dataset for anomaly detection model training — need labelled records with temperature, humidity, pressure and vibration readings",
+  "data_description": "500-row industrial IoT sensor dataset, 7 columns, 5-minute intervals, 20 devices, SHA-256 chunked. Note: 12.4% null rate in pressure_hpa column and 6.2% in vibration_ms2 due to sensor dropouts during collection.",
+  "data_hash": "65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca",
+  "floor_price": 500.0,
+  "seller_proof": {
+    "root_hash": "65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca",
+    "chunk_hashes": [
+      "77089eda09c00d5fccabc1690e1a9e295c9ca71c2b7a205c6416bad89c1f005a",
+      "8ea0fedbb4445f3915faa8f210995cb8ca0fc60a5d0793a4c32ab29009ded72d",
+      "80c47114a42474f2ca72c11e1132cacc12ac8ae1ce4586c8198f634f488f05b2",
+      "b1b3bec0955ffd86c3ead621abd8338dd455711dcc8698312de64cf44b014077",
+      "d744683c6a0d8910e809bda6c01734f0c4e32947bc1c5a9e133fbd04cba19340"
+    ],
+    "chunk_count": 5,
+    "algorithm": "sha256"
+  },
+  "quality_metrics": {
+    "row_count": 500,
+    "column_names": ["timestamp", "device_id", "temperature_c", "humidity_pct", "pressure_hpa", "vibration_ms2", "label"],
+    "null_rates": {
+      "pressure_hpa": 0.124,
+      "vibration_ms2": 0.062
+    },
+    "label_column": "label",
+    "label_distribution": {
+      "normal": 0.842,
+      "anomaly": 0.158
+    },
+    "schema_valid": true,
+    "additional_notes": "Null values in sensor columns are due to connectivity dropouts, not data corruption. Remaining rows are complete."
+  }
+}
+```
+
+**Actual live response** (deal `d0ec6d0f`, agreed at $630, 2 rounds):
+
+> Attestation blobs truncated to `"<hex>"` for readability — full values in the actual API response.
+
+```json
+{
+  "deal_id": "d0ec6d0f-e76c-459e-81e5-a49dec3c8a00",
+  "agreed": true,
+  "final_price": 630,
+  "terms": { "access_scope": "full dataset", "duration_days": 30 },
+  "attestation": "<hex>",
+  "data_verification_attestation": "<hex>",
+  "escrow_tx": null,
+  "completion_tx": null,
+  "dkim_verification": null,
+  "memory_hash": "566880b89f42e5c5993a828d3375de5113af2bbb87b285521524759e2984d35a:c6165f84fd59465f10a8ff4442d6446576f5e1e3fe9152556357c3cde1888862",
+  "memory_hash_post": "7ff7d410920afa7361a94f222234e36f7b40dfde3b1cad01e19b0addb5f850c9:c6165f84fd59465f10a8ff4442d6446576f5e1e3fe9152556357c3cde1888862",
+  "memory_attested": true,
+  "picreds_hash": "2728bc6ff42961ff174297531e790659224873a9abd497ea0decf5b2f8cc1265",
+  "picreds_attested": true,
+  "audit_report": {
+    "genuine_negotiation": true,
+    "round_count": 2,
+    "final_price": 630,
+    "summary": "Both parties demonstrated authentic adversarial positioning through meaningful concessions across multiple rounds, with the seller moving from 720 to 665 to 630 and the buyer anchoring low at 560 before accepting the seller's final concession, reflecting genuine strategic back-and-forth rather than scripted capitulation.",
+    "credential_hash": "f4b891564c3d9a89d89aee24208c6a27395b349a36a063d3de4de88c8066bdb9"
+  },
+  "audit_error": null,
+  "arbitrated": false,
+  "memory_context_hash": "1f015e08c7e50c3668fefdea2d3a5fdcefc1a94763314c55a6674ad9bfb73d14",
+  "memory_write_hash": "50e9aa13a4e345f7645b71071ac6264dad0bc36a9f7456a50e5cbea92c66ada9",
+  "hedera_transaction_id": "0.0.9224782@1781653288.271583795",
+  "data_quality_report": {
+    "completeness_score": 0.974,
+    "schema_consistent": true,
+    "label_distribution": { "normal": 0.842, "anomaly": 0.158 },
+    "quality_issues": [
+      "12.4% null rate in pressure_hpa column due to sensor connectivity dropouts",
+      "6.2% null rate in vibration_ms2 column due to sensor connectivity dropouts",
+      "Label imbalance: 84.2% normal vs 15.8% anomaly — may affect anomaly detection model training"
+    ],
+    "overall_quality": "medium",
+    "summary": "This 500-row IoT sensor dataset is schema-consistent with moderate completeness (97.4% average across all columns), but exhibits notable null rates in pressure_hpa (12.4%) and vibration_ms2 (6.2%) from sensor dropouts, and a class imbalance favoring normal labels (84.2%) that warrants attention for anomaly detection use cases.",
+    "quality_hash": "755a2928eb8051f860e8fc84c3496617d89e102c4358565cd479f3d5787f23bb"
+  },
+  "quality_attested": true,
+  "buyer_ens": null,
+  "seller_ens": null,
+  "transcript": [
+    {
+      "round": 1, "role": "seller", "action": "offer", "price": 720,
+      "terms": { "access_scope": "full dataset", "duration_days": 30 },
+      "reasoning": "Based on our prior engagement where you accepted 675.0 for the TinyCloud meeting corpus, I know you're comfortable in the 650-700 range and move to agreement relatively quickly. I'm opening at 720.0 for this industrial IoT sensor dataset — a modest premium over our last deal, reflecting the different data type and structured sensor telemetry value. I want to be transparent upfront: the TEE-verified quality credential flags a 12.4% null rate in pressure_hpa and 6.2% in vibration_ms2 due to sensor dropouts, plus a class imbalance (84.2% normal vs 15.8% anomaly) that may affect anomaly detection training. I've already factored these limitations into this price — it's fair given the 500-row structured dataset with 20 devices at 5-minute intervals, SHA-256 integrity verified, and 97.4% overall completeness. Full dataset access, 30-day duration, same terms structure as last time."
+    },
+    {
+      "round": 1, "role": "buyer", "action": "counter", "price": 560,
+      "terms": { "access_scope": "full dataset", "duration_days": 30 },
+      "reasoning": "I appreciate the transparency on quality issues, and I'm using them directly in my valuation. The TEE-verified credential flags real problems: 12.4% null rate in pressure_hpa and 6.2% in vibration_ms2 from sensor dropouts mean I'll need to impute or drop a significant share of records — reducing effective usable data below the 500-row nominal count. The class imbalance (84.2% normal vs 15.8% anomaly) is a meaningful concern for anomaly detection training specifically, potentially requiring oversampling or synthetic augmentation work on my end. These aren't minor issues — they add downstream cost and effort. While I recall our prior engagement moved smoothly near 675 for the TinyCloud corpus, that was clean meeting data. This dataset carries documented quality deficiencies that warrant a lower baseline. I'm opening at 560 — fair given the medium-quality credential and the real imputation burden I'm taking on."
+    },
+    {
+      "round": 1, "role": "seller", "action": "counter", "price": 665,
+      "terms": { "access_scope": "full dataset", "duration_days": 30 },
+      "reasoning": "I appreciate the detailed pushback and you're right that the quality issues are real — I already priced them in at my opening. But 560 undervalues this dataset materially. The 97.4% overall completeness is solid for industrial IoT telemetry, which routinely sees higher dropout rates in production. The null rates are documented and localized to two columns — the SHA-256 chunked integrity verification means what you get is exactly what's attested. The class imbalance at 15.8% anomaly rate is actually reasonable for real-world industrial anomaly data — synthetic datasets often have to simulate this artificially. I'm coming down to 665 — a meaningful concession from 720, and just below our previous deal price, reflecting the quality delta you've correctly identified."
+    },
+    {
+      "round": 2, "role": "seller", "action": "counter", "price": 630,
+      "terms": { "access_scope": "full dataset", "duration_days": 30 },
+      "reasoning": "I'll meet you closer to the middle. Moving from 665 to 630 is a genuine concession — that's 90 down from my opening. 630 is still below our last deal price of 675 for the TinyCloud corpus, reflecting my acknowledgment that the documented null rates and class imbalance do carry real downstream cost for you. But the dataset has real structural value: 20 devices, 5-minute resolution, 500 rows of time-series telemetry, cryptographically verified integrity. The quality issues are disclosed and bounded, not hidden surprises. 630, full dataset, 30 days — let's close."
+    },
+    {
+      "round": 2, "role": "buyer", "action": "accept", "price": 630,
+      "terms": { "access_scope": "full dataset", "duration_days": 30 },
+      "reasoning": "630 is a fair landing point. It's below our prior TinyCloud deal at 675, appropriately reflecting the documented quality issues — the null rates in pressure_hpa and vibration_ms2, and the class imbalance. The seller has made genuine concessions from 720 down to 630, the quality issues are disclosed and bounded, and the dataset has real structural value for my anomaly detection training needs. Well within budget. Accepting here."
+    }
+  ]
+}
+```
+
+**What to observe:** both agents referenced the TEE-verified quality credential directly in
+their `reasoning` — the seller disclosed issues proactively in round 1 and the buyer cited
+them to anchor at $560. The final price ($630) is $45 below the prior TinyCloud deal ($675),
+attributable to the quality discount. This is the quality-credential signal working as intended.
+
+**What to observe in the negotiation transcript:** the buyer references the null rates
+based on the `additional_notes` context. Neither agent is making up quality facts — both are
+working from the same TEE-attested assessment.
+
+---
+
+### IoT dataset — no quality metrics (baseline comparison)
+
+Same dataset, same `seller_proof`, but no `quality_metrics`. The agents negotiate purely on
+`data_description` free text. Compare the transcript reasoning to the quality-aware run above
+to see how much the structured quality credential changes negotiation behaviour.
+
+```json
+{
+  "buyer_budget": 800.0,
+  "buyer_requirements": "500-row industrial IoT sensor dataset for anomaly detection model training",
+  "data_description": "500-row industrial IoT sensor dataset, 7 columns, 5-minute intervals, 20 devices",
+  "data_hash": "65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca",
+  "floor_price": 500.0,
+  "seller_proof": {
+    "root_hash": "65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca",
+    "chunk_hashes": [
+      "77089eda09c00d5fccabc1690e1a9e295c9ca71c2b7a205c6416bad89c1f005a",
+      "8ea0fedbb4445f3915faa8f210995cb8ca0fc60a5d0793a4c32ab29009ded72d",
+      "80c47114a42474f2ca72c11e1132cacc12ac8ae1ce4586c8198f634f488f05b2",
+      "b1b3bec0955ffd86c3ead621abd8338dd455711dcc8698312de64cf44b014077",
+      "d744683c6a0d8910e809bda6c01734f0c4e32947bc1c5a9e133fbd04cba19340"
+    ],
+    "chunk_count": 5,
+    "algorithm": "sha256"
+  }
+}
+```
+
+---
+
+## Full kitchen-sink payload
+
+Every optional field active. Substitute the three placeholders marked `<...>` — everything
+else is copy-paste ready.
+
+| Field | Placeholder | What it unlocks in `DealResult` |
+|-------|-------------|--------------------------------|
+| `buyer_address` | your buyer wallet address | `buyer_ens` (if address has ENS reverse record) |
+| `seller_address` | your seller wallet address | `seller_ens` + `escrow_tx` + `completion_tx` (needs `CONTRACT_ADDRESS` in `.env`) |
+| `seller_email_eml` | base64-encoded `.eml` file | `dkim_verification.verified`, `dkim_verification.domain` |
+
+Get the base64 value: `python3 -c "import base64; print(base64.b64encode(open('your.eml','rb').read()).decode())"`
+
+```json
+{
+  "buyer_budget": 800.0,
+  "buyer_requirements": "500-row industrial IoT sensor dataset for anomaly detection model training — need labelled records with temperature, humidity, pressure and vibration readings",
+  "data_description": "500-row industrial IoT sensor dataset, 7 columns, 5-minute intervals, 20 devices, SHA-256 chunked. Note: 12.4% null rate in pressure_hpa column and 6.2% in vibration_ms2 due to sensor dropouts during collection.",
+  "data_hash": "65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca",
+  "floor_price": 500.0,
+  "seller_proof": {
+    "root_hash": "65327bf4fcee0f337115c7ab12c4fc54977893386e38b6099ccbd915542effca",
+    "chunk_hashes": [
+      "77089eda09c00d5fccabc1690e1a9e295c9ca71c2b7a205c6416bad89c1f005a",
+      "8ea0fedbb4445f3915faa8f210995cb8ca0fc60a5d0793a4c32ab29009ded72d",
+      "80c47114a42474f2ca72c11e1132cacc12ac8ae1ce4586c8198f634f488f05b2",
+      "b1b3bec0955ffd86c3ead621abd8338dd455711dcc8698312de64cf44b014077",
+      "d744683c6a0d8910e809bda6c01734f0c4e32947bc1c5a9e133fbd04cba19340"
+    ],
+    "chunk_count": 5,
+    "algorithm": "sha256"
+  },
+  "quality_metrics": {
+    "row_count": 500,
+    "column_names": ["timestamp", "device_id", "temperature_c", "humidity_pct", "pressure_hpa", "vibration_ms2", "label"],
+    "null_rates": {
+      "pressure_hpa": 0.124,
+      "vibration_ms2": 0.062
+    },
+    "label_column": "label",
+    "label_distribution": {
+      "normal": 0.842,
+      "anomaly": 0.158
+    },
+    "schema_valid": true,
+    "additional_notes": "Null values in sensor columns are due to connectivity dropouts, not data corruption. Remaining rows are complete."
+  },
+  "buyer_address": "<YOUR_BUYER_ETH_ADDRESS>",
+  "seller_address": "<YOUR_SELLER_ETH_ADDRESS>",
+  "escrow_amount_eth": 0.001,
+  "seller_email_eml": "<BASE64_ENCODED_EML>"
+}
+```
+
+**Full populated `DealResult` — every field non-null on success:**
+
+```json
+{
+  "deal_id": "<uuid>",
+  "agreed": true,
+  "final_price": "<float>",
+  "terms": { "access_scope": "full dataset", "duration_days": 30 },
+  "attestation": "<hex>",
+  "data_verification_attestation": "<hex>",
+  "escrow_tx": "<0x tx hash>",
+  "completion_tx": "<0x tx hash>",
+  "dkim_verification": {
+    "domain": "<seller email domain>",
+    "verified": true,
+    "dns_unavailable": false,
+    "error": null
+  },
+  "memory_hash": "<buyer_hash>:<seller_hash>",
+  "memory_hash_post": "<buyer_hash_post>:<seller_hash_post>",
+  "memory_attested": true,
+  "picreds": ["<3 DealProofCredential objects>"],
+  "picreds_hash": "<hex>",
+  "picreds_attested": true,
+  "audit_report": {
+    "genuine_negotiation": true,
+    "round_count": "<int>",
+    "final_price": "<float>",
+    "summary": "<string>",
+    "credential_hash": "<hex>"
+  },
+  "audit_error": null,
+  "arbitrated": false,
+  "memory_context_hash": "<hex>",
+  "memory_write_hash": "<hex>",
+  "hedera_transaction_id": "<topic@timestamp>",
+  "data_quality_report": {
+    "completeness_score": 0.974,
+    "schema_consistent": true,
+    "label_distribution": { "normal": 0.842, "anomaly": 0.158 },
+    "quality_issues": ["<list>"],
+    "overall_quality": "medium",
+    "summary": "<string>",
+    "quality_hash": "<hex>"
+  },
+  "quality_attested": true,
+  "buyer_ens": "<name.eth or null>",
+  "seller_ens": "<name.eth or null>",
+  "transcript": ["<NegotiationRound objects>"]
+}
 ```

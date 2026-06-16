@@ -23,6 +23,37 @@ class AttestationResponse(BaseModel):
     timestamp: int = Field(..., description="Unix timestamp of quote generation")
 
 
+class DataQualityMetrics(BaseModel):
+    """
+    Pre-computed quality metrics for a structured dataset.
+    Supplied by the seller in DealCreate; assessed inside the TEE by DataQualityAgent
+    before negotiation starts. The resulting quality report is injected into both
+    agent system prompts and its hash is included in the final TDX attestation.
+    """
+    row_count: int = Field(..., gt=0, description="Total number of rows in the dataset")
+    column_names: list[str] = Field(..., description="Ordered list of column names")
+    null_rates: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-column null rate (0.0-1.0). Columns not listed are assumed 0.0.",
+    )
+    label_column: Optional[str] = Field(
+        default=None,
+        description="Name of the target/label column, if applicable.",
+    )
+    label_distribution: Optional[dict[str, float]] = Field(
+        default=None,
+        description="Class proportions in the label column, e.g. {'normal': 0.84, 'anomaly': 0.16}.",
+    )
+    schema_valid: bool = Field(
+        default=True,
+        description="False if schema violations were detected during export.",
+    )
+    additional_notes: Optional[str] = Field(
+        default=None,
+        description="Any extra quality notes the seller wants to disclose upfront.",
+    )
+
+
 class DealCreate(BaseModel):
     buyer_budget: float = Field(..., gt=0, description="Maximum the buyer will pay")
     buyer_requirements: str = Field(..., description="What the buyer needs from the data")
@@ -74,6 +105,19 @@ class DealCreate(BaseModel):
             "Amount of ETH to deposit as escrow. Required when seller_address is set. "
             "Released to the seller on successful negotiation; refundable after the "
             "negotiation window expires if the deal fails."
+        ),
+    )
+    # DataQualityAgent: optional pre-computed quality metrics from the seller.
+    # When present, DataQualityAgent runs inside the TEE before negotiation and
+    # injects a quality credential into both agent system prompts. The quality
+    # report hash is included in the final TDX attestation.
+    quality_metrics: Optional[DataQualityMetrics] = Field(
+        default=None,
+        description=(
+            "Pre-computed dataset quality metrics. When provided, a DataQualityAgent "
+            "runs inside the TEE, producing a quality credential injected into both "
+            "buyer and seller system prompts. Quality issues (null rates, label imbalance) "
+            "influence price negotiation. The quality_hash is attested in the TDX quote."
         ),
     )
 
@@ -172,6 +216,9 @@ class DealResult(BaseModel):
     memory_context_hash: str | None = None
     memory_write_hash: str | None = None
     hedera_transaction_id: str | None = None  # Hedera HCS deal outcome publish tx
+    # DataQualityAgent: TEE-attested dataset quality report
+    data_quality_report: dict | None = None
+    quality_attested: bool = False
     # ENS agent identities (ETHGlobal M8)
     buyer_ens: str | None = None    # ENS name for buyer address, if set
     seller_ens: str | None = None   # ENS name for seller address, if set

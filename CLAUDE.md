@@ -75,6 +75,11 @@ Step 1   Props verification (optional, fail-fast HTTP 400 on failure)
 
 Step 1b  On-chain escrow deposit (Phase 4, optional)
 
+Step Q   DataQualityAgent (optional, non-fatal)
+           DataQualityAgent.assess(data_description, quality_metrics) → DataQualityReport
+           quality_hash included in TDX re-attestation
+           quality_context injected into BuyerAgent + SellerAgent system prompts
+
 Step M1  Contexto memory pre-deal
            search_memories() → inject context into agent prompts
            get_memory_hash() → memory_hash (state A)
@@ -96,7 +101,8 @@ Step P   (if agreed) πCreds audit
 Step A   (if agreed) Auditor compliance witness
            AuditorAgent.audit() → AuditReport
            audit_credential_hash = SHA-256(report fields)
-           Re-attest: SHA-256(deal + hashA + hashB + picreds_hash + audit_credential_hash) → TDX quote
+           audit_credential_hash = SHA-256(report fields)
+           Re-attest: SHA-256(deal + hashA + hashB + picreds_hash + audit_credential_hash + quality_hash) → TDX quote
 
 Step 3b  (if agreed) On-chain escrow release
 
@@ -120,6 +126,7 @@ app/agents/negotiation.py  run_negotiation() loop + first-pass sign_result() + a
 app/agents/auditor.py      AuditorAgent — read-only TEE witness, AuditReport + credential_hash
 app/agents/arbitrator.py   ArbitratorAgent — deadlock resolver, price clamped to [floor, budget]
 app/agents/data_credential.py  DataCredentialAgent — team dynamics credential from TinyCloud corpus (ETHGlobal M3)
+app/agents/data_quality.py     DataQualityAgent — TEE-resident dataset quality assessor; quality_hash in TDX quote
 app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
@@ -160,6 +167,9 @@ memory_context_hash           SHA-256 of recalled memories injected into agent p
                                proves what the agents remembered, not just that state changed
 memory_write_hash             SHA-256 of outcome_messages written to memory post-deal
                                proves this deal caused the A→B state transition
+data_quality_report           {completeness_score, schema_consistent, label_distribution,
+                               quality_issues, overall_quality, summary, quality_hash} or null
+quality_attested              bool — true when DataQualityAgent ran and deal agreed
 transcript                    list of negotiation rounds
 ```
 
@@ -178,6 +188,7 @@ tests/test_picreds.py        11   πCreds: constraint checks (5 pure) + auditor 
 tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
+tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 ```
 
 **Resilience guarantees:**
@@ -295,6 +306,65 @@ that don't want arbitration to activate).
 
 **`arbitration_enabled` flag is intentionally absent** — the arbitrator is always active
 when an `ArbitratorAgent` instance is passed. Control it by passing `None` instead.
+
+---
+
+## DataQualityAgent Architecture
+
+`app/agents/data_quality.py` runs at **Step Q** — before memory recall and before the
+negotiation loop — when `quality_metrics` is provided in `DealCreate`.
+
+### Flow
+
+```
+DealCreate.quality_metrics (DataQualityMetrics)
+  → DataQualityAgent.assess(data_description, metrics)
+      → one Claude call → DataQualityReport
+          → build_quality_context(report, "buyer")  → injected into BuyerAgent system prompt
+          → build_quality_context(report, "seller") → injected into SellerAgent system prompt
+          → report.quality_hash                     → included in TDX re-attestation payload
+  → DealResult.data_quality_report (dict)
+  → DealResult.quality_attested (bool)
+```
+
+### DataQualityMetrics (DealCreate field)
+
+```python
+class DataQualityMetrics(BaseModel):
+    row_count: int
+    column_names: list[str]
+    null_rates: dict[str, float]          # column → null rate 0.0–1.0
+    label_column: str | None              # target column name
+    label_distribution: dict[str, float] | None  # {"normal": 0.842, "anomaly": 0.158}
+    schema_valid: bool = True
+    additional_notes: str | None
+```
+
+### DataQualityReport
+
+```python
+@dataclass
+class DataQualityReport:
+    completeness_score: float   # mean(1 - null_rate) across columns
+    schema_consistent: bool
+    label_distribution: dict | None
+    quality_issues: list[str]   # e.g. "12.4% null rate in pressure_hpa column"
+    overall_quality: str        # "high" | "medium" | "low"
+    summary: str                # one sentence
+    quality_hash: str           # SHA-256(report fields) — in TDX report_data
+```
+
+### What agents see
+
+Both agents receive a `[TEE-VERIFIED DATASET QUALITY CREDENTIAL]` block in their system
+prompts containing `overall_quality`, `completeness_score`, `quality_issues`, and
+`label_distribution`. The buyer is told to cite issues when negotiating down; the seller is
+told to be transparent and price issues in proactively.
+
+### Resilience
+
+DataQualityAgent is non-fatal. If it fails, `data_quality_report: null`, `quality_attested: false`,
+and agents proceed without quality context — same pattern as memory, πCreds, Auditor.
 
 ---
 

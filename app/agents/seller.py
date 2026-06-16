@@ -39,6 +39,18 @@ _MEMORY_BLOCK = """
 Act on this. Adjust your opening ask and concession pace based on what you remember about this counterparty.
 """
 
+_QUALITY_BLOCK = """
+
+[TEE-VERIFIED DATASET QUALITY CREDENTIAL]
+An independent DataQualityAgent assessed your dataset inside the TEE before negotiation began.
+These findings are cryptographically attested and visible to the buyer.
+
+{quality_context}
+
+Be transparent about known issues. If quality is medium or low, consider proactively
+acknowledging limitations and pricing them in rather than waiting for the buyer to raise them.
+"""
+
 _DKIM_CREDENTIAL_BLOCK = """
 
 [TEE-VERIFIED IDENTITY CREDENTIAL]
@@ -57,6 +69,7 @@ class SellerAgent:
         data_description: str,
         verified_domain: str | None = None,
         memory_context: str = "",
+        quality_context: str = "",
     ):
         """
         Parameters
@@ -82,6 +95,8 @@ class SellerAgent:
         )
         if memory_context:
             self.system_prompt += _MEMORY_BLOCK.format(memory_context=memory_context)
+        if quality_context:
+            self.system_prompt += _QUALITY_BLOCK.format(quality_context=quality_context)
         if verified_domain:
             self.system_prompt += _DKIM_CREDENTIAL_BLOCK.format(domain=verified_domain)
 
