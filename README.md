@@ -864,6 +864,114 @@ The TEE verifies:
 
 ---
 
+## TinyCloud — Live Transcript Corpus
+
+DealProof connects to [TinyCloud Listen](https://listen.tinycloud.xyz) — a TEE-hosted transcript workspace — to pull meeting recordings as the dataset being negotiated. The data flows through `POST /api/transcripts/ingest` then `POST /api/deals/run`.
+
+### Three ingest modes
+
+| Mode | How | Auth | Use when |
+|------|-----|------|----------|
+| `direct` | Inline conversations in request body | None | Tests, synthetic data |
+| `local` | Reads `TinyCloud/feed/conversations.json` + `TinyCloud/feed/transcripts/*.json` | None | Development, offline |
+| `tinycloud` | Live HTTP fetch via the bridge (port 4098) | Bridge handles `tc` auth | Production, fresh data |
+
+### Local mode — quick start
+
+Bulk-download the corpus once from your authenticated `tc` session:
+
+```bash
+cd TinyCloud/feed
+bun install
+# authenticate once (opens browser)
+bunx tc init --name listen --host https://node.tinycloud.xyz
+# grant read caps
+bunx tc auth request --profile listen --cap "tinycloud.sql:applications:xyz.tinycloud.listen/conversations:read" --grant --yes
+bunx tc auth request --profile listen --cap "tinycloud.kv:applications:xyz.tinycloud.listen/:get,list,metadata" --grant --yes
+```
+
+Then save the corpus (449 conversations, ~225 transcripts):
+
+```bash
+# All conversation rows
+bunx tc --json sql query "SELECT * FROM conversation" \
+  --space applications --db xyz.tinycloud.listen/conversations --profile listen \
+  | python3 -c "
+import json,sys; r=json.loads(sys.stdin.read()); rows=[dict(zip(r['columns'],row)) for row in r['rows']]; open('conversations.json','w').write(json.dumps(rows,indent=2))
+"
+
+# All transcript blobs → transcripts/<id>.json  (PowerShell)
+New-Item -ItemType Directory -Force -Path transcripts | Out-Null
+$keys = (bunx tc kv list --prefix "xyz.tinycloud.listen/transcript" --space applications --profile listen --json | ConvertFrom-Json).keys
+foreach ($key in $keys) {
+    $id = $key.Split('/')[-1]
+    bunx tc kv get $key --space applications --raw --profile listen | Out-File -Encoding utf8 "transcripts\$id.json"
+}
+```
+
+Ingest into DealProof:
+
+```bash
+curl -s -X POST http://localhost:8000/api/transcripts/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"corpus_id": "listen-corpus-v1", "mode": "local"}' | python -m json.tool
+```
+
+The response includes `corpus_root` and `seller_proof` — paste them directly into `POST /api/deals/run` as `data_hash` and `seller_proof`.
+
+### Bridge mode — live TinyCloud connection
+
+The TinyCloud node requires UCAN delegation auth plus a specific TLS fingerprint (JA3) that Python's httpx cannot satisfy. `TinyCloud/bridge.ts` is a thin Bun shim that wraps the `tc` CLI and exposes a plain HTTP API on port 4098 that DealProof can reach.
+
+Start the bridge (from `TinyCloud/feed` where the `tc` binary lives):
+
+```bash
+cd TinyCloud/feed
+TC_BIN=./node_modules/.bin/tc bun run ../bridge.ts
+# [bridge] listening on 0.0.0.0:4098
+```
+
+Then ingest live:
+
+```bash
+curl -s -X POST http://localhost:8000/api/transcripts/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"corpus_id": "listen-live-v1", "mode": "tinycloud"}' | python -m json.tool
+```
+
+`tinycloud_host` defaults to `http://localhost:4098` (the bridge). To call the node directly, set `tinycloud_host` to `https://node.tinycloud.xyz` and pass the UCAN delegation token as `tinycloud_session_token`.
+
+### How the corpus becomes a deal
+
+```
+TinyCloud/feed/conversations.json       449 conversation rows (SQL)
+TinyCloud/feed/transcripts/rec-*.json   225 transcript blobs (KV)
+       ↓  POST /api/transcripts/ingest  (local or tinycloud mode)
+       hash_transcript() per conversation  →  per-conversation SHA-256
+       compute_corpus_root(hashes)          →  Merkle root
+       → corpus_root  + seller_proof        →  stored in SQLite
+       ↓  POST /api/deals/run  (data_hash = corpus_root)
+       TEE agents negotiate the transcript corpus as the data product
+       TDX quote over deal terms + Merkle root  →  attested DealResult
+       ↓  POST /api/deals/{id}/credential
+       DataCredentialAgent assesses the corpus   →  TeamDynamicsCredential
+       TDX quote + Arc anchor + Hedera HCS       →  verifiable on-chain
+```
+
+### Key source files
+
+| File | Role |
+|------|------|
+| `app/props/transcript_hasher.py` | `hash_sentence()`, `hash_transcript()`, `compute_corpus_root()` — the Merkle pipeline |
+| `app/api/routes.py:682` | `_hash_conversation()` — sentences-first, summary fallback |
+| `app/api/routes.py:704` | `ingest_corpus()` — `direct` / `tinycloud` / `local` mode dispatch |
+| `app/agents/data_credential.py` | `DataCredentialAgent` — LLM assessment of team dynamics from corpus |
+| `TinyCloud/bridge.ts` | Bun HTTP proxy wrapping `tc` CLI for Python ↔ TinyCloud auth bridge |
+| `TinyCloud/feed/` | Pinned `tc` CLI + saved corpus files (`conversations.json`, `transcripts/`) |
+| `TinyCloud/TINYCLOUD_WORKFLOW.md` | Full auth setup, session patch, troubleshooting |
+
+---
+
 ## Environment Variables
 
 Copy `.env.example` to `.env` and fill in:
@@ -992,7 +1100,7 @@ Dealproof/
 | 12 | DCAP on-chain verifier contract | 🔜 Pending |
 | **ETHGlobal NYC** | **TinyCloud Integration** | |
 | M1 | Transcript corpus hasher — `app/props/transcript_hasher.py` | ✅ Complete |
-| M2 | `POST /api/transcripts/ingest` — direct + TinyCloud modes | ✅ Complete |
+| M2 | `POST /api/transcripts/ingest` — direct + tinycloud (bridge) + local modes | ✅ Complete |
 | M3 | DataCredentialAgent — TEE-attested team dynamics credential | ✅ Complete |
 | M4 | `POST /api/deals/{id}/credential` — attested TeamDynamicsCredential | ✅ Complete |
 | M5 | Tests — transcript hasher + ingestion + credential endpoint | ✅ Complete |

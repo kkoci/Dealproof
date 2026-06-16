@@ -707,17 +707,23 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
     Ingest a TinyCloud transcript corpus and compute a Merkle root suitable
     for use as data_hash in POST /api/deals/run.
 
-    direct mode   — supply conversations inline (no TinyCloud auth needed)
-    tinycloud mode — fetch conversations + transcripts live from TinyCloud node
-                     using tinycloud_session_token
+    direct    — supply conversations inline in the request body (no auth)
+    tinycloud — fetch live via the local bridge (http://localhost:4098, default)
+                or directly from node.tinycloud.xyz via tinycloud_host override.
+                The bridge wraps `tc` CLI auth transparently; tinycloud_session_token
+                is accepted but not required when the bridge is running.
+    local     — read from TinyCloud/feed/ saved corpus files; no network needed.
+                Uses local_corpus_path or auto-discovers <project_root>/TinyCloud/feed.
     """
-    if payload.mode == "tinycloud":
-        if not payload.tinycloud_session_token:
-            raise HTTPException(status_code=400, detail="tinycloud_session_token required for tinycloud mode")
+    import os
 
+    if payload.mode == "tinycloud":
         conversations_raw: list[dict] = []
-        headers = {"Authorization": f"Bearer {payload.tinycloud_session_token}"}
         host = payload.tinycloud_host.rstrip("/")
+        # Bridge needs no auth header; direct node calls use the UCAN delegation token
+        headers: dict[str, str] = {}
+        if payload.tinycloud_session_token:
+            headers["Authorization"] = payload.tinycloud_session_token
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -747,7 +753,9 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
                     try:
                         kv_resp = await client.get(f"{host}/v1/kv/{kv_key}", headers=headers)
                         if kv_resp.status_code == 200:
-                            conv["sentences"] = kv_resp.json()
+                            raw_kv = kv_resp.json()
+                            if isinstance(raw_kv, list):
+                                conv["sentences"] = raw_kv
                     except Exception:
                         pass  # KV miss — summary fallback handled in _hash_conversation
                     conversations_raw.append(conv)
@@ -756,6 +764,59 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
             raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: HTTP {exc.response.status_code}")
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: {exc}")
+
+    elif payload.mode == "local":
+        # Read from TinyCloud/feed/ bulk-downloaded corpus files — no network needed.
+        # conversations.json holds all SQL rows; transcripts/<id>.json holds KV blobs.
+        corpus_path = payload.local_corpus_path
+        if not corpus_path:
+            # Auto-discover: routes.py lives at app/api/routes.py; project root is 2 dirs up
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            corpus_path = os.path.join(project_root, "TinyCloud", "feed")
+
+        conv_file = os.path.join(corpus_path, "conversations.json")
+        if not os.path.exists(conv_file):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"conversations.json not found at {conv_file}. "
+                    "Run the TinyCloud/feed bulk download first: "
+                    "see TinyCloud/TINYCLOUD_WORKFLOW.md § 'Pull the whole corpus locally'."
+                ),
+            )
+
+        with open(conv_file, encoding="utf-8-sig") as f:
+            all_convs = json.load(f)
+
+        transcripts_dir = os.path.join(corpus_path, "transcripts")
+        conversations_raw = []
+
+        for conv in all_convs:
+            conv_id = conv.get("id", "")
+            sentences: list[dict] = []
+
+            # Each transcript file is named after the conversation id (rec-*, vm-*, uuid)
+            transcript_file = os.path.join(transcripts_dir, f"{conv_id}.json")
+            if os.path.exists(transcript_file):
+                try:
+                    with open(transcript_file, encoding="utf-8-sig") as f:
+                        raw_sentences = json.load(f)
+                    sentences = [
+                        {k: s.get(k) for k in ("index", "speaker_id", "speaker_name", "text", "start_time", "end_time", "language")}
+                        for s in raw_sentences
+                        if isinstance(s, dict)
+                    ]
+                except Exception:
+                    pass  # corrupt file — fall back to summary
+
+            conversations_raw.append({
+                "id": conv_id,
+                "title": conv.get("title", ""),
+                "source": conv.get("source", ""),
+                "started_at": conv.get("started_at", ""),
+                "summary": conv.get("summary"),
+                "sentences": sentences,
+            })
 
     else:
         # direct mode — use conversations from request body

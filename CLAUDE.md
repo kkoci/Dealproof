@@ -124,8 +124,11 @@ app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
 app/props/transcript_hasher.py  TinyCloud transcript → Merkle root (ETHGlobal M1)
-TinyCloud/feed/                 TinyCloud CLI read tooling (reference only)
+TinyCloud/bridge.ts             Bun HTTP bridge: wraps tc CLI for Python ↔ TinyCloud (port 4098)
+TinyCloud/feed/                 TinyCloud CLI + saved corpus (conversations.json, transcripts/)
 TinyCloud/listen/               TinyCloud Listen backend — source of truth for data shapes
+TinyCloud/TINYCLOUD_WORKFLOW.md Auth setup, session patch, bulk download, troubleshooting
+PAYLOADS.md                    Full payload reference: deals, ingest modes, real transcript, eval corpora
 app/dkim/verifier.py       DKIM email proof (dkimpy + DoH)
 app/memory/client.py       Contexto sidecar client (search, add, get_memory_hash)
 app/picreds/auditor.py     LLM audit: audit_agent_policy(), audit_deal_conduct()
@@ -321,7 +324,7 @@ Conversations in SQL at: `xyz.tinycloud.listen/conversations` (`conversation` ta
 
 **Demo flow:**
 ```
-POST /api/transcripts/ingest  (corpus_id, mode, conversations or tinycloud_session_token)
+POST /api/transcripts/ingest  (corpus_id, mode="local"|"tinycloud"|"direct", ...)
   → corpus_root, seller_proof
 
 POST /api/deals/run  (data_hash: corpus_root, seller_proof, buyer_budget, ...)
@@ -330,6 +333,28 @@ POST /api/deals/run  (data_hash: corpus_root, seller_proof, buyer_budget, ...)
 POST /api/deals/{id}/credential
   → TeamDynamicsCredential + TDX quote + Arc tx + Hedera tx
 ```
+
+**Three ingest modes** (`POST /api/transcripts/ingest`):
+
+| mode | what it does | when to use |
+|------|-------------|-------------|
+| `direct` | uses `conversations` array in the request body | tests, synthetic data |
+| `local` | reads `TinyCloud/feed/conversations.json` + `TinyCloud/feed/transcripts/*.json` | dev, offline |
+| `tinycloud` | fetches live via the bridge at `http://localhost:4098` | fresh data, CI |
+
+**Bridge** (`TinyCloud/bridge.ts`, port 4098):
+- Why: TinyCloud node requires UCAN delegation auth + specific TLS JA3 fingerprint; Python httpx fails both
+- What: Bun script that wraps the `tc` CLI (auth handled by tc's existing session)
+- Exposes: `POST /v1/sql`, `GET /v1/kv/:key`, `GET /health`
+- Run from `TinyCloud/feed/`: `TC_BIN=./node_modules/.bin/tc bun run ../bridge.ts`
+
+**Local corpus files** (saved via bulk download, not committed):
+- `TinyCloud/feed/conversations.json` — 449 SQL rows
+- `TinyCloud/feed/transcripts/rec-*.json` — 225 KV transcript blobs
+
+**Session key patch** (one-time after `tc init`):
+`~/.tinycloud/profiles/listen/session.json` stores only the public key in `jwk`; `key.json` has the private key.
+Fix: copy `key.json` → `session.json.jwk` (see `TinyCloud/TINYCLOUD_WORKFLOW.md` § Step 3).
 
 **Prize targets:** ENS ($4k) + Arc ($2k) + Hedera ($3k) + Unlink ($1k) + World ($2.5k) = $12.5k
 
@@ -381,7 +406,16 @@ Any change to what goes into `report_data` (the SHA-256 payload sent to tappd) m
 
 ## Test Payloads (PowerShell one-liners)
 
-Three scenarios covering normal agreement, tight-margin negotiation (likely arbitration), and medical data.
+See **`PAYLOADS.md`** for the full reference: deal payloads, transcript ingest payloads,
+and synthetic eval datasets (including the healthy-team / conflict-team corpora for Andrew).
+
+Quick summary of what's in `PAYLOADS.md`:
+- Standard deals (vision / medical / financial) with and without `seller_proof`
+- Transcript ingest: `local`, `tinycloud`, and `direct` mode examples
+- Real-transcript ingest: `rec-03bd0ce45a46ee5aa60175e1` (7 sentences, pre-hashed)
+- Synthetic eval corpora: Eval 1 (healthy team), Eval 2 (conflict team), Eval 3 (summary-only),
+  Eval 4 (mixed corpus stress test)
+- End-to-end deal payloads using eval corpus roots as `data_hash`
 
 Swagger UI: `http://localhost:8000/docs` → POST /api/deals/run → Try it out
 
