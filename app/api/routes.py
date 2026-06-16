@@ -23,13 +23,18 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas import DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification, AttestationResponse, PiCred
+from app.api.schemas import (
+    DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification,
+    AttestationResponse, PiCred,
+    CorpusIngest, CorpusIngestResponse,
+    TeamCredential, CredentialResponse,
+)
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
 from app.agents.negotiation import run_negotiation
 from app.agents.auditor import AuditorAgent
 from app.agents.arbitrator import ArbitratorAgent
-from app.tee.attestation import get_enclave_quote
+from app.tee.attestation import get_enclave_quote, sign_result
 from app.props.verifier import verify_data_authenticity
 from app.dkim.verifier import verify_email_proof
 from app.tee.dcap import parse_tdx_quote
@@ -42,6 +47,12 @@ import app.db as db
 from app.memory.client import search_memories, add_memories, get_memory_hash
 from app.picreds.auditor import audit_agent_policy, audit_deal_conduct
 from app.picreds.credential import make_credential, hash_credentials
+from app.props.transcript_hasher import hash_transcript, compute_corpus_root
+from app.agents.data_credential import DataCredentialAgent
+from app.contract.arc_anchor import anchor_credential_on_arc, ArcNotConfigured
+from app.contract.hedera_hcs import publish_deal_outcome, HederaNotConfigured
+from app.ens.resolver import resolve_ens_name
+from app.api.schemas import AgentENSRecord, ENSAgentsResponse
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -451,6 +462,45 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         verification=verification_dict,
     )
     logger.info(f"Deal {deal_id} finished: {final_status}")
+
+    # Hedera HCS deal outcome publish (non-fatal — called for all outcomes)
+    try:
+        attestation_hash = (
+            hashlib.sha256(result.attestation.encode()).hexdigest()
+            if result.attestation else ""
+        )
+        hedera_result = await publish_deal_outcome(deal_id, final_status, attestation_hash)
+        deal_result.hedera_transaction_id = hedera_result["transaction_id"]
+        await db.save_hedera_message(
+            deal_id,
+            hedera_result["transaction_id"],
+            hedera_result["topic_id"],
+            hedera_result["consensus_timestamp"],
+        )
+        logger.info(f"Deal {deal_id}: outcome published to Hedera HCS — {hedera_result['transaction_id']}")
+    except HederaNotConfigured:
+        logger.warning(f"Deal {deal_id}: Hedera not configured — skipping HCS publish")
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: Hedera publish failed (non-fatal) — {exc}")
+
+    # ENS agent identity resolution (non-fatal)
+    try:
+        buyer_ens: str | None = None
+        seller_ens: str | None = None
+        buyer_addr = payload.buyer_address
+        seller_addr = payload.seller_address
+        if buyer_addr:
+            buyer_ens = await resolve_ens_name(buyer_addr)
+        if seller_addr:
+            seller_ens = await resolve_ens_name(seller_addr)
+        if buyer_ens or seller_ens:
+            await db.update_deal_ens(deal_id, buyer_ens, seller_ens)
+            logger.info(f"Deal {deal_id}: ENS resolved — buyer={buyer_ens}, seller={seller_ens}")
+        deal_result.buyer_ens = buyer_ens
+        deal_result.seller_ens = seller_ens
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: ENS resolution failed (non-fatal) — {exc}")
+
     return deal_result
 
 
@@ -623,3 +673,349 @@ async def get_verification(deal_id: str) -> dict:
             detail="No verification record — deal was created without a seller_proof",
         )
     return {"deal_id": deal_id, "verification": row["verification"]}
+
+
+# ---------------------------------------------------------------------------
+# ETHGlobal NYC — TinyCloud corpus ingestion (Milestone 2)
+# ---------------------------------------------------------------------------
+
+def _hash_conversation(conversation: dict) -> str | None:
+    """
+    Hash one TinyCloud conversation to a 64-char hex string.
+    Prefers sentences; falls back to a synthetic sentence from summary.
+    Returns None if neither is available (caller skips this conversation).
+    """
+    sentences = conversation.get("sentences") or []
+    if sentences:
+        return hash_transcript([
+            {k: s.get(k) for k in ("index", "speaker_id", "speaker_name", "text", "start_time", "end_time", "language")}
+            for s in sentences
+        ])
+    summary = conversation.get("summary")
+    if summary:
+        synthetic = {
+            "index": 0, "speaker_id": "summary", "speaker_name": "Summary",
+            "text": summary, "start_time": None, "end_time": None, "language": "en",
+        }
+        return hash_transcript([synthetic])
+    return None
+
+
+@router.post("/transcripts/ingest", response_model=CorpusIngestResponse, status_code=200)
+async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
+    """
+    Ingest a TinyCloud transcript corpus and compute a Merkle root suitable
+    for use as data_hash in POST /api/deals/run.
+
+    direct    — supply conversations inline in the request body (no auth)
+    tinycloud — fetch live via the local bridge (http://localhost:4098, default)
+                or directly from node.tinycloud.xyz via tinycloud_host override.
+                The bridge wraps `tc` CLI auth transparently; tinycloud_session_token
+                is accepted but not required when the bridge is running.
+    local     — read from TinyCloud/feed/ saved corpus files; no network needed.
+                Uses local_corpus_path or auto-discovers <project_root>/TinyCloud/feed.
+    """
+    import os
+
+    if payload.mode == "tinycloud":
+        conversations_raw: list[dict] = []
+        host = payload.tinycloud_host.rstrip("/")
+        # Bridge needs no auth header; direct node calls use the UCAN delegation token
+        headers: dict[str, str] = {}
+        if payload.tinycloud_session_token:
+            headers["Authorization"] = payload.tinycloud_session_token
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Step 1: fetch conversation rows via SQL
+                sql_resp = await client.post(
+                    f"{host}/v1/sql",
+                    json={
+                        "database": "xyz.tinycloud.listen/conversations",
+                        "query": "SELECT id, title, source, started_at, summary FROM conversation LIMIT 300",
+                    },
+                    headers=headers,
+                )
+                sql_resp.raise_for_status()
+                rows = sql_resp.json().get("rows", [])
+
+                # Step 2: fetch transcript KV blob per conversation
+                for row in rows:
+                    conv = {
+                        "id": row["id"],
+                        "title": row.get("title", ""),
+                        "source": row.get("source", ""),
+                        "started_at": row.get("started_at", ""),
+                        "summary": row.get("summary"),
+                        "sentences": [],
+                    }
+                    kv_key = f"xyz.tinycloud.listen/transcript/{row['id']}"
+                    try:
+                        kv_resp = await client.get(f"{host}/v1/kv/{kv_key}", headers=headers)
+                        if kv_resp.status_code == 200:
+                            raw_kv = kv_resp.json()
+                            if isinstance(raw_kv, list):
+                                conv["sentences"] = raw_kv
+                    except Exception:
+                        pass  # KV miss — summary fallback handled in _hash_conversation
+                    conversations_raw.append(conv)
+
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: HTTP {exc.response.status_code}")
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: {exc}")
+
+    elif payload.mode == "local":
+        # Read from TinyCloud/feed/ bulk-downloaded corpus files — no network needed.
+        # conversations.json holds all SQL rows; transcripts/<id>.json holds KV blobs.
+        corpus_path = payload.local_corpus_path
+        if not corpus_path:
+            # Auto-discover: routes.py lives at app/api/routes.py; project root is 2 dirs up
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            corpus_path = os.path.join(project_root, "TinyCloud", "feed")
+
+        conv_file = os.path.join(corpus_path, "conversations.json")
+        if not os.path.exists(conv_file):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"conversations.json not found at {conv_file}. "
+                    "Run the TinyCloud/feed bulk download first: "
+                    "see TinyCloud/TINYCLOUD_WORKFLOW.md § 'Pull the whole corpus locally'."
+                ),
+            )
+
+        with open(conv_file, encoding="utf-8-sig") as f:
+            all_convs = json.load(f)
+
+        transcripts_dir = os.path.join(corpus_path, "transcripts")
+        conversations_raw = []
+
+        for conv in all_convs:
+            conv_id = conv.get("id", "")
+            sentences: list[dict] = []
+
+            # Each transcript file is named after the conversation id (rec-*, vm-*, uuid)
+            transcript_file = os.path.join(transcripts_dir, f"{conv_id}.json")
+            if os.path.exists(transcript_file):
+                try:
+                    with open(transcript_file, encoding="utf-8-sig") as f:
+                        raw_sentences = json.load(f)
+                    sentences = [
+                        {k: s.get(k) for k in ("index", "speaker_id", "speaker_name", "text", "start_time", "end_time", "language")}
+                        for s in raw_sentences
+                        if isinstance(s, dict)
+                    ]
+                except Exception:
+                    pass  # corrupt file — fall back to summary
+
+            conversations_raw.append({
+                "id": conv_id,
+                "title": conv.get("title", ""),
+                "source": conv.get("source", ""),
+                "started_at": conv.get("started_at", ""),
+                "summary": conv.get("summary"),
+                "sentences": sentences,
+            })
+
+    else:
+        # direct mode — use conversations from request body
+        conversations_raw = [c.model_dump() for c in payload.conversations]
+
+    # Hash each conversation
+    per_conv_hashes: list[str] = []
+    hashable_convs: list[dict] = []
+    summaries_available = sum(1 for c in conversations_raw if c.get("summary"))
+
+    for conv in conversations_raw:
+        h = _hash_conversation(conv)
+        if h is not None:
+            per_conv_hashes.append(h)
+            hashable_convs.append(conv)
+        else:
+            logger.warning(f"Corpus {payload.corpus_id}: skipping conversation {conv.get('id')} — no sentences or summary")
+
+    if not per_conv_hashes:
+        raise HTTPException(status_code=400, detail="Corpus produced no hashable content — all conversations lack sentences and summary")
+
+    corpus_root = compute_corpus_root(per_conv_hashes)
+    seller_proof = {
+        "root_hash": corpus_root,
+        "chunk_hashes": per_conv_hashes,
+        "chunk_count": len(per_conv_hashes),
+        "algorithm": "sha256",
+    }
+
+    await db.save_corpus(payload.corpus_id, hashable_convs, corpus_root)
+    logger.info(f"Corpus {payload.corpus_id}: ingested {len(hashable_convs)} conversations, root={corpus_root[:16]}...")
+
+    return CorpusIngestResponse(
+        corpus_id=payload.corpus_id,
+        conversation_count=len(hashable_convs),
+        corpus_root=corpus_root,
+        seller_proof=seller_proof,
+        summaries_available=summaries_available,
+    )
+
+
+@router.post("/deals/{deal_id}/credential", response_model=CredentialResponse, status_code=200)
+async def issue_credential(deal_id: str) -> CredentialResponse:
+    """
+    Issue a TEE-attested TeamDynamicsCredential for an agreed deal.
+
+    Requires:
+    - Deal must be in 'agreed' status
+    - Deal's data_hash must match a corpus ingested via POST /api/transcripts/ingest
+
+    Runs DataCredentialAgent on the stored conversations inside the TEE and
+    returns a TDX-attested credential. Assessment failures are attested
+    transparently — {"error": "assessment_failed"} is a valid attested subject.
+    """
+    from datetime import datetime
+
+    row = await db.get_deal(deal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    if row["status"] != "agreed":
+        raise HTTPException(status_code=409, detail="Deal is not agreed — credential requires an agreed deal")
+
+    corpus_root = row["payload"].get("data_hash")
+    if not corpus_root:
+        raise HTTPException(status_code=404, detail="Deal has no data_hash — cannot look up corpus")
+
+    corpus = await db.get_corpus_by_root(corpus_root)
+    if corpus is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No corpus found for this deal's data_hash — ingest via POST /api/transcripts/ingest first",
+        )
+
+    assessment = await DataCredentialAgent().assess(corpus["conversations"])
+
+    issued_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    credential = TeamCredential(
+        issued_at=issued_at,
+        deal_id=deal_id,
+        corpus_root=corpus_root,
+        subject=assessment,
+    )
+
+    sign_payload = {
+        "credential_type": credential.credential_type,
+        "deal_id": deal_id,
+        "corpus_root": corpus_root,
+        "issued_at": issued_at,
+        "subject": assessment,
+    }
+    attestation = await sign_result(sign_payload)
+    logger.info(f"Deal {deal_id}: TeamDynamicsCredential issued and attested")
+
+    # Arc on-chain anchoring (non-fatal — same resilience pattern as escrow)
+    arc_tx_hash: str | None = None
+    credential_hash = hashlib.sha256(
+        json.dumps(sign_payload, sort_keys=True).encode()
+    ).hexdigest()
+    try:
+        arc_result = await anchor_credential_on_arc(deal_id, credential_hash, attestation)
+        arc_tx_hash = arc_result["tx_hash"]
+        await db.save_arc_anchor(deal_id, arc_result["tx_hash"], arc_result["arc_record_id"])
+        logger.info(f"Deal {deal_id}: credential anchored on Arc — tx {arc_tx_hash}")
+    except ArcNotConfigured as exc:
+        logger.warning(f"Deal {deal_id}: Arc not configured — {exc}")
+    except Exception as exc:
+        logger.warning(f"Deal {deal_id}: Arc anchoring failed (non-fatal) — {exc}")
+
+    # Populate hedera_transaction_id from the deal's HCS record if available
+    hedera_transaction_id: str | None = None
+    try:
+        hedera_row = await db.get_hedera_message(deal_id)
+        if hedera_row:
+            hedera_transaction_id = hedera_row["transaction_id"]
+    except Exception:
+        pass
+
+    return CredentialResponse(
+        deal_id=deal_id,
+        credential=credential,
+        attestation=attestation,
+        verifiable=True,
+        arc_tx_hash=arc_tx_hash,
+        hedera_transaction_id=hedera_transaction_id,
+    )
+
+
+@router.get("/deals/{deal_id}/hedera")
+async def get_hedera_record(deal_id: str) -> dict:
+    """Return the Hedera HCS record for a deal's outcome."""
+    try:
+        row = await db.get_hedera_message(deal_id)
+    except Exception as exc:
+        logger.warning(f"GET /hedera: db lookup failed for {deal_id} — {exc}")
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No Hedera HCS record — deal outcome may not have been published or Hedera was not configured",
+        )
+    network = settings.hedera_network
+    hashscan_url = f"https://hashscan.io/{network}/transaction/{row['transaction_id']}"
+    return {
+        "deal_id": deal_id,
+        "transaction_id": row["transaction_id"],
+        "topic_id": row["topic_id"],
+        "consensus_timestamp": row["consensus_timestamp"],
+        "hashscan_url": hashscan_url,
+    }
+
+
+@router.get("/deals/{deal_id}/arc")
+async def get_arc_anchor(deal_id: str) -> dict:
+    """Return the Arc on-chain anchor record for a deal's credential."""
+    row = await db.get_arc_anchor(deal_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No Arc anchor found — credential may not have been issued or Arc was not configured",
+        )
+    return {
+        "deal_id": deal_id,
+        "tx_hash": row["tx_hash"],
+        "arc_record_id": row["record_id"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# ETHGlobal M8 — ENS agent identity
+# ---------------------------------------------------------------------------
+
+@router.get("/ens", response_model=dict)
+async def get_ens_identity() -> dict:
+    """Return the DealProof ENS identity and integration info."""
+    return {
+        "ens_name": "dealproof.eth",
+        "description": "TEE-attested AI agent negotiation protocol",
+        "agents_endpoint": "/api/ens/agents",
+        "github": "https://github.com/kkoci/Dealproof",
+        "ens_integration": "agent_identity",
+    }
+
+
+@router.get("/ens/agents", response_model=ENSAgentsResponse)
+async def get_ens_agents() -> ENSAgentsResponse:
+    """
+    Return ENS identities for all DealProof deal participants.
+    Shows which agents have verifiable on-chain ENS names.
+    """
+    rows = await db.get_all_deals_ens()
+    agents = [
+        AgentENSRecord(
+            deal_id=row["deal_id"],
+            buyer_address=row.get("buyer_address"),
+            buyer_ens=row.get("buyer_ens"),
+            seller_address=row.get("seller_address"),
+            seller_ens=row.get("seller_ens"),
+        )
+        for row in rows
+    ]
+    resolved = sum(1 for a in agents if a.buyer_ens or a.seller_ens)
+    return ENSAgentsResponse(agents=agents, total=len(agents), resolved=resolved)

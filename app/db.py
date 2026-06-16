@@ -52,6 +52,15 @@ async def init_db() -> None:
             await db.execute("ALTER TABLE deals ADD COLUMN verification TEXT")
         except Exception:
             pass  # column already present — no action needed
+        # ETHGlobal M8: ENS agent identity columns
+        try:
+            await db.execute("ALTER TABLE deals ADD COLUMN buyer_ens TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE deals ADD COLUMN seller_ens TEXT")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -136,6 +145,179 @@ async def claim_deal_for_negotiation(deal_id: str) -> bool:
         )
         await db.commit()
         return cursor.rowcount == 1
+
+
+async def update_deal_ens(deal_id: str, buyer_ens: str | None, seller_ens: str | None) -> None:
+    """Persist resolved ENS names for a deal's buyer and seller agents."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE deals SET buyer_ens = ?, seller_ens = ? WHERE id = ?",
+            (buyer_ens, seller_ens, deal_id),
+        )
+        await db.commit()
+
+
+async def get_all_deals_ens() -> list[dict]:
+    """Return all deals with their ENS and address fields for GET /api/ens/agents."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id, payload, buyer_ens, seller_ens FROM deals ORDER BY created_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    result = []
+    for row in rows:
+        payload = json.loads(row[1]) if row[1] else {}
+        result.append({
+            "deal_id": row[0],
+            "buyer_address": payload.get("buyer_address"),
+            "buyer_ens": row[2],
+            "seller_address": payload.get("seller_address"),
+            "seller_ens": row[3],
+        })
+    return result
+
+
+async def create_hedera_messages_table() -> None:
+    """Create the hedera_messages table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hedera_messages (
+                deal_id              TEXT PRIMARY KEY,
+                transaction_id       TEXT NOT NULL,
+                topic_id             TEXT NOT NULL,
+                consensus_timestamp  TEXT,
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_hedera_message(
+    deal_id: str,
+    transaction_id: str,
+    topic_id: str,
+    consensus_timestamp: str,
+) -> None:
+    """Persist a Hedera HCS message record. INSERT OR REPLACE — idempotent."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO hedera_messages "
+            "(deal_id, transaction_id, topic_id, consensus_timestamp) VALUES (?, ?, ?, ?)",
+            (deal_id, transaction_id, topic_id, consensus_timestamp),
+        )
+        await db.commit()
+
+
+async def get_hedera_message(deal_id: str) -> dict | None:
+    """Fetch the Hedera HCS record for a deal. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT deal_id, transaction_id, topic_id, consensus_timestamp "
+            "FROM hedera_messages WHERE deal_id = ?",
+            (deal_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+    return {
+        "deal_id": row[0],
+        "transaction_id": row[1],
+        "topic_id": row[2],
+        "consensus_timestamp": row[3],
+    }
+
+
+async def create_arc_anchors_table() -> None:
+    """Create the arc_anchors table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS arc_anchors (
+                deal_id    TEXT PRIMARY KEY,
+                tx_hash    TEXT NOT NULL,
+                record_id  TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_arc_anchor(deal_id: str, tx_hash: str, record_id: str) -> None:
+    """Persist an Arc anchor record. INSERT OR REPLACE — idempotent."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO arc_anchors (deal_id, tx_hash, record_id) VALUES (?, ?, ?)",
+            (deal_id, tx_hash, record_id),
+        )
+        await db.commit()
+
+
+async def get_arc_anchor(deal_id: str) -> dict | None:
+    """Fetch the Arc anchor record for a deal. Returns {deal_id, tx_hash, record_id} or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT deal_id, tx_hash, record_id FROM arc_anchors WHERE deal_id = ?",
+            (deal_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+    return {"deal_id": row[0], "tx_hash": row[1], "record_id": row[2]}
+
+
+async def create_transcript_corpora_table() -> None:
+    """Create the transcript_corpora table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transcript_corpora (
+                corpus_id          TEXT PRIMARY KEY,
+                conversations_json TEXT NOT NULL,
+                corpus_root        TEXT NOT NULL,
+                created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_corpus(corpus_id: str, conversations: list[dict], corpus_root: str) -> None:
+    """Persist a corpus. INSERT OR REPLACE — idempotent re-ingestion of the same corpus_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO transcript_corpora (corpus_id, conversations_json, corpus_root) VALUES (?, ?, ?)",
+            (corpus_id, json.dumps(conversations), corpus_root),
+        )
+        await db.commit()
+
+
+async def get_corpus_by_root(corpus_root: str) -> dict | None:
+    """
+    Fetch a corpus by its Merkle root hash.
+    Used by the credential endpoint to look up conversations by data_hash.
+    Returns {corpus_id, conversations (list), corpus_root} or None.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT corpus_id, conversations_json, corpus_root FROM transcript_corpora WHERE corpus_root = ?",
+            (corpus_root,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "corpus_id": row[0],
+        "conversations": json.loads(row[1]),
+        "corpus_root": row[2],
+    }
 
 
 async def get_deal(deal_id: str) -> dict | None:

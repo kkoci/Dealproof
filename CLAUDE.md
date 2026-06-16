@@ -32,7 +32,8 @@ Before starting any task, read in this order:
 | AI agents | Claude claude-sonnet-4-6 via `anthropic.AsyncAnthropic` |
 | TEE runtime | Phala Cloud CVM (Intel TDX) |
 | TEE attestation | dstack tappd — `POST /prpc/Tappd.TdxQuote` |
-| Data provenance | Props-inspired Merkle root verification |
+| Data provenance | Props-inspired Merkle root verification + transcript corpus hashing |
+| TinyCloud | Listen transcript store (KV + SQL on Phala TEE) — ETHGlobal NYC integration |
 | Seller identity | DKIM email proof — `dkimpy` + DNS-over-HTTPS |
 | Attested memory | Contexto `@ekai/memory` sidecar (port 4011) |
 | πCreds | LLM-inferred policy + conduct credentials |
@@ -118,9 +119,16 @@ app/agents/seller.py       SellerAgent (claude-sonnet-4-6, accepts verified_doma
 app/agents/negotiation.py  run_negotiation() loop + first-pass sign_result() + arbitrator wiring
 app/agents/auditor.py      AuditorAgent — read-only TEE witness, AuditReport + credential_hash
 app/agents/arbitrator.py   ArbitratorAgent — deadlock resolver, price clamped to [floor, budget]
+app/agents/data_credential.py  DataCredentialAgent — team dynamics credential from TinyCloud corpus (ETHGlobal M3)
 app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
+app/props/transcript_hasher.py  TinyCloud transcript → Merkle root (ETHGlobal M1)
+TinyCloud/bridge.ts             Bun HTTP bridge: wraps tc CLI for Python ↔ TinyCloud (port 4098)
+TinyCloud/feed/                 TinyCloud CLI + saved corpus (conversations.json, transcripts/)
+TinyCloud/listen/               TinyCloud Listen backend — source of truth for data shapes
+TinyCloud/TINYCLOUD_WORKFLOW.md Auth setup, session patch, bulk download, troubleshooting
+PAYLOADS.md                    Full payload reference: deals, ingest modes, real transcript, eval corpora
 app/dkim/verifier.py       DKIM email proof (dkimpy + DoH)
 app/memory/client.py       Contexto sidecar client (search, add, get_memory_hash)
 app/picreds/auditor.py     LLM audit: audit_agent_policy(), audit_deal_conduct()
@@ -157,7 +165,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (102 tests — all pass without Docker or tappd)
+## Test Suite (69 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -169,6 +177,7 @@ tests/test_memory.py          4   Contexto client: add, search, hash, sidecar-do
 tests/test_picreds.py        11   πCreds: constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
+tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 ```
 
 **Resilience guarantees:**
@@ -192,7 +201,17 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | 9 | πCreds — LLM policy + conduct credentials attested in TDX quote | ✅ Complete |
 | 10 | Auditor agent — read-only TEE compliance witness; credential_hash in TDX report_data | ✅ Complete |
 | 11 | Arbitrator agent — deadlock resolution; arbitrated settlement attested in TDX quote | ✅ Complete |
-| 12 | DCAP on-chain verifier contract | 🔜 Next |
+| 12 | DCAP on-chain verifier contract | 🔜 Pending |
+| **ETHGlobal NYC — TinyCloud Integration** | | |
+| M1 | Transcript corpus hasher — `app/props/transcript_hasher.py` | ✅ Complete |
+| M2 | Corpus ingestion endpoint — `POST /api/transcripts/ingest` (direct + tinycloud modes) | ✅ Complete |
+| M3 | DataCredentialAgent — TEE-attested team dynamics credential | ✅ Complete |
+| M4 | Credential endpoint — `POST /api/deals/{id}/credential` | ✅ Complete |
+| M5 | Tests — transcript hasher + ingestion + credential endpoint | ✅ Complete |
+| M6 | Arc on-chain credential anchoring — ArcIDRegistry.register() via web3.py | ✅ Complete |
+| M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
+| M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
+| M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 
 ---
 
@@ -279,6 +298,78 @@ when an `ArbitratorAgent` instance is passed. Control it by passing `None` inste
 
 ---
 
+## ETHGlobal NYC — TinyCloud Integration
+
+**Context:** DealProof integrates with TinyCloud's Listen app. Listen stores Fireflies/Google Meet
+transcripts in TinyCloud KV/SQL on a Phala TEE CVM (`api.listen.tinycloud.xyz`). DealProof runs
+on its own Phala TEE CVM. Both are TEE-native — two attested processes, verifiable end-to-end.
+
+**TinyCloud repos:** `TinyCloud/feed` (CLI read tooling) + `TinyCloud/listen` (transcript backend)
+
+**TinyCloud transcript data shape** (`NormalizedTranscriptSentence`):
+```python
+{
+    "index": int,             # 0-based position
+    "speaker_id": str,        # slugified name e.g. "alice-johnson"
+    "speaker_name": str,      # human-readable
+    "text": str,
+    "start_time": float | None,
+    "end_time": float | None,
+    "language": str | None,   # null → coerce to "en"
+}
+```
+Stored in TinyCloud KV at: `xyz.tinycloud.listen/transcript/{conversationId}`
+Conversations in SQL at: `xyz.tinycloud.listen/conversations` (`conversation` table)
+258/282 conversations have pre-generated `summary` — prefer summary over raw sentences for tokens.
+
+**Demo flow:**
+```
+POST /api/transcripts/ingest  (corpus_id, mode="local"|"tinycloud"|"direct", ...)
+  → corpus_root, seller_proof
+
+POST /api/deals/run  (data_hash: corpus_root, seller_proof, buyer_budget, ...)
+  → deal_id, attestation
+
+POST /api/deals/{id}/credential
+  → TeamDynamicsCredential + TDX quote + Arc tx + Hedera tx
+```
+
+**Three ingest modes** (`POST /api/transcripts/ingest`):
+
+| mode | what it does | when to use |
+|------|-------------|-------------|
+| `direct` | uses `conversations` array in the request body | tests, synthetic data |
+| `local` | reads `TinyCloud/feed/conversations.json` + `TinyCloud/feed/transcripts/*.json` | dev, offline |
+| `tinycloud` | fetches live via the bridge at `http://localhost:4098` | fresh data, CI |
+
+**Bridge** (`TinyCloud/bridge.ts`, port 4098):
+- Why: TinyCloud node requires UCAN delegation auth + specific TLS JA3 fingerprint; Python httpx fails both
+- What: Bun script that wraps the `tc` CLI (auth handled by tc's existing session)
+- Exposes: `POST /v1/sql`, `GET /v1/kv/:key`, `GET /health`
+- Run from `TinyCloud/feed/`: `TC_BIN=./node_modules/.bin/tc bun run ../bridge.ts`
+
+**Local corpus files** (saved via bulk download, not committed):
+- `TinyCloud/feed/conversations.json` — 449 SQL rows
+- `TinyCloud/feed/transcripts/rec-*.json` — 225 KV transcript blobs
+
+**Session key patch** (one-time after `tc init`):
+`~/.tinycloud/profiles/listen/session.json` stores only the public key in `jwk`; `key.json` has the private key.
+Fix: copy `key.json` → `session.json.jwk` (see `TinyCloud/TINYCLOUD_WORKFLOW.md` § Step 3).
+
+**Prize targets:** ENS ($4k) + Arc ($2k) + Hedera ($3k) + Unlink ($1k) + World ($2.5k) = $12.5k
+
+---
+
+## Deployment Notes
+
+**`docker-compose.phala.yml` is gitignored** — it contains production env var placeholders and must not be committed. The file lives only on disk and is uploaded manually to the Phala dashboard. After any change, rebuild and push only the app image:
+```
+docker compose build app && docker compose push app
+```
+Memory service (`kkoci/dealproof-memory`) is unchanged — push only when `memory-service/` changes.
+
+---
+
 ## What NOT to Build
 
 - **Negotiation transcript Merkle tree** — rejected. TDX quote over final state is sufficient.
@@ -294,7 +385,7 @@ when an `ArbitratorAgent` instance is passed. Control it by passing `None` inste
 
 ### On every feature or fix
 
-1. Write or update tests for the changed behaviour — all 102 must still pass.
+1. Write or update tests for the changed behaviour — run `pytest` and confirm 0 failures.
 2. Run `pytest tests/ -v` before marking anything done.
 3. Update the relevant section of `README.md` if phase status or test count changes.
 4. Never break the resilience guarantees (memory/πCreds/DKIM/Auditor/Arbitrator all non-fatal).
@@ -315,7 +406,16 @@ Any change to what goes into `report_data` (the SHA-256 payload sent to tappd) m
 
 ## Test Payloads (PowerShell one-liners)
 
-Three scenarios covering normal agreement, tight-margin negotiation (likely arbitration), and medical data.
+See **`PAYLOADS.md`** for the full reference: deal payloads, transcript ingest payloads,
+and synthetic eval datasets (including the healthy-team / conflict-team corpora for Andrew).
+
+Quick summary of what's in `PAYLOADS.md`:
+- Standard deals (vision / medical / financial) with and without `seller_proof`
+- Transcript ingest: `local`, `tinycloud`, and `direct` mode examples
+- Real-transcript ingest: `rec-03bd0ce45a46ee5aa60175e1` (7 sentences, pre-hashed)
+- Synthetic eval corpora: Eval 1 (healthy team), Eval 2 (conflict team), Eval 3 (summary-only),
+  Eval 4 (mixed corpus stress test)
+- End-to-end deal payloads using eval corpus roots as `data_hash`
 
 Swagger UI: `http://localhost:8000/docs` → POST /api/deals/run → Try it out
 
