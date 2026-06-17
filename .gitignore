@@ -54,6 +54,8 @@ node_modules/
 contracts/artifacts/
 contracts/cache/
 
+SESSION_NOTES.md
+
 # Project-specific docs (internal planning)
 ARCHITECTURE.md
 CONTEXTO_INTEGRATION.md

@@ -1,0 +1,216 @@
+{
+  "schemaVersion": "skill.tee.v1",
+  "id": "johnny-wedding-style",
+  "label": "Johnny Wedding Style",
+  "description": "LoRA-guided Flux style transfer for wedding photography. Warm film tones, lifted shadows, subtle grain. Seller IP (LoRA + prompts + LUTs) never leaves TEE; buyer raw photos never exfiltrate except through the attested Chutes inference call.",
+  "privacy": {
+    "sellerProtects": [
+      "lora",
+      "stylePrompt",
+      "gradeLUT"
+    ],
+    "buyerProtects": [
+      "input.*",
+      "work.*"
+    ],
+    "operatorIsAdversary": true,
+    "note": "TEE operator is the assumed attacker. Neither side gets the other's material."
+  },
+  "sandbox": {
+    "allowNet": [
+      "chutes.ai"
+    ],
+    "denyNet": "*",
+    "enforcement": {
+      "dev": "Deno --allow-net=chutes.ai (self-describing, no cryptographic proof)",
+      "prod": "dstack TDX docker-compose network policy, bound in RTMR3 alongside compose hash"
+    }
+  },
+  "lora": {
+    "path": "/tee/skill/lora/johnny_wedding_v3.safetensors",
+    "sha256": "FILL_AT_PACKAGING_TIME",
+    "baseModel": "black-forest-labs/FLUX.1-dev",
+    "rank": 16,
+    "alpha": 16,
+    "sizeMB": 190,
+    "trainedOn": "before/after wedding photo pairs + screen-recorded Lightroom edit sessions; training step also runs inside TEE so raw training data never exposed to host"
+  },
+  "providers": {
+    "inference": {
+      "type": "chutes-aci",
+      "endpoint": "https://chutes.ai/aci/v1/inference",
+      "model": "black-forest-labs/FLUX.1-dev",
+      "loraPath": "/tee/skill/lora/johnny_wedding_v3.safetensors",
+      "requiresAttestation": true,
+      "attestationQuoteField": "x-chutes-aci-quote",
+      "note": "ACI = attested confidential inference. Chutes-side TDX quote is included in the receipt so the inference call itself is provably bounded."
+    }
+  },
+  "inputs": [
+    {
+      "id": "photo",
+      "kind": "image",
+      "formats": [
+        "image/jpeg",
+        "image/png",
+        "image/tiff"
+      ],
+      "maxBytes": 52428800,
+      "description": "Raw or lightly-processed wedding photo. Never written to disk outside TEE boundary."
+    }
+  ],
+  "pipeline": [
+    {
+      "id": "normalize",
+      "tool": "ffmpeg",
+      "description": "Auto white balance shift toward warm daylight (approx 5500K), recover highlights, lift shadows. Deterministic open-source step \u2014 no network.",
+      "args": [
+        "-vf",
+        "colorbalance=rs=0.06:gs=-0.02:bs=-0.10,curves=all='0/0 0.18/0.20 0.75/0.80 1/1',unsharp=3:3:0.4"
+      ],
+      "reads": [
+        "input.photo"
+      ],
+      "writes": [
+        "work.normalized"
+      ]
+    },
+    {
+      "id": "style_inference",
+      "tool": "pil-style",
+      "description": "Flux img2img pass. LoRA steers toward Johnny's style: warm gradients, skin-flattering micro-contrast, lifted midtones. Style prompt is private; strength tuned so faces stay recognizable.",
+      "stylePromptPath": "/tee/skill/prompts/style_prompt.txt",
+      "negativePromptPath": "/tee/skill/prompts/negative_prompt.txt",
+      "strength": 0.52,
+      "guidanceScale": 3.5,
+      "steps": 28,
+      "seed": null,
+      "reads": [
+        "work.normalized"
+      ],
+      "writes": [
+        "work.styled"
+      ]
+    },
+    {
+      "id": "grade",
+      "tool": "ffmpeg",
+      "description": "Apply warm film LUT (Kodak Portra 400 emulation), soft vignette, subtle analog grain. Deterministic \u2014 no network.",
+      "args": [
+        "-vf",
+        "lut3d=/tee/skill/luts/johnny_portra_warm_v2.cube,vignette=PI/7,noise=alls=3:allf=t+u"
+      ],
+      "reads": [
+        "work.styled"
+      ],
+      "writes": [
+        "output.photo"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "photo",
+      "kind": "image",
+      "format": "image/jpeg",
+      "quality": 92,
+      "source": "output.photo",
+      "description": "Styled wedding photo. Only output that leaves TEE."
+    },
+    {
+      "id": "receipt",
+      "kind": "attestation",
+      "description": "TDX quote binding input, LoRA, output, and the Chutes ACI quote. Buyer can verify nothing was swapped; seller can verify LoRA was theirs.",
+      "fields": [
+        "input_sha256",
+        "lora_sha256",
+        "lut_sha256",
+        "output_sha256",
+        "chutes_aci_quote",
+        "pipeline_version",
+        "tdx_compose_hash"
+      ]
+    }
+  ],
+  "evals": {
+    "command": "python -m skill_eval --skill johnny-wedding-style --fixtures examples/evals/wedding",
+    "dimensions": [
+      {
+        "id": "warmth_preserved",
+        "description": "Output color temperature warmer than input by at least 200K (measured via average RGB shift toward red/yellow channel)."
+      },
+      {
+        "id": "face_quality",
+        "description": "Skin tones not oversaturated (hue deviation < 15 degrees from reference); faces structurally intact per face-detection confidence > 0.9."
+      },
+      {
+        "id": "lora_fidelity",
+        "description": "CLIP similarity to reference Johnny-style gallery > 0.72."
+      },
+      {
+        "id": "highlight_safety",
+        "description": "No clipped highlights introduced (max channel value increase < 5 counts in already-bright regions)."
+      },
+      {
+        "id": "no_exfiltration",
+        "description": "Sandbox network log shows exactly one outbound TCP connection: to chutes.ai:443. Verified against dstack RTMR3-attested policy."
+      }
+    ],
+    "fixtures": [
+      {
+        "id": "golden_hour_outdoor",
+        "input": "fixtures/golden_hour_couple.jpg",
+        "expectDimensions": [
+          "warmth_preserved",
+          "face_quality",
+          "lora_fidelity",
+          "highlight_safety"
+        ]
+      },
+      {
+        "id": "indoor_reception",
+        "input": "fixtures/indoor_dance.jpg",
+        "expectDimensions": [
+          "face_quality",
+          "lora_fidelity"
+        ],
+        "knownChallenge": "Mixed tungsten/LED lighting \u2014 warmth shift should not blow highlights or flatten the background bokeh."
+      },
+      {
+        "id": "backlit_ceremony",
+        "input": "fixtures/backlit_arch.jpg",
+        "expectDimensions": [
+          "warmth_preserved",
+          "lora_fidelity",
+          "highlight_safety"
+        ],
+        "knownChallenge": "Silhouette risk \u2014 preserve subject detail, not just sky warmth."
+      },
+      {
+        "id": "candid_low_light",
+        "input": "fixtures/candid_reception_low_light.jpg",
+        "expectDimensions": [
+          "face_quality",
+          "lora_fidelity"
+        ],
+        "knownChallenge": "High ISO grain present; skill grain should add atmosphere, not stack noise."
+      }
+    ]
+  },
+  "autoresearch": {
+    "editableFiles": [
+      "/tee/skill/prompts/style_prompt.txt",
+      "/tee/skill/prompts/negative_prompt.txt"
+    ],
+    "fixedFiles": [
+      "/tee/skill/lora/johnny_wedding_v3.safetensors",
+      "/tee/skill/luts/johnny_portra_warm_v2.cube"
+    ],
+    "generalizationRule": "Style prompt must generalize across outdoor/indoor, day/night, candid/posed wedding contexts. Do not reference fixture filenames, couple names, or specific venues.",
+    "evalTargets": {
+      "lora_fidelity": "> 0.72",
+      "face_quality": "pass on all fixtures",
+      "no_exfiltration": "pass on all fixtures"
+    }
+  }
+}
