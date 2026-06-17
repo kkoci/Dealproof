@@ -28,6 +28,7 @@ from app.api.schemas import (
     AttestationResponse, PiCred,
     CorpusIngest, CorpusIngestResponse,
     TeamCredential, CredentialResponse,
+    DataQualityMetrics,
 )
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
@@ -49,6 +50,7 @@ from app.picreds.auditor import audit_agent_policy, audit_deal_conduct
 from app.picreds.credential import make_credential, hash_credentials
 from app.props.transcript_hasher import hash_transcript, compute_corpus_root
 from app.agents.data_credential import DataCredentialAgent
+from app.agents.data_quality import DataQualityAgent, build_quality_context
 from app.contract.arc_anchor import anchor_credential_on_arc, ArcNotConfigured
 from app.contract.hedera_hcs import publish_deal_outcome, HederaNotConfigured
 from app.ens.resolver import resolve_ens_name
@@ -188,6 +190,48 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         await db.update_deal(deal_id, "negotiating", verification=verification_dict)
 
     # ------------------------------------------------------------------ #
+    # Step Q — DataQualityAgent: TEE-resident quality assessment (non-fatal)
+    #
+    # When quality_metrics are supplied, DataQualityAgent makes one Claude call
+    # inside the TEE and produces a DataQualityReport. The report is injected
+    # into both agent system prompts as a TEE-verified quality credential so
+    # the buyer can negotiate down on known issues (null rates, label imbalance)
+    # and the seller is aware the buyer has this information.
+    # ------------------------------------------------------------------ #
+    quality_report_dict: dict | None = None
+    buyer_quality_context = ""
+    seller_quality_context = ""
+    quality_hash: str | None = None
+
+    if payload.quality_metrics is not None:
+        try:
+            logger.info(f"Deal {deal_id}: running DataQualityAgent assessment")
+            quality_report = await DataQualityAgent().assess(
+                payload.data_description,
+                payload.quality_metrics.model_dump(),
+            )
+            if quality_report is not None:
+                quality_report_dict = {
+                    "completeness_score": quality_report.completeness_score,
+                    "schema_consistent": quality_report.schema_consistent,
+                    "label_distribution": quality_report.label_distribution,
+                    "quality_issues": quality_report.quality_issues,
+                    "overall_quality": quality_report.overall_quality,
+                    "summary": quality_report.summary,
+                    "quality_hash": quality_report.quality_hash,
+                }
+                quality_hash = quality_report.quality_hash
+                buyer_quality_context = build_quality_context(quality_report, "buyer")
+                seller_quality_context = build_quality_context(quality_report, "seller")
+                logger.info(
+                    f"Deal {deal_id}: quality assessment complete — "
+                    f"{quality_report.overall_quality}, "
+                    f"completeness {quality_report.completeness_score:.1%}"
+                )
+        except Exception as exc:
+            logger.warning(f"Deal {deal_id}: DataQualityAgent failed (non-fatal) — {exc}")
+
+    # ------------------------------------------------------------------ #
     # Step M1 — recall memory context + snapshot hash before negotiation
     # Search and hash are separated so hash works even if embedding fails.
     # ------------------------------------------------------------------ #
@@ -234,6 +278,7 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         budget=payload.buyer_budget,
         requirements=payload.buyer_requirements,
         memory_context=buyer_memory_context,
+        quality_context=buyer_quality_context,
     )
     # Phase 6: pass verified_domain so the seller agent receives a TEE-verified
     # DKIM identity credential in its system prompt (only set when DKIM passed).
@@ -242,6 +287,7 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         data_description=payload.data_description,
         verified_domain=verified_domain,
         memory_context=seller_memory_context,
+        quality_context=seller_quality_context,
     )
 
     result = await run_negotiation(
@@ -390,6 +436,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
                     sign_payload["memory_context_hash"] = memory_context_hash
                 if memory_write_hash:
                     sign_payload["memory_write_hash"] = memory_write_hash
+                if quality_hash:
+                    sign_payload["quality_hash"] = quality_hash
                 result.attestation = await _sign_result(sign_payload)
                 logger.info(f"Deal {deal_id}: re-attested with full evidence chain")
             except Exception as exc:
@@ -441,6 +489,8 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
         arbitrated=result.arbitrated,
         memory_context_hash=memory_context_hash,
         memory_write_hash=memory_write_hash,
+        data_quality_report=quality_report_dict,
+        quality_attested=bool(quality_hash and result.agreed),
         transcript=[
             NegotiationRound(
                 round=r.round,

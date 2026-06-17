@@ -13,6 +13,17 @@ _MEMORY_BLOCK = """
 Act on this. Adjust your opening offer and concession pace based on what you remember about this counterparty.
 """
 
+_QUALITY_BLOCK = """
+
+[TEE-VERIFIED DATASET QUALITY CREDENTIAL]
+An independent DataQualityAgent assessed this dataset inside the TEE before negotiation began.
+Its findings are cryptographically attested and cannot be disputed by the seller.
+
+{quality_context}
+
+Use this in negotiation. If quality is medium or low, open lower and cite specific issues.
+"""
+
 BUYER_SYSTEM_PROMPT = """You are a data buyer agent negotiating access to a proprietary dataset inside a Trusted Execution Environment (TEE).
 
 Your goal: acquire the data at the best possible price within your budget.
@@ -32,7 +43,7 @@ Always respond with valid JSON only, no extra text:
 
 
 class BuyerAgent:
-    def __init__(self, budget: float, requirements: str, memory_context: str = ""):
+    def __init__(self, budget: float, requirements: str, memory_context: str = "", quality_context: str = ""):
         self.budget = budget
         self.requirements = requirements
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -42,6 +53,8 @@ class BuyerAgent:
         )
         if memory_context:
             self.system_prompt += _MEMORY_BLOCK.format(memory_context=memory_context)
+        if quality_context:
+            self.system_prompt += _QUALITY_BLOCK.format(quality_context=quality_context)
 
     async def evaluate_offer(self, seller_offer: dict, history: list[dict]) -> dict:
         messages = self._build_messages(history, seller_offer)
