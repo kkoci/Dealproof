@@ -662,3 +662,23 @@ Token strategy: 64-char hex random token, stored in `deal_rooms.seller_token` / 
 Route split in `App.jsx`: new pages (`/`, `/room/:room_id`) are full-screen standalone layouts. Legacy pages (`/deals`, `/create`, `/deal/:id`) keep the old NavBar layout via `LegacyLayout` + `Outlet`.
 
 **Stop after Phase 1 — wait for instructions before building Phase 2 (Deal Configuration).**
+
+### Phase 2 — Deal Configuration ✅ Complete
+
+New endpoints in `app/api/room_routes.py`:
+- `PUT /api/room/{room_id}/config` — seller only (`X-Room-Token`); saves `deal_payload` JSON to DB, status → `configuring`
+- `POST /api/room/{room_id}/confirm` — seller or buyer; sets `seller_confirmed`/`buyer_confirmed`; both set → status `confirmed`
+
+`floor_price` is always stripped from `GET /api/room/{room_id}/status` response before it reaches the client. Only the backend holds the real floor price for DealCreate construction (Phase 3).
+
+New db functions: `save_room_config()`, `confirm_room_participant()` (returns `(seller_confirmed, buyer_confirmed)` tuple). ALTER TABLE migrations added to `create_deal_rooms_table()` for Phase 1 installs.
+
+New frontend page: `frontend/src/pages/DealConfig.jsx` at `/room/:room_id/config`.
+- Seller: full form (dataset type, description, asking price, floor price, budget, requirements, quality expandable, escrow toggle) + Save + Confirm
+- Buyer: read-only summary (no floor price) + Confirm
+- WaitingRoom auto-redirects to this page when status ≥ `configuring`
+- Both confirmed → status `confirmed` → placeholder for Phase 3 negotiation trigger
+
+`roomApi.js` additions: `saveRoomConfig(roomId, token, config)`, `confirmRoom(roomId, token)`.
+
+**Stop after Phase 2 — wait for instructions before building Phase 3 (Live Negotiation View).**

@@ -188,6 +188,13 @@ export default function WaitingRoom() {
     return () => clearInterval(interval)
   }, [fetchStatus])
 
+  // Auto-redirect both parties once seller has saved config
+  useEffect(() => {
+    if (auth && status && ['configuring', 'confirmed', 'running', 'complete'].includes(status.status)) {
+      navigate(`/room/${room_id}/config`, { replace: true })
+    }
+  }, [status, auth, room_id, navigate])
+
   const handleCopyLink = () => {
     copyToClipboard(window.location.href)
     setCopied(true)

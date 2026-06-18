@@ -14,11 +14,9 @@ async function request(path, options = {}) {
     let errorMessage = `HTTP ${res.status}: ${res.statusText}`
     try {
       const errBody = await res.json()
-      if (errBody.detail) {
-        errorMessage = typeof errBody.detail === 'string'
-          ? errBody.detail
-          : JSON.stringify(errBody.detail)
-      }
+      if (typeof errBody.detail === 'string') errorMessage = errBody.detail
+      else if (Array.isArray(errBody.detail)) errorMessage = errBody.detail.map(d => d.msg || JSON.stringify(d)).join('; ')
+      else if (errBody.detail) errorMessage = JSON.stringify(errBody.detail)
     } catch {
       // ignore parse errors
     }

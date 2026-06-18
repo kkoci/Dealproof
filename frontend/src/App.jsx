@@ -5,6 +5,7 @@ import CreateDeal from './pages/CreateDeal.jsx'
 import DealView from './pages/DealView.jsx'
 import LandingPage from './pages/LandingPage.jsx'
 import WaitingRoom from './pages/WaitingRoom.jsx'
+import DealConfig from './pages/DealConfig.jsx'
 
 function NavBar() {
   const location = useLocation()
@@ -101,6 +102,7 @@ export default function App() {
         {/* New product routes — full-screen, own layout */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/room/:room_id" element={<WaitingRoom />} />
+        <Route path="/room/:room_id/config" element={<DealConfig />} />
 
         {/* Legacy routes — old NavBar layout */}
         <Route element={<LegacyLayout />}>

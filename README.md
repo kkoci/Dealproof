@@ -1187,6 +1187,25 @@ A hosted two-party deal room built on top of the existing FastAPI backend. Non-t
 seller and buyer can run an attested negotiation and each download a signed credential —
 no Swagger, no terminal.
 
+### Phase 2 — Deal Configuration ✅ Complete
+
+**Backend** (added to `app/api/room_routes.py`, `app/api/room_schemas.py`, `app/db.py`):
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `PUT /api/room/{id}/config` | `X-Room-Token` (seller) | Save deal parameters → status `configuring` |
+| `POST /api/room/{id}/confirm` | `X-Room-Token` (seller or buyer) | Mark confirmed; both confirmed → status `confirmed` |
+
+New `deal_rooms` columns: `deal_payload TEXT`, `seller_confirmed INTEGER`, `buyer_confirmed INTEGER`.
+
+`floor_price` is stripped from the public `/status` response — it never reaches the buyer.
+
+**Frontend** (`frontend/src/pages/DealConfig.jsx`):
+- Seller sees full form: dataset type, description, asking price, floor price, buyer budget, requirements, quality metrics (expandable), escrow (toggle)
+- Buyer sees read-only summary: description, type, asking price, budget, quality thresholds — floor price absent
+- Both see live confirmation status and "Confirm & Start" button
+- WaitingRoom auto-redirects to `/room/:id/config` when status reaches `configuring`
+
 ### Phase 1 — Auth + Room Creation ✅ Complete
 
 **Backend** (`app/api/room_routes.py`, `app/api/room_schemas.py`):

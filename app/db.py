@@ -272,27 +272,40 @@ async def get_arc_anchor(deal_id: str) -> dict | None:
 
 
 async def create_deal_rooms_table() -> None:
-    """Create the deal_rooms table if it does not exist."""
+    """Create the deal_rooms table if it does not exist, and migrate Phase 2 columns."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS deal_rooms (
-                room_id          TEXT PRIMARY KEY,
-                seller_token     TEXT,
-                buyer_token      TEXT,
-                seller_name      TEXT,
-                buyer_name       TEXT,
-                seller_email     TEXT,
-                seller_eth       TEXT,
-                buyer_eth        TEXT,
-                status           TEXT DEFAULT 'waiting',
-                deal_id          TEXT,
-                token_expires_at INTEGER,
-                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                room_id           TEXT PRIMARY KEY,
+                seller_token      TEXT,
+                buyer_token       TEXT,
+                seller_name       TEXT,
+                buyer_name        TEXT,
+                seller_email      TEXT,
+                seller_eth        TEXT,
+                buyer_eth         TEXT,
+                status            TEXT DEFAULT 'waiting',
+                deal_id           TEXT,
+                token_expires_at  INTEGER,
+                deal_payload      TEXT,
+                seller_confirmed  INTEGER DEFAULT 0,
+                buyer_confirmed   INTEGER DEFAULT 0,
+                created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Safe migrations for Phase 1 installs that lack the Phase 2 columns.
+        for col_sql in [
+            "ALTER TABLE deal_rooms ADD COLUMN deal_payload TEXT",
+            "ALTER TABLE deal_rooms ADD COLUMN seller_confirmed INTEGER DEFAULT 0",
+            "ALTER TABLE deal_rooms ADD COLUMN buyer_confirmed INTEGER DEFAULT 0",
+        ]:
+            try:
+                await db.execute(col_sql)
+            except Exception:
+                pass  # column already present
         await db.commit()
 
 
@@ -324,7 +337,8 @@ async def get_room(room_id: str) -> dict | None:
             """
             SELECT room_id, seller_token, buyer_token, seller_name, buyer_name,
                    seller_email, seller_eth, buyer_eth, status, deal_id,
-                   token_expires_at, created_at
+                   token_expires_at, deal_payload, seller_confirmed, buyer_confirmed,
+                   created_at
             FROM deal_rooms WHERE room_id = ?
             """,
             (room_id,),
@@ -346,7 +360,10 @@ async def get_room(room_id: str) -> dict | None:
         "status": row[8],
         "deal_id": row[9],
         "token_expires_at": row[10],
-        "created_at": row[11],
+        "deal_payload": row[11],
+        "seller_confirmed": row[12],
+        "buyer_confirmed": row[13],
+        "created_at": row[14],
     }
 
 
@@ -368,6 +385,53 @@ async def update_room_buyer(
             (buyer_token, buyer_name, buyer_eth, room_id),
         )
         await db.commit()
+
+
+async def save_room_config(room_id: str, config: dict) -> None:
+    """Persist deal configuration and transition status to 'configuring'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE deal_rooms
+            SET deal_payload = ?, status = 'configuring',
+                seller_confirmed = 0, buyer_confirmed = 0,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE room_id = ?
+            """,
+            (json.dumps(config), room_id),
+        )
+        await db.commit()
+
+
+async def confirm_room_participant(room_id: str, role: str) -> tuple[bool, bool]:
+    """
+    Mark seller or buyer as confirmed.
+    When both are confirmed, transitions status to 'confirmed'.
+    Returns (seller_confirmed, buyer_confirmed) after the update.
+    """
+    col = "seller_confirmed" if role == "seller" else "buyer_confirmed"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE deal_rooms SET {col} = 1, updated_at = CURRENT_TIMESTAMP WHERE room_id = ?",
+            (room_id,),
+        )
+        # Transition to 'confirmed' when both flags are set
+        await db.execute(
+            """
+            UPDATE deal_rooms SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
+            WHERE room_id = ? AND seller_confirmed = 1 AND buyer_confirmed = 1
+            """,
+            (room_id,),
+        )
+        await db.commit()
+
+        async with db.execute(
+            "SELECT seller_confirmed, buyer_confirmed FROM deal_rooms WHERE room_id = ?",
+            (room_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    return bool(row[0]), bool(row[1])
 
 
 async def create_transcript_corpora_table() -> None:
