@@ -1187,6 +1187,32 @@ A hosted two-party deal room built on top of the existing FastAPI backend. Non-t
 seller and buyer can run an attested negotiation and each download a signed credential —
 no Swagger, no terminal.
 
+### Phase 3 — Live Negotiation View ✅ Complete
+
+**Backend** (added to `app/api/room_routes.py`, `app/db.py`):
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /api/room/{id}/start` | `X-Room-Token` (seller or buyer) | Atomically transitions `confirmed → running`, creates deal record, fires background negotiation |
+
+- `start_room_deal(room_id, deal_id)` in `app/db.py` — atomic `UPDATE WHERE status='confirmed'`; second caller returns existing `deal_id` (idempotent)
+- `update_room_status(room_id, status)` — set `running → complete / failed` after negotiation
+- `_negotiate_and_complete_room()` background wrapper — calls `_negotiate_deal()` then marks the room complete
+
+**Frontend** (`frontend/src/pages/NegotiationView.jsx`, `frontend/src/components/`):
+
+| File | Purpose |
+|------|---------|
+| `pages/NegotiationView.jsx` | 3-panel view: transcript (left) · trust stack (center) · quality (right) |
+| `components/TrustStackBar.jsx` | 4-layer progress bars (TDX · DCAP · CONTEXTO · πCREDS), 600ms ease fill |
+| `components/QualityPanel.jsx` | Radial completeness ring, per-column null rate bars, schema badge |
+
+- On mount: if status `confirmed` → calls `/start` to fire negotiation; if already `running` → uses existing `deal_id`
+- Polls `GET /api/deals/{dealId}/status` every 2s; reveals transcript rounds 380ms apart with fade+slide animation
+- Live elapsed timer while negotiating; final agreed price banner on completion
+- Trust stack layers illuminate progressively as each attestation layer is confirmed
+- "View Credential →" button appears on agreement (navigates to Phase 4)
+
 ### Phase 2 — Deal Configuration ✅ Complete
 
 **Backend** (added to `app/api/room_routes.py`, `app/api/room_schemas.py`, `app/db.py`):

@@ -516,10 +516,9 @@ export default function DealConfig() {
     }
   }
 
-  // Redirect to room once status = confirmed (Phase 3 will handle running)
   useEffect(() => {
-    if (status?.status === 'running' || status?.status === 'complete') {
-      navigate(`/room/${room_id}/negotiate`)
+    if (['confirmed', 'running', 'complete'].includes(status?.status)) {
+      navigate(`/room/${room_id}/negotiate`, { replace: true })
     }
   }, [status, room_id, navigate])
 
@@ -544,17 +543,6 @@ export default function DealConfig() {
 
   const isSeller = auth.role === 'seller'
   const alreadyConfirmed = isSeller ? status?.seller_confirmed : status?.buyer_confirmed
-
-  // Both confirmed — show transition state
-  if (status?.status === 'confirmed') {
-    return (
-      <div className="min-h-screen bg-dp-bg flex flex-col items-center justify-center gap-4 px-4">
-        <div className="w-3 h-3 rounded-full bg-dp-teal animate-pulse" />
-        <p className="text-dp-teal font-mono font-semibold">Both parties confirmed.</p>
-        <p className="text-dp-muted font-mono text-sm">Starting negotiation… (Phase 3)</p>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen bg-dp-bg text-dp-text flex flex-col">

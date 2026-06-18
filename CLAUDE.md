@@ -682,3 +682,33 @@ New frontend page: `frontend/src/pages/DealConfig.jsx` at `/room/:room_id/config
 `roomApi.js` additions: `saveRoomConfig(roomId, token, config)`, `confirmRoom(roomId, token)`.
 
 **Stop after Phase 2 — wait for instructions before building Phase 3 (Live Negotiation View).**
+
+### Phase 3 — Live Negotiation View ✅ Complete
+
+New endpoints in `app/api/room_routes.py`:
+- `POST /api/room/{room_id}/start` — seller or buyer; atomic `confirmed → running` transition; creates deal record; fires `_negotiate_and_complete_room()` as `BackgroundTask`; idempotent (second caller returns existing `deal_id`)
+
+New db functions in `app/db.py`:
+- `start_room_deal(room_id, deal_id)` — `UPDATE WHERE status='confirmed'`, returns bool (True = first caller wins)
+- `update_room_status(room_id, status)` — set room to `complete` or `failed` after negotiation background task finishes
+
+`_negotiate_and_complete_room()` in `room_routes.py`:
+- Builds `DealCreate` from stored `deal_payload`; uses SHA-256 of `data_description` as placeholder `data_hash`
+- Calls `_negotiate_deal(deal_id, deal_create)` (imported from `routes.py`)
+- Marks room `complete` or `failed`
+
+`roomApi.js` addition: `startRoomDeal(roomId, token)`.
+
+New frontend files:
+- `frontend/src/pages/NegotiationView.jsx` — 3-panel layout (transcript · trust stack · quality panel)
+  - On mount: GET room status → if `confirmed` call `/start` → get `deal_id`; if already `running` use room's `deal_id`
+  - Polls `GET /api/deals/{dealId}/status` every 2s until `agreed` or `failed`
+  - Transcript rows revealed 380ms apart, fade+slide in; live elapsed timer; agreed price banner on close
+  - "View Credential →" button on agreement → `/room/:room_id/credential` (Phase 4)
+- `frontend/src/components/TrustStackBar.jsx` — 4-layer fill bars (TDX · DCAP · CONTEXTO · πCREDS); `600ms ease` width transition
+- `frontend/src/components/QualityPanel.jsx` — SVG radial ring (completeness %), per-column null rate bars, schema consistency badge
+
+`App.jsx` addition: `/room/:room_id/negotiate` → `NegotiationView`.
+`DealConfig.jsx` update: redirects to `/negotiate` when status in `[confirmed, running, complete]`.
+
+**Stop after Phase 3 — wait for instructions before building Phase 4 (Credential Display + Download).**

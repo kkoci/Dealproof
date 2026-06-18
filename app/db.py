@@ -271,6 +271,32 @@ async def get_arc_anchor(deal_id: str) -> dict | None:
     return {"deal_id": row[0], "tx_hash": row[1], "record_id": row[2]}
 
 
+async def update_room_status(room_id: str, status: str) -> None:
+    """Update room status — called by background task after negotiation finishes."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE deal_rooms SET status=?, updated_at=CURRENT_TIMESTAMP WHERE room_id=?",
+            (status, room_id),
+        )
+        await db.commit()
+
+
+async def start_room_deal(room_id: str, deal_id: str) -> bool:
+    """
+    Atomically transition room from 'confirmed' → 'running' and store deal_id.
+    Returns True if this call made the transition (first caller wins).
+    Returns False if room was already running (idempotent for concurrent calls).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE deal_rooms SET status='running', deal_id=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE room_id=? AND status='confirmed'",
+            (deal_id, room_id),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
 async def create_deal_rooms_table() -> None:
     """Create the deal_rooms table if it does not exist, and migrate Phase 2 columns."""
     async with aiosqlite.connect(DB_PATH) as db:

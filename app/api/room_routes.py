@@ -1,4 +1,4 @@
-"""Deal Room endpoints — Phase 1+2 (product/deal-room).
+"""Deal Room endpoints — Phase 1+2+3 (product/deal-room).
 
 Phase 1:
   POST /api/room/seller/register  — seller creates a room, gets a token + shareable URL
@@ -9,15 +9,20 @@ Phase 2:
   PUT  /api/room/{room_id}/config   — seller saves deal configuration (X-Room-Token required)
   POST /api/room/{room_id}/confirm  — either party confirms the deal (X-Room-Token required)
 
+Phase 3:
+  POST /api/room/{room_id}/start    — fires negotiation as a background task; idempotent
+
 Tokens are random 64-char hex strings stored in the deal_rooms table.
 Auth uses the X-Room-Token header; the server resolves role from the token value.
 """
+import hashlib
 import json
+import logging
 import secrets
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Header
 
 from app.api.room_schemas import (
     BuyerJoinResponse,
@@ -29,9 +34,12 @@ from app.api.room_schemas import (
     SellerRegisterRequest,
 )
 import app.db as db
+from app.api.schemas import DealCreate
+from app.api.routes import _negotiate_deal
 from app.config import settings
 
 router = APIRouter(prefix="/api/room", tags=["room"])
+logger = logging.getLogger(__name__)
 
 TOKEN_TTL = 7200  # 2 hours in seconds
 
@@ -179,3 +187,68 @@ async def confirm_deal(
         buyer_confirmed=buyer_confirmed,
         status=new_status,
     )
+
+
+# ── Phase 3 endpoint ───────────────────────────────────────────────────────
+
+async def _negotiate_and_complete_room(room_id: str, deal_id: str, deal_create: DealCreate) -> None:
+    """Background task: run negotiation, then mark room complete or failed."""
+    try:
+        await _negotiate_deal(deal_id, deal_create)
+        row = await db.get_deal(deal_id)
+        final = "complete" if row and row["status"] == "agreed" else "failed"
+        await db.update_room_status(room_id, final)
+    except Exception as exc:
+        logger.error(f"Room {room_id} background negotiation error: {exc}")
+        await db.update_room_status(room_id, "failed")
+
+
+@router.post("/{room_id}/start")
+async def start_deal(
+    room_id: str,
+    background_tasks: BackgroundTasks,
+    x_room_token: str = Header(alias="x-room-token"),
+) -> dict:
+    """
+    Fire the negotiation as a background task. Idempotent — if the room is
+    already running, returns the existing deal_id without starting a second deal.
+    """
+    room = await db.get_room(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    # Idempotent: already running
+    if room["status"] == "running" and room["deal_id"]:
+        return {"deal_id": room["deal_id"], "status": "running"}
+
+    if room["status"] != "confirmed":
+        raise HTTPException(status_code=409, detail=f"Cannot start deal in status '{room['status']}'")
+
+    await _resolve_role(room, x_room_token)  # validates token
+
+    raw = json.loads(room["deal_payload"])
+    deal_id = str(uuid.uuid4())
+
+    # Derive data_hash from description — placeholder until Phase 5 dataset upload
+    data_hash = hashlib.sha256(raw["data_description"].encode()).hexdigest()
+
+    deal_create = DealCreate(
+        data_description=raw["data_description"],
+        buyer_requirements=raw.get("buyer_requirements", ""),
+        floor_price=float(raw["floor_price"]),
+        buyer_budget=float(raw["buyer_budget"]),
+        data_hash=data_hash,
+    )
+
+    await db.create_deal(deal_id, deal_create.model_dump())
+
+    # Atomic claim — first caller wins, second gets the already-claimed deal_id
+    claimed = await db.start_room_deal(room_id, deal_id)
+    if not claimed:
+        room = await db.get_room(room_id)
+        return {"deal_id": room["deal_id"], "status": "running"}
+
+    background_tasks.add_task(_negotiate_and_complete_room, room_id, deal_id, deal_create)
+    logger.info(f"Room {room_id}: negotiation started in background (deal {deal_id})")
+
+    return {"deal_id": deal_id, "status": "running"}

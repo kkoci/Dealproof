@@ -51,3 +51,10 @@ export function confirmRoom(roomId, token) {
     headers: { 'x-room-token': token },
   })
 }
+
+export function startRoomDeal(roomId, token) {
+  return request(`/api/room/${roomId}/start`, {
+    method: 'POST',
+    headers: { 'x-room-token': token },
+  })
+}
