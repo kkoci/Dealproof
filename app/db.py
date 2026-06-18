@@ -271,6 +271,105 @@ async def get_arc_anchor(deal_id: str) -> dict | None:
     return {"deal_id": row[0], "tx_hash": row[1], "record_id": row[2]}
 
 
+async def create_deal_rooms_table() -> None:
+    """Create the deal_rooms table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deal_rooms (
+                room_id          TEXT PRIMARY KEY,
+                seller_token     TEXT,
+                buyer_token      TEXT,
+                seller_name      TEXT,
+                buyer_name       TEXT,
+                seller_email     TEXT,
+                seller_eth       TEXT,
+                buyer_eth        TEXT,
+                status           TEXT DEFAULT 'waiting',
+                deal_id          TEXT,
+                token_expires_at INTEGER,
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def create_room(
+    room_id: str,
+    seller_token: str,
+    seller_name: str,
+    seller_email: str,
+    seller_eth: str | None,
+    token_expires_at: int,
+) -> None:
+    """Insert a new deal room with seller info."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO deal_rooms
+              (room_id, seller_token, seller_name, seller_email, seller_eth, token_expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (room_id, seller_token, seller_name, seller_email, seller_eth, token_expires_at),
+        )
+        await db.commit()
+
+
+async def get_room(room_id: str) -> dict | None:
+    """Fetch a deal room by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT room_id, seller_token, buyer_token, seller_name, buyer_name,
+                   seller_email, seller_eth, buyer_eth, status, deal_id,
+                   token_expires_at, created_at
+            FROM deal_rooms WHERE room_id = ?
+            """,
+            (room_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "room_id": row[0],
+        "seller_token": row[1],
+        "buyer_token": row[2],
+        "seller_name": row[3],
+        "buyer_name": row[4],
+        "seller_email": row[5],
+        "seller_eth": row[6],
+        "buyer_eth": row[7],
+        "status": row[8],
+        "deal_id": row[9],
+        "token_expires_at": row[10],
+        "created_at": row[11],
+    }
+
+
+async def update_room_buyer(
+    room_id: str,
+    buyer_token: str,
+    buyer_name: str,
+    buyer_eth: str | None,
+) -> None:
+    """Add buyer to a room and transition status to 'ready'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE deal_rooms
+            SET buyer_token = ?, buyer_name = ?, buyer_eth = ?,
+                status = 'ready', updated_at = CURRENT_TIMESTAMP
+            WHERE room_id = ?
+            """,
+            (buyer_token, buyer_name, buyer_eth, room_id),
+        )
+        await db.commit()
+
+
 async def create_transcript_corpora_table() -> None:
     """Create the transcript_corpora table if it does not exist."""
     async with aiosqlite.connect(DB_PATH) as db:

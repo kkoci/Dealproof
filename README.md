@@ -1181,6 +1181,37 @@ python verify_attestation.py --url https://your-cvm.phala.network --deal-id 3f2e
 
 ---
 
+## Deal Room Product (`product/deal-room` branch)
+
+A hosted two-party deal room built on top of the existing FastAPI backend. Non-technical
+seller and buyer can run an attested negotiation and each download a signed credential —
+no Swagger, no terminal.
+
+### Phase 1 — Auth + Room Creation ✅ Complete
+
+**Backend** (`app/api/room_routes.py`, `app/api/room_schemas.py`):
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/room/seller/register` | Seller creates a room — returns `room_id`, `room_url`, `seller_token` (expires 2h) |
+| `POST /api/room/buyer/register` | Buyer joins a waiting room — returns `buyer_token`, `seller_name` |
+| `GET /api/room/{room_id}/status` | Polls room state: `waiting → ready → running → complete` |
+
+New SQLite table: `deal_rooms` — tracks both participants, session tokens, and room lifecycle.
+
+**Frontend** (`frontend/src/`):
+
+| File | Purpose |
+|------|---------|
+| `pages/LandingPage.jsx` | Hero + seller registration form. Tagline: "Two agents. One sealed enclave. Cryptographic proof." |
+| `pages/WaitingRoom.jsx` | Split panel: seller left, buyer right, status badge + Start button center. Polls every 3s. |
+| `api/roomApi.js` | `registerSeller`, `registerBuyer`, `getRoomStatus` |
+| `hooks/useAuth.js` | localStorage-backed auth per room (`dp_auth_{room_id}`) |
+
+Design system applied: `#0d0d0f` background, `#00d4aa` teal accent, `JetBrains Mono` hashes.
+
+---
+
 ## License
 
 [MIT](LICENSE)

@@ -632,3 +632,33 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/deals/run" -Conte
 | πCreds (Behavioral Integrity Credentials) | https://arxiv.org/pdf/2606.03771 |
 | Props (Data Provenance) | https://arxiv.org/pdf/2410.20522 |
 | NDAI (Negotiated Data Access) | https://arxiv.org/pdf/2502.07924 |
+
+---
+
+## Deal Room Product (`product/deal-room` branch)
+
+**Do not change the backend attestation flow, πCreds logic, or agent behavior.**
+The product wraps what exists; it does not replace it.
+
+### Phase 1 — Auth + Room Creation ✅ Complete
+
+New backend files:
+- `app/api/room_routes.py` — `/api/room/*` endpoints (seller register, buyer register, status poll)
+- `app/api/room_schemas.py` — `SellerRegisterRequest`, `BuyerRegisterRequest`, `RoomCreateResponse`, `BuyerJoinResponse`, `RoomStatusResponse`
+
+New db functions in `app/db.py`:
+- `create_deal_rooms_table()`, `create_room()`, `get_room()`, `update_room_buyer()`
+
+New frontend files:
+- `frontend/src/pages/LandingPage.jsx` — seller registration + hero
+- `frontend/src/pages/WaitingRoom.jsx` — split panel, polls `/status` every 3s, buyer join flow
+- `frontend/src/api/roomApi.js` — room API calls
+- `frontend/src/hooks/useAuth.js` — localStorage token store keyed by room_id
+
+Design system colors added to `tailwind.config.js`: `dp-bg`, `dp-surface`, `dp-border`, `dp-teal`, `dp-amber`, `dp-red`, `dp-text`, `dp-muted`.
+
+Token strategy: 64-char hex random token, stored in `deal_rooms.seller_token` / `buyer_token`. Expiry 2h, checked client-side via `dp_auth_{room_id}` in localStorage.
+
+Route split in `App.jsx`: new pages (`/`, `/room/:room_id`) are full-screen standalone layouts. Legacy pages (`/deals`, `/create`, `/deal/:id`) keep the old NavBar layout via `LegacyLayout` + `Outlet`.
+
+**Stop after Phase 1 — wait for instructions before building Phase 2 (Deal Configuration).**

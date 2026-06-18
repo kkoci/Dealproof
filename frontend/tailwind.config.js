@@ -9,7 +9,17 @@ export default {
       colors: {
         gray: {
           950: '#0a0a0f',
-        }
+        },
+        dp: {
+          bg:      '#0d0d0f',
+          surface: '#131316',
+          border:  '#1e1e24',
+          teal:    '#00d4aa',
+          amber:   '#f59e0b',
+          red:     '#ef4444',
+          text:    '#f0f0f2',
+          muted:   '#6b7280',
+        },
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],

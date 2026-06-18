@@ -1,8 +1,10 @@
 import React from 'react'
-import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import Home from './pages/Home.jsx'
 import CreateDeal from './pages/CreateDeal.jsx'
 import DealView from './pages/DealView.jsx'
+import LandingPage from './pages/LandingPage.jsx'
+import WaitingRoom from './pages/WaitingRoom.jsx'
 
 function NavBar() {
   const location = useLocation()
@@ -80,20 +82,34 @@ function NotFound() {
   )
 }
 
+// Legacy routes keep the old NavBar layout
+function LegacyLayout() {
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100">
+      <NavBar />
+      <div className="pt-14">
+        <Outlet />
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-gray-950 text-gray-100">
-        <NavBar />
-        <div className="pt-14">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/create" element={<CreateDeal />} />
-            <Route path="/deal/:id" element={<DealView />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </div>
-      </div>
+      <Routes>
+        {/* New product routes — full-screen, own layout */}
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/room/:room_id" element={<WaitingRoom />} />
+
+        {/* Legacy routes — old NavBar layout */}
+        <Route element={<LegacyLayout />}>
+          <Route path="/deals" element={<Home />} />
+          <Route path="/create" element={<CreateDeal />} />
+          <Route path="/deal/:id" element={<DealView />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
     </BrowserRouter>
   )
 }
