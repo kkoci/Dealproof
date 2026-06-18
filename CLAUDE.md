@@ -712,3 +712,26 @@ New frontend files:
 `DealConfig.jsx` update: redirects to `/negotiate` when status in `[confirmed, running, complete]`.
 
 **Stop after Phase 3 — wait for instructions before building Phase 4 (Credential Display + Download).**
+
+### Phase 4 — Credential Display + Download ✅ Complete
+
+New frontend page: `frontend/src/pages/CredentialView.jsx` at `/room/:room_id/credential`.
+
+Data flow:
+- `getRoomStatus(room_id)` → `deal_id`
+- `getDealStatus(deal_id)` → full `DealResult`
+- Renders credential card; handles loading/error/no-deal states gracefully
+
+Credential card sections:
+- Header: "✓ DEAL ATTESTED" badge, ARBITRATED/πCREDS tags, SHARE + DOWNLOAD JSON buttons
+- Key metrics: agreed price, round count, genuine negotiation flag
+- Auditor summary (if `audit_report.summary` present)
+- πCREDS conduct: `buyer_budget_respected`, `seller_floor_respected`, `no_sudden_capitulation`, `convergence_pattern_valid` + assessment text (if conduct cred present)
+- Data quality: completeness %, verdict, issues, quality_hash (if `data_quality_report` present)
+- Attestation hashes: TDX QUOTE (with VERIFY link → `/api/deals/{id}/dcap-verify`), PICREDS HASH, MEMORY PRE/POST/CTX, DATA VERIFY — each with inline COPY button
+- Blockchain badges: Hedera tx, escrow deposit/release tx (shown only if present)
+
+Post-deal actions: "← Start a new deal", "Export for audit →" (JSON download).
+`App.jsx`: added `/room/:room_id/credential` → `CredentialView`.
+
+**Stop after Phase 4 — wait for instructions before building Phase 5 (Dataset Upload).**

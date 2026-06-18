@@ -1187,6 +1187,26 @@ A hosted two-party deal room built on top of the existing FastAPI backend. Non-t
 seller and buyer can run an attested negotiation and each download a signed credential —
 no Swagger, no terminal.
 
+### Phase 4 — Credential Display + Download ✅ Complete
+
+**Frontend** (`frontend/src/pages/CredentialView.jsx` at `/room/:room_id/credential`):
+
+Full-width credential card with teal top border, rendered for both buyer and seller after a completed deal:
+
+| Section | Content |
+|---------|---------|
+| Header | "✓ DEAL ATTESTED" badge; ARBITRATED / πCREDS tags if applicable; SHARE + DOWNLOAD JSON buttons |
+| Key metrics | Agreed price · Round count · Genuine negotiation flag |
+| Auditor summary | One-sentence AuditorAgent characterisation |
+| πCREDS Conduct | `buyer_budget_respected`, `seller_floor_respected`, `no_sudden_capitulation`, `convergence_pattern_valid` checkmarks + LLM assessment |
+| Data quality | Completeness %, verdict, quality issues, quality_hash (shown only if `data_quality_report` present) |
+| Attestation hashes | TDX Quote (with VERIFY link → `/api/deals/{id}/dcap-verify`), PICREDS HASH, MEMORY PRE/POST/CTX, DATA VERIFY — each with COPY button |
+| Blockchain badges | Hedera tx, escrow deposit/release tx hashes |
+
+Post-deal actions: "← Start a new deal" (→ `/`), "Export for audit →" (downloads full JSON).
+
+`App.jsx`: added `/room/:room_id/credential` → `CredentialView`.
+
 ### Phase 3 — Live Negotiation View ✅ Complete
 
 **Backend** (added to `app/api/room_routes.py`, `app/db.py`):
