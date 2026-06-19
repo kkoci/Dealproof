@@ -29,6 +29,7 @@ from app.api.schemas import (
     CorpusIngest, CorpusIngestResponse,
     TeamCredential, CredentialResponse,
     DataQualityMetrics,
+    SkillDealRequest, SkillExecutionReceipt,
 )
 from app.agents.buyer import BuyerAgent
 from app.agents.seller import SellerAgent
@@ -555,6 +556,207 @@ async def _negotiate_deal(deal_id: str, payload: DealCreate) -> DealResult:
 
 
 # ---------------------------------------------------------------------------
+# Skill deal orchestration (Phase SN2)
+# ---------------------------------------------------------------------------
+
+async def _negotiate_skill_deal(deal_id: str, payload: SkillDealRequest) -> DealResult:
+    """
+    Skill deal flow — SN2.
+
+    1. Read skill.json for a human-readable description to seed agent prompts.
+    2. Run BuyerAgent / SellerAgent negotiation over price + usage terms using
+       the existing run_negotiation() loop (unchanged).
+    3. ArbitratorAgent resolves deadlocks as in standard deals.
+    4. On agreement: πCreds audit + Auditor witness (both non-fatal) then
+       SkillExecutionAgent.execute() (error surfaced in audit_error, non-blocking).
+    5. Persist and return DealResult with skill_execution_receipt populated.
+
+    Omitted vs. standard deals (can be layered in later phases):
+      - DKIM / Props / escrow  — no data hash for skill deals
+      - Contexto memory        — Phase SN3+
+    """
+    import asyncio
+    import os
+    from pathlib import Path as _Path
+
+    from app.agents.skill_execution import SkillExecutionAgent, SkillExecutionError
+
+    # Read skill description to seed agent prompts
+    with open(payload.skill_path) as _f:
+        _skill_json = json.load(_f)
+    skill_label = _skill_json.get("label", payload.skill_id)
+    skill_description = _skill_json.get("description", f"Skill: {payload.skill_id}")
+
+    # Adapt the standard agent prompts to the skill-deal context
+    buyer_requirements = (
+        f"Apply the '{skill_label}' style skill to my photo. "
+        f"Desired usage terms: {payload.usage_terms}."
+    )
+    seller_description = (
+        f"{skill_description}\n\n"
+        f"Opening asking price: ${payload.asking_price}. "
+        f"Usage terms on offer: {payload.usage_terms}."
+    )
+
+    buyer = BuyerAgent(budget=payload.buyer_budget, requirements=buyer_requirements)
+    seller = SellerAgent(
+        floor_price=payload.minimum_acceptable_price,
+        data_description=seller_description,
+    )
+
+    result = await run_negotiation(
+        buyer,
+        seller,
+        data_hash=None,       # receipt_hash wired in Phase SN3
+        memory_hash="",
+        arbitrator=ArbitratorAgent(),
+    )
+
+    picreds_raw: list[dict] = []
+    picreds_hash: str | None = None
+    audit_report: dict | None = None
+    audit_credential_hash: str | None = None
+    audit_error: str | None = None
+    skill_receipt: SkillExecutionReceipt | None = None
+
+    if result.agreed:
+        # ------------------------------------------------------------------ #
+        # πCreds audit (non-fatal)
+        # ------------------------------------------------------------------ #
+        try:
+            buyer_code_hash = hashlib.sha256(buyer.system_prompt.encode()).hexdigest()
+            seller_code_hash = hashlib.sha256(seller.system_prompt.encode()).hexdigest()
+            buyer_policy = await audit_agent_policy("buyer", buyer.system_prompt)
+            seller_policy = await audit_agent_policy("seller", seller.system_prompt)
+            transcript_data = [
+                {"round": r.round, "role": r.role, "action": r.action, "price": r.price}
+                for r in result.transcript
+            ]
+            conduct = await audit_deal_conduct(
+                transcript_data,
+                payload.buyer_budget,
+                payload.minimum_acceptable_price,
+                result.final_price,
+            )
+            picreds_raw = [
+                make_credential("policy", "buyer_agent", buyer_policy, deal_id, buyer_code_hash),
+                make_credential("policy", "seller_agent", seller_policy, deal_id, seller_code_hash),
+                make_credential("conduct", "deal", conduct, deal_id, ""),
+            ]
+            picreds_hash = hash_credentials(picreds_raw)
+            logger.info(f"Skill deal {deal_id}: πCreds issued ({len(picreds_raw)} credentials)")
+        except Exception as exc:
+            logger.warning(f"Skill deal {deal_id}: πCreds audit failed (non-fatal) — {exc}")
+
+        # ------------------------------------------------------------------ #
+        # Auditor witness (non-fatal)
+        # ------------------------------------------------------------------ #
+        try:
+            transcript_data_audit = [
+                {"round": r.round, "role": r.role, "action": r.action, "price": r.price}
+                for r in result.transcript
+            ]
+            audit = await AuditorAgent().audit(
+                transcript_data_audit,
+                payload.buyer_budget,
+                payload.minimum_acceptable_price,
+                result.final_price,
+            )
+            if audit is not None:
+                audit_report = {
+                    "genuine_negotiation": audit.genuine_negotiation,
+                    "round_count": audit.round_count,
+                    "final_price": audit.final_price,
+                    "summary": audit.summary,
+                    "credential_hash": audit.credential_hash,
+                }
+                audit_credential_hash = audit.credential_hash
+                logger.info(f"Skill deal {deal_id}: Auditor report produced")
+        except Exception as exc:
+            audit_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(f"Skill deal {deal_id}: Auditor failed (non-fatal) — {audit_error}")
+
+        # ------------------------------------------------------------------ #
+        # Re-attest with picreds_hash (+ audit hash when available)
+        # receipt_hash will be added to report_data in Phase SN3
+        # ------------------------------------------------------------------ #
+        if result.final_price is not None:
+            try:
+                sign_payload: dict = {
+                    "final_price": result.final_price,
+                    "terms": result.terms or {},
+                    "skill_id": payload.skill_id,
+                }
+                if picreds_hash:
+                    sign_payload["picreds_hash"] = picreds_hash
+                    sign_payload["picreds_attested"] = True
+                if audit_credential_hash:
+                    sign_payload["audit_credential_hash"] = audit_credential_hash
+                result.attestation = await sign_result(sign_payload)
+                logger.info(f"Skill deal {deal_id}: attested with picreds_hash")
+            except Exception as exc:
+                logger.warning(f"Skill deal {deal_id}: attestation failed (non-fatal) — {exc}")
+
+        # ------------------------------------------------------------------ #
+        # Skill execution — run in thread so PIL/ffmpeg don't block the loop
+        # Output written alongside the input file as {stem}_styled{ext}
+        # ------------------------------------------------------------------ #
+        _inp = _Path(payload.buyer_input_path)
+        output_path = str(_inp.parent / f"{_inp.stem}_styled{_inp.suffix}")
+        try:
+            agent = SkillExecutionAgent()
+            skill_receipt = await asyncio.to_thread(
+                agent.execute,
+                payload.skill_path,
+                payload.buyer_input_path,
+                output_path,
+                payload.tee_root,
+            )
+            logger.info(
+                f"Skill deal {deal_id}: execution complete — "
+                f"receipt_hash={skill_receipt.receipt_hash}, output={output_path}"
+            )
+        except SkillExecutionError as exc:
+            _err = f"SkillExecutionError: {exc}"
+            audit_error = f"{audit_error}\n{_err}" if audit_error else _err
+            logger.error(f"Skill deal {deal_id}: skill execution failed — {exc}")
+
+    # ------------------------------------------------------------------ #
+    # Persist and return
+    # ------------------------------------------------------------------ #
+    deal_result = DealResult(
+        deal_id=deal_id,
+        agreed=result.agreed,
+        final_price=result.final_price,
+        terms=result.terms,
+        attestation=result.attestation,
+        arbitrated=result.arbitrated,
+        picreds=[PiCred(**{k: v for k, v in p.items()}) for p in picreds_raw] if picreds_raw else None,
+        picreds_hash=picreds_hash,
+        picreds_attested=bool(picreds_hash and result.agreed),
+        audit_report=audit_report,
+        audit_error=audit_error,
+        skill_execution_receipt=skill_receipt,
+        transcript=[
+            NegotiationRound(
+                round=r.round,
+                role=r.role,
+                action=r.action,
+                price=r.price,
+                terms=r.terms,
+                reasoning=r.reasoning,
+            )
+            for r in result.transcript
+        ],
+    )
+
+    final_status = "agreed" if result.agreed else "failed"
+    await db.update_deal(deal_id, final_status, result=deal_result.model_dump())
+    logger.info(f"Skill deal {deal_id} finished: {final_status}")
+    return deal_result
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -630,6 +832,20 @@ async def create_and_negotiate(payload: DealCreate) -> DealResult:
     deal_id = str(uuid.uuid4())
     await db.create_deal(deal_id, payload.model_dump())
     return await _negotiate_deal(deal_id, payload)
+
+
+@router.post("/deals/skill", response_model=DealResult, status_code=200)
+async def skill_deal(payload: SkillDealRequest) -> DealResult:
+    """
+    Run a skill negotiation deal in one call.
+
+    Agents negotiate price and usage terms for the given skill; on agreement
+    the skill executes and the result is attested.  See SkillDealRequest for
+    all required fields and validation rules.
+    """
+    deal_id = str(uuid.uuid4())
+    await db.create_deal(deal_id, payload.model_dump())
+    return await _negotiate_skill_deal(deal_id, payload)
 
 
 @router.get("/deals/{deal_id}/status", response_model=DealStatus)

@@ -222,6 +222,8 @@ class DealResult(BaseModel):
     # ENS agent identities (ETHGlobal M8)
     buyer_ens: str | None = None    # ENS name for buyer address, if set
     seller_ens: str | None = None   # ENS name for seller address, if set
+    # Skill deal (SN2): present only for POST /api/deals/skill, absent for data deals
+    skill_execution_receipt: Optional["SkillExecutionReceipt"] = None
     transcript: list[NegotiationRound] = []
 
 
@@ -310,6 +312,41 @@ class DealStatus(BaseModel):
     deal_id: str
     status: str  # "pending" | "negotiating" | "agreed" | "failed" | "verification_failed"
     result: DealResult | None = None
+
+
+class SkillDealRequest(BaseModel):
+    """
+    Request body for POST /api/deals/skill.
+
+    The buyer negotiates the right to run the seller's skill against their photo.
+    On agreement, SkillExecutionAgent.execute() is called and the receipt is
+    included in the DealResult alongside the standard πCreds credential.
+    """
+    skill_id: str = Field(..., description="Which skill the seller is offering")
+    skill_path: str = Field(..., description="Path to the .skill.json file (seller-controlled)")
+    tee_root: str = Field(..., description="Path to seller's LUTs/weights — never exposed to buyer")
+    buyer_input_path: str = Field(..., description="Buyer's input image path")
+    asking_price: float = Field(..., gt=0, description="Seller's opening price")
+    minimum_acceptable_price: float = Field(..., gt=0, description="Seller's floor — never goes below this")
+    buyer_budget: float = Field(..., gt=0, description="Maximum the buyer will pay")
+    usage_terms: str = Field(
+        default="single_use",
+        description="Intended usage: 'single_use' | 'unlimited' | 'resale_allowed' — free text for now",
+    )
+
+    @model_validator(mode="after")
+    def validate_price_range(self) -> "SkillDealRequest":
+        if self.minimum_acceptable_price > self.asking_price:
+            raise ValueError(
+                f"minimum_acceptable_price ({self.minimum_acceptable_price}) "
+                f"must be <= asking_price ({self.asking_price})"
+            )
+        if self.buyer_budget < self.minimum_acceptable_price:
+            raise ValueError(
+                f"buyer_budget ({self.buyer_budget}) must be >= "
+                f"minimum_acceptable_price ({self.minimum_acceptable_price})"
+            )
+        return self
 
 
 class SkillExecutionReceipt(BaseModel):
