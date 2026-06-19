@@ -312,6 +312,20 @@ class DealStatus(BaseModel):
     result: DealResult | None = None
 
 
+class SkillExecutionReceipt(BaseModel):
+    """
+    Verifiable record of one skill execution — produced by SkillExecutionAgent
+    and included in the combined TDX attestation for skill deals.
+    """
+    skill_id: str
+    input_sha256: str
+    output_sha256: str
+    lora_sha256: str                # "FILL_AT_PACKAGING_TIME" until real weights exist
+    backend: str                    # "pil-style:local" | "fal:..." | "chutes-aci:attested"
+    pipeline_steps: list[str]
+    receipt_hash: str               # SHA-256 of the canonical receipt JSON — goes into TDX report_data
+
+
 class DCAPVerification(BaseModel):
     """
     Phase 7: Full Intel DCAP verification result for a TDX attestation quote.

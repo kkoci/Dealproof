@@ -127,6 +127,9 @@ app/agents/auditor.py      AuditorAgent — read-only TEE witness, AuditReport +
 app/agents/arbitrator.py   ArbitratorAgent — deadlock resolver, price clamped to [floor, budget]
 app/agents/data_credential.py  DataCredentialAgent — team dynamics credential from TinyCloud corpus (ETHGlobal M3)
 app/agents/data_quality.py     DataQualityAgent — TEE-resident dataset quality assessor; quality_hash in TDX quote
+app/skills/__init__.py          Package init
+app/skills/runner.py            Core skill execution — run_skill(), run_ffmpeg(), run_pil_style(), etc. (SN1)
+app/agents/skill_execution.py   SkillExecutionAgent → SkillExecutionReceipt; SkillExecutionError on failure (SN1)
 app/tee/attestation.py     sign_result() → POST /prpc/Tappd.TdxQuote
 app/tee/dcap.py            TDX quote header parser (Phase 7)
 app/props/verifier.py      Props Merkle verification
@@ -223,6 +226,28 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **product/skill-negotiation** | **Skill Deal Flow** | |
+| SN1 | `app/skills/runner.py` package + `SkillExecutionAgent` + `SkillExecutionReceipt` schema | ✅ Complete |
+| SN2 | `POST /api/deals/skill` endpoint + `SkillDealRequest` schema | 🔜 Pending |
+| SN3 | Combined TDX attestation (`picreds_hash + skill_receipt_hash`) + `tests/test_skill_deals.py` | 🔜 Pending |
+| SN4 | Demo payload in PAYLOADS.md + end-to-end walkthrough | 🔜 Pending |
+
+---
+
+## Skill Negotiation Architecture (product/skill-negotiation)
+
+`app/skills/runner.py` contains all pipeline execution logic (moved from `examples/skill_runner.py`).
+`examples/skill_runner.py` is now a thin CLI shim that re-exports from the package — **do not add logic there**.
+
+`SkillExecutionAgent.execute(skill_path, input_path, output_path, tee_root, mock=False)`:
+- Calls `run_skill()` directly (no subprocess)
+- Wraps result in `SkillExecutionReceipt` with `receipt_hash = SHA-256(canonical JSON)`
+- Raises `SkillExecutionError` on any pipeline failure — never swallows errors
+
+`SkillExecutionReceipt` fields: `skill_id`, `input_sha256`, `output_sha256`, `lora_sha256`, `backend`, `pipeline_steps`, `receipt_hash`
+
+**`receipt_hash` goes into TDX `report_data` for skill deals (Phase SN3).**
+Standard data deals use `picreds_hash + corpus_root` — skill deals use `picreds_hash + receipt_hash`.
 
 ---
 

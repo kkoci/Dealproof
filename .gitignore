@@ -47,6 +47,7 @@ docker-compose.phala.yml
 docker-compose.override.yml
 
 # Images
+out.jpg
 *.png
 
 # Node (for Hardhat/contracts)
@@ -67,6 +68,9 @@ PHALA_TEST_RUNS.md
 ETHGLOBAL_SUBMISSIONS.md
 DEALPROOF_NEXT5DAYS.md
 DEALPROOF_ETHGLOBAL_MILESTONES_v2.md
+DEALROOM_PRODUCT_BRIEF.md
+SOC2_PRODUCT_BRIEF.md
+SKILL_NEGOTIATION_BRIEF.md
 MILESTONE_1_PLAN.md
 MILESTONE_2_PLAN.md
 MILESTONE_3_PLAN.md

@@ -1012,10 +1012,14 @@ Dealproof/
 │   ├── main.py              FastAPI app + lifespan + CORS middleware
 │   ├── config.py            Pydantic Settings (reads .env)
 │   ├── db.py                SQLite persistence (aiosqlite)
+│   ├── skills/
+│   │   ├── __init__.py
+│   │   └── runner.py        Core skill execution — run_skill(), run_ffmpeg(), run_pil_style(), etc.
 │   ├── agents/
 │   │   ├── buyer.py         BuyerAgent — Claude claude-sonnet-4-6
 │   │   ├── seller.py        SellerAgent — Claude claude-sonnet-4-6 (verified_domain)
-│   │   └── negotiation.py   run_negotiation() loop + TEE sign
+│   │   ├── negotiation.py   run_negotiation() loop + TEE sign
+│   │   └── skill_execution.py  SkillExecutionAgent — wraps run_skill(), returns SkillExecutionReceipt
 │   ├── api/
 │   │   ├── routes.py        All HTTP endpoints + memory + πCreds orchestration
 │   │   └── schemas.py       Pydantic models (DealCreate, DealResult, PiCred, etc.)
@@ -1108,6 +1112,11 @@ Dealproof/
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + `GET /api/ens/agents` | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **product/skill-negotiation** | **Skill Deal Flow (Andrew + Ian)** | |
+| SN1 | SkillExecutionAgent + `app/skills/runner.py` package + `SkillExecutionReceipt` schema | ✅ Complete |
+| SN2 | `POST /api/deals/skill` endpoint + `SkillDealRequest` schema + negotiation over price/terms | 🔜 Pending |
+| SN3 | Combined TDX attestation — `picreds_hash + skill_receipt_hash` in `report_data` + tests | 🔜 Pending |
+| SN4 | Demo payload in PAYLOADS.md + end-to-end walkthrough | 🔜 Pending |
 
 ---
 
