@@ -677,29 +677,9 @@ async def _negotiate_skill_deal(deal_id: str, payload: SkillDealRequest) -> Deal
             logger.warning(f"Skill deal {deal_id}: Auditor failed (non-fatal) — {audit_error}")
 
         # ------------------------------------------------------------------ #
-        # Re-attest with picreds_hash (+ audit hash when available)
-        # receipt_hash will be added to report_data in Phase SN3
-        # ------------------------------------------------------------------ #
-        if result.final_price is not None:
-            try:
-                sign_payload: dict = {
-                    "final_price": result.final_price,
-                    "terms": result.terms or {},
-                    "skill_id": payload.skill_id,
-                }
-                if picreds_hash:
-                    sign_payload["picreds_hash"] = picreds_hash
-                    sign_payload["picreds_attested"] = True
-                if audit_credential_hash:
-                    sign_payload["audit_credential_hash"] = audit_credential_hash
-                result.attestation = await sign_result(sign_payload)
-                logger.info(f"Skill deal {deal_id}: attested with picreds_hash")
-            except Exception as exc:
-                logger.warning(f"Skill deal {deal_id}: attestation failed (non-fatal) — {exc}")
-
-        # ------------------------------------------------------------------ #
         # Skill execution — run in thread so PIL/ffmpeg don't block the loop
         # Output written alongside the input file as {stem}_styled{ext}
+        # Must run BEFORE attestation so receipt_hash is bound in report_data.
         # ------------------------------------------------------------------ #
         _inp = _Path(payload.buyer_input_path)
         output_path = str(_inp.parent / f"{_inp.stem}_styled{_inp.suffix}")
@@ -720,6 +700,33 @@ async def _negotiate_skill_deal(deal_id: str, payload: SkillDealRequest) -> Deal
             _err = f"SkillExecutionError: {exc}"
             audit_error = f"{audit_error}\n{_err}" if audit_error else _err
             logger.error(f"Skill deal {deal_id}: skill execution failed — {exc}")
+
+        # ------------------------------------------------------------------ #
+        # Re-attest: picreds_hash + skill_receipt_hash + audit hash (SN3)
+        # Skill deals bind execution proof alongside conduct credentials in TDX.
+        # ------------------------------------------------------------------ #
+        if result.final_price is not None:
+            try:
+                sign_payload: dict = {
+                    "final_price": result.final_price,
+                    "terms": result.terms or {},
+                    "skill_id": payload.skill_id,
+                }
+                if picreds_hash:
+                    sign_payload["picreds_hash"] = picreds_hash
+                    sign_payload["picreds_attested"] = True
+                if audit_credential_hash:
+                    sign_payload["audit_credential_hash"] = audit_credential_hash
+                if skill_receipt is not None:
+                    sign_payload["skill_receipt_hash"] = skill_receipt.receipt_hash
+                    sign_payload["skill_attested"] = True
+                result.attestation = await sign_result(sign_payload)
+                logger.info(
+                    f"Skill deal {deal_id}: attested — "
+                    f"picreds={bool(picreds_hash)}, skill_receipt={skill_receipt is not None}"
+                )
+            except Exception as exc:
+                logger.warning(f"Skill deal {deal_id}: attestation failed (non-fatal) — {exc}")
 
     # ------------------------------------------------------------------ #
     # Persist and return
