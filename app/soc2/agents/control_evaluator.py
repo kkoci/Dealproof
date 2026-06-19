@@ -99,7 +99,7 @@ class ControlEvaluatorAgent:
 
             response = await self.client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=1024,
+                max_tokens=2048,
                 system=_SYSTEM_PROMPT,
                 messages=[{
                     "role": "user",
@@ -112,13 +112,22 @@ class ControlEvaluatorAgent:
             )
 
             raw = response.content[0].text.strip()
+            # Strip markdown code fences if present
+            if raw.startswith("```"):
+                lines = raw.split("\n")
+                raw = "\n".join(
+                    l for l in lines
+                    if not l.strip().startswith("```")
+                ).strip()
+            # Extract first { ... last } to tolerate trailing text
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start == -1 or end == 0:
+                raise ValueError(f"No JSON object in LLM response: {raw[:200]}")
             try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                start = raw.find("{")
-                if start == -1:
-                    raise ValueError(f"No JSON object in LLM response: {raw[:200]}")
-                data, _ = json.JSONDecoder().raw_decode(raw, start)
+                data = json.loads(raw[start:end])
+            except json.JSONDecodeError as e:
+                raise ValueError(f"JSON parse failed after extraction: {e}") from e
 
             # Enforce hard findings — LLM effective field is overridden by inspector
             assessments = data.get("control_assessments", [])
