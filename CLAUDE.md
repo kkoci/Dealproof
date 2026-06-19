@@ -225,7 +225,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 | **product/continuous-soc2** | **Continuous SOC 2 Assurance** | |
 | S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
-| S2 | ConfigInspectorAgent + ControlEvaluatorAgent | 🔜 Pending |
+| S2 | ConfigInspectorAgent + ControlEvaluatorAgent | ✅ Complete |
 | S3 | SOC2ControlCredential + TDX attestation | 🔜 Pending |
 | S4 | Synthetic config fixtures + tests | 🔜 Pending |
 | S5 | Frontend: compliance dashboard | 🔜 Pending |
@@ -264,6 +264,29 @@ app/db.py                      create_compliance_audits_table(), create_audit(),
 Returns `corpus_root` (length-prefixed Merkle root, same algorithm as `transcript_hasher.py`),
 per-file hashes, and `control_evidence_preview` — deterministic text snippets per control, no LLM.
 Persists to `compliance_audits` table in SQLite.
+
+### Phase S2 — ConfigInspectorAgent + ControlEvaluatorAgent ✅ Complete
+
+Two-layer architecture mirroring πCreds exactly:
+
+```
+Config JSON → ConfigInspectorAgent (deterministic, no LLM) → hard boolean per control
+           → ControlEvaluatorAgent (LLM, grounded in hard findings) → qualitative context
+```
+
+**ConfigInspectorAgent** (`app/soc2/agents/config_inspector.py`):
+- Pure functions, no I/O — mirrors `app/picreds/constraints.py`
+- Six checks: `check_mfa_enforcement`, `check_least_privilege`, `check_access_logging`,
+  `check_no_public_buckets`, `check_cloudtrail_active`, `check_alerting_configured`
+- Hard booleans are authoritative — cannot be overridden by LLM
+- SCAE-resistant: reads actual IAM conditions, not policy names
+
+**ControlEvaluatorAgent** (`app/soc2/agents/control_evaluator.py`):
+- Mirrors `app/agents/auditor.py`
+- Receives hard findings as established facts in system prompt
+- Adds qualitative context, risk notes, remediation advice only
+- LLM `effective` field is always overwritten with the hard finding value
+- Returns `None` on failure (non-fatal)
 
 ---
 

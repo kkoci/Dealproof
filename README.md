@@ -1110,7 +1110,7 @@ Dealproof/
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 | **product/continuous-soc2** | **Continuous SOC 2 Assurance** | |
 | S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
-| S2 | ConfigInspectorAgent + ControlEvaluatorAgent | 🔜 Pending |
+| S2 | ConfigInspectorAgent + ControlEvaluatorAgent | ✅ Complete |
 | S3 | SOC2ControlCredential + TDX attestation | 🔜 Pending |
 | S4 | Synthetic config fixtures + tests | 🔜 Pending |
 | S5 | Frontend: compliance dashboard | 🔜 Pending |
