@@ -750,7 +750,27 @@ New frontend page: `frontend/src/pages/PublicCredentialView.jsx` at `/verify/:de
 `CredentialView.jsx` SHARE button updated: now copies `/verify/{deal_id}` (public URL) instead of the room credential URL.
 `App.jsx`: added `/verify/:deal_id` → `PublicCredentialView`.
 
-**Stop after Phase 6 — wait for instructions before building Phase 7 (Deal History).**
+### Phase 7 — Deal History Dashboard ✅ Complete
+
+New db function in `app/db.py`:
+- `get_rooms_by_token(token)` — `SELECT … WHERE seller_token = ? OR buyer_token = ? ORDER BY created_at DESC LIMIT 50`; infers `role` from which token matched
+
+New backend endpoint in `app/api/room_routes.py`:
+- `GET /api/room/history` — `X-Room-Token` auth; returns list of rooms the token-holder participated in
+
+New frontend page: `frontend/src/pages/HistoryPage.jsx` at `/history`:
+- Scans localStorage for all `dp_auth_*` keys; skips expired tokens
+- Batch-fetches all room statuses in parallel via `getRoomStatus()`; sorts newest-first
+- Card per room: status badge, role badge (SELLER/BUYER), names, deal ID prefix, date, CTA
+  - Complete → "View Credential →" (`/verify/{deal_id}`)
+  - Running/confirmed → "Rejoin Negotiation →" (`/room/{id}/negotiate`)
+  - Other → "Open Room →" (`/room/{id}`)
+- Empty state: "No deals yet. Start one →"
+
+`App.jsx`: added `/history` → `HistoryPage`.
+`LandingPage.jsx`: added "View past deals →" link below the Create Deal Room CTA.
+
+**Stop after Phase 7 — wait for instructions before building further phases.**
 
 ### Phase 5 — Dataset Upload ✅ Complete
 

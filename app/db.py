@@ -271,6 +271,40 @@ async def get_arc_anchor(deal_id: str) -> dict | None:
     return {"deal_id": row[0], "tx_hash": row[1], "record_id": row[2]}
 
 
+async def get_rooms_by_token(token: str) -> list[dict]:
+    """
+    Return all rooms where seller_token or buyer_token matches.
+    Used by GET /api/room/history — typically returns 1 room per token since tokens are unique.
+    Cap at 50, ordered by created_at desc.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT room_id, seller_name, buyer_name, status, deal_id, created_at,
+                   seller_token, buyer_token
+            FROM deal_rooms
+            WHERE seller_token = ? OR buyer_token = ?
+            ORDER BY created_at DESC LIMIT 50
+            """,
+            (token, token),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    result = []
+    for row in rows:
+        role = "seller" if row[6] == token else "buyer"
+        result.append({
+            "room_id": row[0],
+            "seller_name": row[1],
+            "buyer_name": row[2],
+            "status": row[3],
+            "deal_id": row[4],
+            "created_at": row[5],
+            "role": role,
+        })
+    return result
+
+
 async def update_room_status(room_id: str, status: str) -> None:
     """Update room status — called by background task after negotiation finishes."""
     async with aiosqlite.connect(DB_PATH) as db:

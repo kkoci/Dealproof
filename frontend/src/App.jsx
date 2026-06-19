@@ -9,6 +9,7 @@ import DealConfig from './pages/DealConfig.jsx'
 import NegotiationView from './pages/NegotiationView.jsx'
 import CredentialView from './pages/CredentialView.jsx'
 import PublicCredentialView from './pages/PublicCredentialView.jsx'
+import HistoryPage from './pages/HistoryPage.jsx'
 
 function NavBar() {
   const location = useLocation()
@@ -109,6 +110,7 @@ export default function App() {
         <Route path="/room/:room_id/negotiate" element={<NegotiationView />} />
         <Route path="/room/:room_id/credential" element={<CredentialView />} />
         <Route path="/verify/:deal_id" element={<PublicCredentialView />} />
+        <Route path="/history" element={<HistoryPage />} />
 
         {/* Legacy routes — old NavBar layout */}
         <Route element={<LegacyLayout />}>

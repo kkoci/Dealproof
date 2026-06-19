@@ -1187,6 +1187,31 @@ A hosted two-party deal room built on top of the existing FastAPI backend. Non-t
 seller and buyer can run an attested negotiation and each download a signed credential —
 no Swagger, no terminal.
 
+### Phase 7 — Deal History Dashboard ✅ Complete
+
+**Backend** (`app/api/room_routes.py`, `app/db.py`):
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /api/room/history` | `X-Room-Token` | Returns rooms where the token appears as seller or buyer token, ordered by `created_at` desc, cap 50 |
+
+New db function: `get_rooms_by_token(token: str) -> list[dict]` — queries `WHERE seller_token = ? OR buyer_token = ?`, returns `room_id`, `seller_name`, `buyer_name`, `status`, `deal_id`, `created_at`, and inferred `role` (seller/buyer).
+
+**Frontend**:
+
+| File | Purpose |
+|------|---------|
+| `pages/HistoryPage.jsx` | History dashboard at `/history` |
+| `App.jsx` | New route `/history` → `HistoryPage` |
+| `pages/LandingPage.jsx` | Added "View past deals →" link below CTA |
+
+`HistoryPage` scans all `dp_auth_*` keys in localStorage, batch-fetches each room's status in parallel (filtering expired tokens), and displays them newest-first. Each card shows: status badge, role badge (SELLER/BUYER), seller/buyer names, deal ID prefix, date, and a CTA:
+- Complete → "View Credential →" (`/verify/{deal_id}`)
+- Running/confirmed → "Rejoin Negotiation →" (`/room/{id}/negotiate`)
+- Other → "Open Room →" (`/room/{id}`)
+
+Empty state: document icon + "No deals yet." + "Start one →" link.
+
 ### Phase 6 — Public Credential Verification ✅ Complete
 
 **Backend** (`app/api/room_routes.py`):

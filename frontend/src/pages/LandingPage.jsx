@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useState, useEffect } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
 import { registerSeller } from '../api/roomApi.js'
 
 function LockIcon() {
@@ -130,6 +130,12 @@ export default function LandingPage() {
               Create Deal Room →
             </button>
             <p className="text-xs text-dp-muted font-mono">Seller registers first · Share a link · Buyer joins</p>
+            <Link
+              to="/history"
+              className="text-xs font-mono text-dp-muted/60 hover:text-dp-teal transition-colors mt-1"
+            >
+              View past deals →
+            </Link>
           </div>
         ) : (
           <form

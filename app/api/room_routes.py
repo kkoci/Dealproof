@@ -1,4 +1,4 @@
-"""Deal Room endpoints — Phase 1+2+3+5 (product/deal-room).
+"""Deal Room endpoints — Phase 1+2+3+5+7 (product/deal-room).
 
 Phase 1:
   POST /api/room/seller/register  — seller creates a room, gets a token + shareable URL
@@ -14,6 +14,9 @@ Phase 3:
 
 Phase 5:
   POST /api/room/{room_id}/dataset  — seller uploads CSV/JSON; returns Merkle root + quality preview
+
+Phase 7:
+  GET  /api/room/history            — returns rooms the token-holder participated in (X-Room-Token required)
 
 Tokens are random 64-char hex strings stored in the deal_rooms table.
 Auth uses the X-Room-Token header; the server resolves role from the token value.
@@ -417,3 +420,18 @@ async def start_deal(
     logger.info(f"Room {room_id}: negotiation started in background (deal {deal_id})")
 
     return {"deal_id": deal_id, "status": "running"}
+
+
+# ── Phase 7 — Deal History ──────────────────────────────────────────────────
+
+@router.get("/history")
+async def get_room_history(
+    x_room_token: str = Header(alias="x-room-token"),
+) -> list[dict]:
+    """
+    Return all rooms the token-holder participated in (seller or buyer).
+    Since tokens are room-scoped, this is most useful combined with the
+    frontend's localStorage scan across all stored tokens.
+    """
+    rooms = await db.get_rooms_by_token(x_room_token)
+    return rooms
