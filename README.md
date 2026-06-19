@@ -1112,7 +1112,7 @@ Dealproof/
 | S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
 | S2 | ConfigInspectorAgent + ControlEvaluatorAgent | ✅ Complete |
 | S3 | SOC2ControlCredential schema + evaluate + GET audit endpoints + TDX attestation | ✅ Complete |
-| S4 | Synthetic config fixtures + tests | 🔜 Pending |
+| S4 | Synthetic config fixtures + tests | ✅ Complete |
 | S5 | Frontend: compliance dashboard | 🔜 Pending |
 
 ---
