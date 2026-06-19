@@ -320,6 +320,90 @@ async def get_corpus_by_root(corpus_root: str) -> dict | None:
     }
 
 
+async def create_fundraising_diligences_table() -> None:
+    """Create the fundraising_diligences table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fundraising_diligences (
+                diligence_id         TEXT PRIMARY KEY,
+                company_name         TEXT NOT NULL,
+                round_label          TEXT,
+                metrics_corpus_root  TEXT NOT NULL,
+                metrics_hashes_json  TEXT NOT NULL,
+                metric_evidence_json TEXT,
+                credential_json      TEXT,
+                quality_hash         TEXT,
+                tee_quote            TEXT,
+                status               TEXT DEFAULT 'pending',
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def create_diligence(
+    diligence_id: str,
+    company_name: str,
+    round_label: str | None,
+    corpus_root: str,
+    record_hashes: list[str],
+    metric_evidence: dict,
+) -> None:
+    """Insert a new fundraising diligence record."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO fundraising_diligences
+              (diligence_id, company_name, round_label, metrics_corpus_root,
+               metrics_hashes_json, metric_evidence_json, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+            """,
+            (
+                diligence_id,
+                company_name,
+                round_label,
+                corpus_root,
+                json.dumps(record_hashes),
+                json.dumps(metric_evidence),
+            ),
+        )
+        await db.commit()
+
+
+async def get_diligence(diligence_id: str) -> dict | None:
+    """Fetch a fundraising diligence record by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT diligence_id, company_name, round_label, metrics_corpus_root,
+                   metrics_hashes_json, metric_evidence_json, credential_json,
+                   quality_hash, tee_quote, status, created_at
+            FROM fundraising_diligences WHERE diligence_id = ?
+            """,
+            (diligence_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "diligence_id": row[0],
+        "company_name": row[1],
+        "round_label": row[2],
+        "metrics_corpus_root": row[3],
+        "record_hashes": json.loads(row[4]) if row[4] else [],
+        "metric_evidence": json.loads(row[5]) if row[5] else {},
+        "credential": json.loads(row[6]) if row[6] else None,
+        "quality_hash": row[7],
+        "tee_quote": row[8],
+        "status": row[9],
+        "created_at": row[10],
+    }
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

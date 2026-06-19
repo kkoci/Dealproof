@@ -1108,6 +1108,12 @@ Dealproof/
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + `GET /api/ens/agents` | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **product/fundraising-credential** | **Fundraising Diligence Vertical** | |
+| F1 | `app/fundraising/` package — metrics hasher + ingest endpoint + DB table | ✅ Complete |
+| F2 | `MetricsInspectorAgent` (deterministic) + `MetricsEvaluatorAgent` (LLM) | 🔜 Pending |
+| F3 | `FundraisingDiligenceCredential` + evaluate endpoint + TDX attestation | 🔜 Pending |
+| F4 | Synthetic fixtures + `tests/test_fundraising.py` (18+ tests, SCAE scenarios) | 🔜 Pending |
+| F5 | Frontend: diligence dashboard + before/after demo view | 🔜 Pending |
 
 ---
 
