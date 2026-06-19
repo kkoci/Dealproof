@@ -330,6 +330,7 @@ async def create_compliance_audits_table() -> None:
                 org_name           TEXT NOT NULL,
                 config_corpus_root TEXT NOT NULL,
                 config_hashes_json TEXT NOT NULL,
+                configs_json       TEXT,
                 controls_json      TEXT,
                 credential_json    TEXT,
                 quality_hash       TEXT,
@@ -339,6 +340,11 @@ async def create_compliance_audits_table() -> None:
             )
             """
         )
+        # Safe migration for existing Phase S1 databases
+        try:
+            await db.execute("ALTER TABLE compliance_audits ADD COLUMN configs_json TEXT")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -347,16 +353,17 @@ async def create_audit(
     org_name: str,
     config_corpus_root: str,
     config_hashes_json: str,
+    configs_json: str = "",
 ) -> None:
     """Insert a new compliance audit row in 'pending' status."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO compliance_audits
-            (audit_id, org_name, config_corpus_root, config_hashes_json)
-            VALUES (?, ?, ?, ?)
+            (audit_id, org_name, config_corpus_root, config_hashes_json, configs_json)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (audit_id, org_name, config_corpus_root, config_hashes_json),
+            (audit_id, org_name, config_corpus_root, config_hashes_json, configs_json),
         )
         await db.commit()
 
@@ -392,8 +399,8 @@ async def get_audit(audit_id: str) -> dict | None:
         async with db.execute(
             """
             SELECT audit_id, org_name, config_corpus_root, config_hashes_json,
-                   controls_json, credential_json, quality_hash, tee_quote,
-                   status, created_at
+                   configs_json, controls_json, credential_json, quality_hash,
+                   tee_quote, status, created_at
             FROM compliance_audits WHERE audit_id = ?
             """,
             (audit_id,),
@@ -407,12 +414,13 @@ async def get_audit(audit_id: str) -> dict | None:
         "org_name":           row[1],
         "config_corpus_root": row[2],
         "config_hashes":      json.loads(row[3]) if row[3] else [],
-        "controls":           json.loads(row[4]) if row[4] else None,
-        "credential":         json.loads(row[5]) if row[5] else None,
-        "quality_hash":       row[6],
-        "tee_quote":          row[7],
-        "status":             row[8],
-        "created_at":         row[9],
+        "configs":            json.loads(row[4]) if row[4] else [],
+        "controls":           json.loads(row[5]) if row[5] else None,
+        "credential":         json.loads(row[6]) if row[6] else None,
+        "quality_hash":       row[7],
+        "tee_quote":          row[8],
+        "status":             row[9],
+        "created_at":         row[10],
     }
 
 

@@ -1111,7 +1111,7 @@ Dealproof/
 | **product/continuous-soc2** | **Continuous SOC 2 Assurance** | |
 | S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
 | S2 | ConfigInspectorAgent + ControlEvaluatorAgent | ✅ Complete |
-| S3 | SOC2ControlCredential + TDX attestation | 🔜 Pending |
+| S3 | SOC2ControlCredential schema + evaluate + GET audit endpoints + TDX attestation | ✅ Complete |
 | S4 | Synthetic config fixtures + tests | 🔜 Pending |
 | S5 | Frontend: compliance dashboard | 🔜 Pending |
 
@@ -1143,6 +1143,54 @@ New vertical alongside the negotiation flow. A SaaS startup uploads their AWS IA
 
 **New files:** `app/soc2/config_hasher.py`, `app/api/soc2_routes.py`
 **DB:** `compliance_audits` table in existing SQLite
+
+### Phase S2 — Inspector + Evaluator Agents ✅ Complete
+
+**ConfigInspectorAgent** (`app/soc2/agents/config_inspector.py`) — deterministic, no LLM:
+
+| Control | Check |
+|---------|-------|
+| CC6.1 | MFA enforcement condition present in IAM policies |
+| CC6.2 | No Allow statements with both Action `*` and Resource `*` |
+| CC6.3 | CloudTrail data events or S3 access logging enabled |
+| CC6.6 | No S3 buckets with public ACLs or public-access-block disabled |
+| CC7.1 | CloudTrail trail exists and `IsLogging: true` |
+| CC7.2 | CloudWatch alarms or SNS alerts configured |
+
+Hard boolean results are authoritative — the LLM cannot override them.
+
+**ControlEvaluatorAgent** (`app/soc2/agents/control_evaluator.py`) — LLM qualitative layer (mirrors `AuditorAgent`):
+- Receives hard findings as established facts; adds qualitative context and risk notes only
+- `effective` field in LLM response is always overwritten by the inspector result
+- Non-fatal: if it fails, the credential is built from hard findings only
+
+### Phase S3 — SOC2ControlCredential + TDX Attestation ✅ Complete
+
+**New endpoints:**
+
+```
+POST /api/soc2/audits/{audit_id}/evaluate
+  → runs ConfigInspectorAgent → ControlEvaluatorAgent (non-fatal) → builds SOC2ControlCredential
+  → SHA-256(credential) → sign_result({credential_hash, corpus_root, audit_id}) → TDX quote
+  → persists, returns AuditEvaluateResponse
+
+GET  /api/soc2/audits/{audit_id}
+  → status + credential + tee_quote (if complete)
+```
+
+**SOC2ControlCredential schema** (`app/soc2/schemas.py`):
+```
+audit_id, org_name, corpus_root,
+controls_assessed, control_findings (ControlFinding[]),
+overall_assessment, material_weaknesses, significant_deficiencies,
+all_controls_effective, credential_hash, issued_at, tee_attested
+```
+
+**TDX report_data** = SHA-256 of `{credential_hash, corpus_root, audit_id, all_controls_effective}`
+
+**Evaluate is idempotent** — calling it twice returns the stored credential.
+
+**DB:** `configs_json` column added to `compliance_audits` (stored at ingest, read at evaluate — no re-submission needed).
 
 ---
 

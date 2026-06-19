@@ -226,7 +226,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | **product/continuous-soc2** | **Continuous SOC 2 Assurance** | |
 | S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
 | S2 | ConfigInspectorAgent + ControlEvaluatorAgent | ✅ Complete |
-| S3 | SOC2ControlCredential + TDX attestation | 🔜 Pending |
+| S3 | SOC2ControlCredential schema + evaluate + GET audit endpoints + TDX attestation | ✅ Complete |
 | S4 | Synthetic config fixtures + tests | 🔜 Pending |
 | S5 | Frontend: compliance dashboard | 🔜 Pending |
 
@@ -241,10 +241,14 @@ New vertical mounted under `/api/soc2/` — ingests cloud infrastructure configs
 ### Key files
 
 ```
-app/soc2/__init__.py           Package marker
-app/soc2/config_hasher.py      hash_config_file(), compute_config_corpus_root(), extract_control_evidence()
-app/api/soc2_routes.py         POST /api/soc2/audits/ingest (Phase S1)
-app/db.py                      create_compliance_audits_table(), create_audit(), update_audit(), get_audit()
+app/soc2/__init__.py                   Package marker
+app/soc2/config_hasher.py             hash_config_file(), compute_config_corpus_root(), extract_control_evidence()
+app/soc2/agents/__init__.py            Package marker
+app/soc2/agents/config_inspector.py   ConfigInspectorAgent — deterministic CC6/CC7 checks (no LLM)
+app/soc2/agents/control_evaluator.py  ControlEvaluatorAgent — LLM qualitative layer (non-fatal)
+app/soc2/schemas.py                   ControlFinding, SOC2ControlCredential (Pydantic)
+app/api/soc2_routes.py                POST /ingest, POST /{id}/evaluate, GET /{id}
+app/db.py                             create_compliance_audits_table(), create_audit(), update_audit(), get_audit()
 ```
 
 ### Controls in scope
@@ -287,6 +291,44 @@ Config JSON → ConfigInspectorAgent (deterministic, no LLM) → hard boolean pe
 - Adds qualitative context, risk notes, remediation advice only
 - LLM `effective` field is always overwritten with the hard finding value
 - Returns `None` on failure (non-fatal)
+- `max_tokens=2048` (6 control assessments require enough room; markdown fence stripping + JSON slice extraction for robustness)
+
+### Phase S3 — SOC2ControlCredential + TDX Attestation ✅ Complete
+
+**Endpoints added to `app/api/soc2_routes.py`:**
+
+```
+POST /api/soc2/audits/{audit_id}/evaluate
+  1. fetch audit + stored configs from DB
+  2. ConfigInspectorAgent.inspect(configs) → hard_findings
+  3. ControlEvaluatorAgent.evaluate(...) → evaluation (non-fatal)
+  4. build SOC2ControlCredential, compute credential_hash
+  5. sign_result({credential_hash, corpus_root, audit_id, all_controls_effective})
+  6. persist (status → complete), return AuditEvaluateResponse
+
+GET /api/soc2/audits/{audit_id}
+  → {audit_id, org_name, corpus_root, status, created_at, credential, tee_quote}
+```
+
+**Idempotent:** calling `/evaluate` on an already-complete audit returns the stored result without re-running.
+
+**SOC2ControlCredential schema** (`app/soc2/schemas.py`):
+
+```python
+class ControlFinding(BaseModel):
+    control_id, hard_finding, evidence_snippets, effective, qualitative_assessment, risk_notes
+
+class SOC2ControlCredential(BaseModel):
+    credential_type = "SOC2ControlCredential"
+    audit_id, org_name, corpus_root, controls_assessed, control_findings,
+    overall_assessment, material_weaknesses, significant_deficiencies,
+    all_controls_effective, credential_hash, issued_at, tee_attested
+```
+
+**TDX report_data** = SHA-256 of `{credential_hash, corpus_root, audit_id, all_controls_effective}`
+
+**`configs_json` DB column**: stored at ingest time — evaluate endpoint reads configs from DB,
+no client re-submission needed. Safe ALTER TABLE migration for existing Phase S1 databases.
 
 ---
 
