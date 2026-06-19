@@ -735,3 +735,25 @@ Post-deal actions: "← Start a new deal", "Export for audit →" (JSON download
 `App.jsx`: added `/room/:room_id/credential` → `CredentialView`.
 
 **Stop after Phase 4 — wait for instructions before building Phase 5 (Dataset Upload).**
+
+### Phase 5 — Dataset Upload ✅ Complete
+
+New backend endpoint in `app/api/room_routes.py`:
+- `POST /api/room/{room_id}/dataset` — seller only; accepts `.csv`, `.json`, `.jsonl` up to 50 MB
+  - `_chunk_and_hash()`: splits into 1 MB chunks → SHA-256 each → `compute_merkle_root()`
+  - `_quality_preview()`: parses up to 10,000 rows → null rates, completeness, issues, verdict
+  - Returns: `corpus_root`, `seller_proof`, `file_size_bytes`, `chunk_count`, `filename`, `quality_preview`
+- Updated `POST /{room_id}/start`: uses `corpus_root` + `seller_proof` + `quality_metrics` from `deal_payload` if present; falls back to description-hash for no-upload path
+- `DataQualityMetrics` now imported and constructed in `/start` from `quality_metrics` dict
+- `python-multipart==0.0.32` added to `requirements.txt`
+
+Schema changes in `app/api/room_schemas.py`:
+- `DealConfigRequest` gains optional: `corpus_root: str | None`, `seller_proof: dict | None`, `quality_metrics: dict | None`
+
+New `uploadDataset(roomId, token, file)` in `frontend/src/api/roomApi.js` (raw FormData fetch, no Content-Type header).
+
+Frontend changes in `frontend/src/pages/DealConfig.jsx`:
+- Added `DatasetUpload` component (above seller form): drag-and-drop zone, auto-upload on file select, quality preview display
+- `SellerConfigForm` gains `uploadResult` state + `useEffect` that auto-enables quality toggle and pre-fills thresholds
+- `handleSave` includes `corpus_root`, `seller_proof`, `quality_metrics` in the config payload
+- No-upload path (no file) is fully unaffected

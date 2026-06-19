@@ -1,4 +1,4 @@
-"""Deal Room endpoints — Phase 1+2+3 (product/deal-room).
+"""Deal Room endpoints — Phase 1+2+3+5 (product/deal-room).
 
 Phase 1:
   POST /api/room/seller/register  — seller creates a room, gets a token + shareable URL
@@ -12,17 +12,22 @@ Phase 2:
 Phase 3:
   POST /api/room/{room_id}/start    — fires negotiation as a background task; idempotent
 
+Phase 5:
+  POST /api/room/{room_id}/dataset  — seller uploads CSV/JSON; returns Merkle root + quality preview
+
 Tokens are random 64-char hex strings stored in the deal_rooms table.
 Auth uses the X-Room-Token header; the server resolves role from the token value.
 """
+import csv
 import hashlib
+import io
 import json
 import logging
 import secrets
 import time
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Header
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Header, UploadFile
 
 from app.api.room_schemas import (
     BuyerJoinResponse,
@@ -34,8 +39,9 @@ from app.api.room_schemas import (
     SellerRegisterRequest,
 )
 import app.db as db
-from app.api.schemas import DealCreate
+from app.api.schemas import DealCreate, DataQualityMetrics
 from app.api.routes import _negotiate_deal
+from app.props.verifier import compute_merkle_root
 from app.config import settings
 
 router = APIRouter(prefix="/api/room", tags=["room"])
@@ -189,6 +195,129 @@ async def confirm_deal(
     )
 
 
+# ── Phase 5 helpers + endpoint ────────────────────────────────────────────
+
+_MAX_FILE_BYTES = 50 * 1024 * 1024   # 50 MB
+_CHUNK_BYTES    = 1024 * 1024         # 1 MB per Merkle chunk
+_MAX_PREVIEW_ROWS = 10_000
+
+
+def _chunk_and_hash(data: bytes) -> tuple[list[str], str]:
+    """Split data into 1 MB chunks, SHA-256 each, compute flat Merkle root."""
+    payload = data or b"\x00"
+    pieces = [payload[i : i + _CHUNK_BYTES] for i in range(0, len(payload), _CHUNK_BYTES)]
+    chunk_hashes = [hashlib.sha256(p).hexdigest() for p in pieces]
+    return chunk_hashes, compute_merkle_root(chunk_hashes)
+
+
+def _quality_preview(data: bytes, filename: str) -> dict:
+    """Parse CSV / JSON up to _MAX_PREVIEW_ROWS rows; return basic quality metrics."""
+    fname = filename.lower()
+    rows: list[dict] = []
+    columns: list[str] = []
+
+    try:
+        text = data.decode("utf-8", errors="replace")
+        if fname.endswith(".csv"):
+            reader = csv.DictReader(io.StringIO(text))
+            columns = list(reader.fieldnames or [])
+            for i, row in enumerate(reader):
+                if i >= _MAX_PREVIEW_ROWS:
+                    break
+                rows.append(dict(row))
+        elif fname.endswith(".json"):
+            parsed = json.loads(text)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                columns = list(parsed[0].keys())
+                rows = parsed[:_MAX_PREVIEW_ROWS]
+        elif fname.endswith(".jsonl"):
+            for i, line in enumerate(text.splitlines()):
+                if i >= _MAX_PREVIEW_ROWS or not line.strip():
+                    break
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    if not columns:
+                        columns = list(obj.keys())
+                    rows.append(obj)
+    except Exception as exc:
+        return {"parse_error": str(exc), "row_count": 0, "column_names": [], "null_rates": {}}
+
+    if not rows or not columns:
+        return {"row_count": len(rows), "column_names": columns, "null_rates": {},
+                "completeness_score": 1.0, "quality_issues": [], "overall_quality": "high"}
+
+    row_count = len(rows)
+    null_rates: dict[str, float] = {}
+    for col in columns:
+        n = sum(1 for r in rows if r.get(col) is None or r.get(col) == "")
+        null_rates[col] = round(n / row_count, 4)
+
+    completeness = 1.0 - (sum(null_rates.values()) / len(null_rates)) if null_rates else 1.0
+    quality_issues = [
+        f"{rate * 100:.1f}% null rate in '{col}'"
+        for col, rate in sorted(null_rates.items(), key=lambda x: -x[1])
+        if rate > 0.05
+    ][:10]
+    overall = "high" if completeness >= 0.9 else "medium" if completeness >= 0.7 else "low"
+
+    return {
+        "row_count": row_count,
+        "column_names": columns,
+        "null_rates": null_rates,
+        "completeness_score": round(completeness, 4),
+        "quality_issues": quality_issues,
+        "overall_quality": overall,
+        "preview_capped": len(rows) == _MAX_PREVIEW_ROWS,
+    }
+
+
+@router.post("/{room_id}/dataset")
+async def upload_dataset(
+    room_id: str,
+    file: UploadFile = File(...),
+    x_room_token: str = Header(alias="x-room-token"),
+) -> dict:
+    """
+    Seller uploads a CSV or JSON dataset.
+    Returns corpus_root (Merkle root = data_hash) + seller_proof + quality preview.
+    """
+    room = await db.get_room(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room["seller_token"] != x_room_token:
+        raise HTTPException(status_code=403, detail="Seller token required")
+    if room["status"] not in ("waiting", "ready", "configuring"):
+        raise HTTPException(status_code=409, detail=f"Cannot upload in room status '{room['status']}'")
+
+    data = await file.read()
+    if len(data) > _MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {_MAX_FILE_BYTES // 1024 // 1024} MB)")
+
+    fname = file.filename or "dataset"
+    if not any(fname.lower().endswith(ext) for ext in (".csv", ".json", ".jsonl")):
+        raise HTTPException(status_code=415, detail="Unsupported file type. Allowed: .csv, .json, .jsonl")
+
+    chunk_hashes, corpus_root = _chunk_and_hash(data)
+    seller_proof = {
+        "root_hash": corpus_root,
+        "chunk_hashes": chunk_hashes,
+        "chunk_count": len(chunk_hashes),
+        "algorithm": "sha256",
+    }
+    quality_preview = _quality_preview(data, fname)
+
+    logger.info(f"Room {room_id}: dataset uploaded — {len(data)} bytes, {len(chunk_hashes)} chunks, root {corpus_root[:16]}…")
+
+    return {
+        "corpus_root": corpus_root,
+        "seller_proof": seller_proof,
+        "file_size_bytes": len(data),
+        "chunk_count": len(chunk_hashes),
+        "filename": fname,
+        "quality_preview": quality_preview,
+    }
+
+
 # ── Phase 3 endpoint ───────────────────────────────────────────────────────
 
 async def _negotiate_and_complete_room(room_id: str, deal_id: str, deal_create: DealCreate) -> None:
@@ -229,8 +358,20 @@ async def start_deal(
     raw = json.loads(room["deal_payload"])
     deal_id = str(uuid.uuid4())
 
-    # Derive data_hash from description — placeholder until Phase 5 dataset upload
-    data_hash = hashlib.sha256(raw["data_description"].encode()).hexdigest()
+    # Phase 5: use corpus_root from uploaded dataset if present; fall back to description hash
+    data_hash = raw.get("corpus_root") or hashlib.sha256(raw["data_description"].encode()).hexdigest()
+
+    # Phase 5: include seller_proof for Props verification if dataset was uploaded
+    seller_proof = raw.get("seller_proof") or None
+
+    # Phase 5: reconstruct DataQualityMetrics if quality_metrics present in payload
+    quality_metrics = None
+    qm_raw = raw.get("quality_metrics")
+    if qm_raw and isinstance(qm_raw, dict):
+        try:
+            quality_metrics = DataQualityMetrics(**qm_raw)
+        except Exception:
+            pass  # non-fatal — proceed without quality context
 
     deal_create = DealCreate(
         data_description=raw["data_description"],
@@ -238,6 +379,8 @@ async def start_deal(
         floor_price=float(raw["floor_price"]),
         buyer_budget=float(raw["buyer_budget"]),
         data_hash=data_hash,
+        seller_proof=seller_proof,
+        quality_metrics=quality_metrics,
     )
 
     await db.create_deal(deal_id, deal_create.model_dump())

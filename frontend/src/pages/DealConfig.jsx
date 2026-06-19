@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getRoomStatus, saveRoomConfig, confirmRoom } from '../api/roomApi.js'
+import { getRoomStatus, saveRoomConfig, confirmRoom, uploadDataset } from '../api/roomApi.js'
 import { useAuth } from '../hooks/useAuth.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -209,6 +209,148 @@ function BuyerSummary({ config, status, onConfirm, confirming, confirmError, alr
   )
 }
 
+// ── Dataset upload (seller only, Phase 5) ─────────────────────────────────
+
+function DatasetUpload({ roomId, token, uploadResult, onUpload }) {
+  const [dragging, setDragging] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
+  const inputRef = useRef(null)
+
+  async function handleFile(file) {
+    if (!file) return
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const result = await uploadDataset(roomId, token, file)
+      onUpload(result)
+    } catch (err) {
+      setUploadError(err.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const preview = uploadResult?.quality_preview
+  const verdict = preview?.overall_quality
+  const verdictColor = verdict === 'high' ? 'text-dp-teal' : verdict === 'medium' ? 'text-dp-amber' : 'text-dp-red'
+
+  return (
+    <div className="bg-dp-surface border border-dp-border rounded-lg overflow-hidden">
+      <div className="px-5 py-3 border-b border-dp-border flex items-center justify-between">
+        <SectionLabel>Dataset Upload</SectionLabel>
+        <div className="flex items-center gap-2">
+          {uploadResult && (
+            <span className="text-xs font-mono text-dp-teal">✓ Uploaded</span>
+          )}
+          <span className="text-xs font-mono text-dp-muted/60">optional</span>
+        </div>
+      </div>
+
+      <div className="px-5 py-4">
+        {!uploadResult ? (
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true) }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]) }}
+            onClick={() => inputRef.current?.click()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
+              ${dragging ? 'border-dp-teal bg-dp-teal/5' : 'border-dp-border hover:border-dp-teal/50 hover:bg-dp-teal/5'}`}
+          >
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".csv,.json,.jsonl"
+              className="hidden"
+              onChange={e => handleFile(e.target.files[0])}
+            />
+            {uploading ? (
+              <div className="flex items-center justify-center gap-2 text-dp-muted font-mono text-sm">
+                <span className="w-2 h-2 rounded-full bg-dp-teal animate-pulse" />
+                Computing Merkle root…
+              </div>
+            ) : (
+              <>
+                <p className="text-dp-muted font-mono text-sm mb-1">
+                  Drop CSV or JSON here, or click to browse
+                </p>
+                <p className="text-xs text-dp-muted/50 font-mono">.csv · .json · .jsonl · max 50 MB</p>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* Corpus root badge */}
+            <div className="flex items-center justify-between py-2 px-3 bg-dp-bg border border-dp-teal/30 rounded">
+              <span className="text-xs font-mono text-dp-muted">corpus_root</span>
+              <span className="text-xs font-mono text-dp-teal">
+                {uploadResult.corpus_root.slice(0, 14)}…{uploadResult.corpus_root.slice(-8)}
+              </span>
+            </div>
+
+            {/* File stats */}
+            <div className="flex flex-wrap items-center gap-4 text-xs font-mono text-dp-muted">
+              <span>{uploadResult.filename}</span>
+              <span>{(uploadResult.file_size_bytes / 1024).toFixed(0)} KB</span>
+              <span>{uploadResult.chunk_count} chunk{uploadResult.chunk_count !== 1 ? 's' : ''}</span>
+              {preview?.row_count > 0 && (
+                <span>{preview.row_count.toLocaleString()} rows{preview.preview_capped ? '+' : ''}</span>
+              )}
+            </div>
+
+            {/* Quality summary */}
+            {preview && !preview.parse_error && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-dp-bg border border-dp-border rounded p-3">
+                    <p className="text-xs font-mono text-dp-muted mb-1">COMPLETENESS</p>
+                    <p className={`text-lg font-mono font-bold ${verdictColor}`}>
+                      {preview.completeness_score != null
+                        ? `${(preview.completeness_score * 100).toFixed(1)}%`
+                        : '—'}
+                    </p>
+                  </div>
+                  <div className="bg-dp-bg border border-dp-border rounded p-3">
+                    <p className="text-xs font-mono text-dp-muted mb-1">QUALITY</p>
+                    <p className={`text-lg font-mono font-bold uppercase ${verdictColor}`}>
+                      {verdict || '—'}
+                    </p>
+                  </div>
+                </div>
+
+                {preview.quality_issues?.length > 0 && (
+                  <div className="space-y-1">
+                    {preview.quality_issues.slice(0, 3).map((issue, i) => (
+                      <p key={i} className="text-xs font-mono text-dp-amber">↳ {issue}</p>
+                    ))}
+                    <p className="text-xs font-mono text-dp-muted/60">
+                      Quality metrics pre-filled below ↓
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => { onUpload(null); if (inputRef.current) inputRef.current.value = '' }}
+              className="text-xs font-mono text-dp-muted hover:text-dp-red transition-colors"
+            >
+              Remove and re-upload
+            </button>
+          </div>
+        )}
+
+        {uploadError && (
+          <div className="mt-3 bg-dp-red/10 border border-dp-red/40 text-dp-red text-xs font-mono rounded px-3 py-2">
+            {uploadError}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Seller config form ─────────────────────────────────────────────────────
 
 const EMPTY_FORM = {
@@ -227,6 +369,7 @@ const EMPTY_FORM = {
 }
 
 function SellerConfigForm({ roomId, token, existingPayload, status, onSaved, onConfirm, confirming, confirmError, alreadyConfirmed }) {
+  const [uploadResult, setUploadResult] = useState(null)
   const [form, setForm] = useState(() => {
     if (!existingPayload) return EMPTY_FORM
     return {
@@ -248,6 +391,23 @@ function SellerConfigForm({ roomId, token, existingPayload, status, onSaved, onC
   const [saveError, setSaveError] = useState(null)
   const [saved, setSaved] = useState(!!existingPayload)
 
+  // Auto-populate quality fields from upload preview
+  useEffect(() => {
+    const preview = uploadResult?.quality_preview
+    if (!preview || preview.parse_error) return
+    const maxNull = Object.values(preview.null_rates || {}).reduce((a, b) => Math.max(a, b), 0)
+    setForm(f => ({
+      ...f,
+      quality_enabled: true,
+      quality_completeness_min: preview.completeness_score != null
+        ? Math.max(0, preview.completeness_score - 0.05).toFixed(2)
+        : f.quality_completeness_min,
+      quality_null_rate_threshold: maxNull > 0
+        ? Math.min(maxNull + 0.05, 1).toFixed(2)
+        : f.quality_null_rate_threshold,
+    }))
+  }, [uploadResult])
+
   const set = (field) => (e) => {
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value
     setForm(f => ({ ...f, [field]: val }))
@@ -259,6 +419,14 @@ function SellerConfigForm({ roomId, token, existingPayload, status, onSaved, onC
     setSaving(true)
     setSaveError(null)
     try {
+      const preview = uploadResult?.quality_preview
+      const qualityMetrics = (form.quality_enabled && preview && !preview.parse_error) ? {
+        row_count:    preview.row_count,
+        column_names: preview.column_names,
+        null_rates:   preview.null_rates || {},
+        schema_valid: form.quality_schema_consistency,
+      } : null
+
       await saveRoomConfig(roomId, token, {
         data_description:             form.data_description.trim(),
         dataset_type:                 form.dataset_type,
@@ -272,6 +440,10 @@ function SellerConfigForm({ roomId, token, existingPayload, status, onSaved, onC
         quality_schema_consistency:   form.quality_schema_consistency,
         escrow_enabled:               form.escrow_enabled,
         escrow_eth_address:           form.escrow_eth_address.trim() || null,
+        // Phase 5: dataset upload — included when seller uploaded a file
+        corpus_root:     uploadResult?.corpus_root || null,
+        seller_proof:    uploadResult?.seller_proof || null,
+        quality_metrics: qualityMetrics,
       })
       setSaved(true)
       onSaved()
@@ -286,6 +458,14 @@ function SellerConfigForm({ roomId, token, existingPayload, status, onSaved, onC
 
   return (
     <form onSubmit={handleSave} className="space-y-6">
+      {/* Dataset upload — Phase 5 */}
+      <DatasetUpload
+        roomId={roomId}
+        token={token}
+        uploadResult={uploadResult}
+        onUpload={(result) => { setUploadResult(result); setSaved(false) }}
+      />
+
       {/* Data details */}
       <div className="bg-dp-surface border border-dp-border rounded-lg p-5 space-y-4">
         <SectionLabel>Data Details</SectionLabel>

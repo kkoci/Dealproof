@@ -61,6 +61,10 @@ class DealConfigRequest(BaseModel):
     quality_schema_consistency: bool = True
     escrow_enabled: bool = False
     escrow_eth_address: Optional[str] = None
+    # Phase 5: dataset upload result — populated by POST /dataset before config is saved
+    corpus_root: Optional[str] = None        # Merkle root of uploaded file (used as data_hash)
+    seller_proof: Optional[dict] = None      # chunk_hashes + root_hash for Props verification
+    quality_metrics: Optional[dict] = None   # DataQualityMetrics-shaped dict from quality preview
 
 
 class ConfirmResponse(BaseModel):

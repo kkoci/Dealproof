@@ -1,0 +1,10 @@
+id,temperature,pressure_hpa,humidity_pct,sensor_status,label
+1,22.4,1013.2,65.1,ok,normal
+2,23.1,1012.8,67.3,ok,normal
+3,,1011.5,72.0,ok,normal
+4,19.8,,58.4,ok,normal
+5,21.2,1014.1,,ok,anomaly
+6,35.7,1008.3,88.2,fault,anomaly
+7,,1009.1,81.0,ok,anomaly
+8,20.5,1013.7,63.2,ok,normal
+9,21.8,,61.5,ok,normal

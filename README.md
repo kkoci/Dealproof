@@ -1187,6 +1187,28 @@ A hosted two-party deal room built on top of the existing FastAPI backend. Non-t
 seller and buyer can run an attested negotiation and each download a signed credential —
 no Swagger, no terminal.
 
+### Phase 5 — Dataset Upload ✅ Complete
+
+**Backend** (`app/api/room_routes.py`):
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /api/room/{id}/dataset` | `X-Room-Token` (seller) | Upload CSV/JSON → Merkle hash → quality preview |
+
+- Splits file into 1 MB chunks, SHA-256 each, computes flat Merkle root via `compute_merkle_root()`
+- Parses up to 10,000 rows for quality preview: row count, column names, null rates per column, completeness, issues, overall quality verdict
+- Returns `corpus_root` (used as `data_hash`), `seller_proof` (ready for Props verification), `quality_preview`
+- `POST /{id}/start` updated to use `corpus_root` + `seller_proof` + `quality_metrics` from `deal_payload` if present; falls back to SHA-256 of description for no-upload path
+- `python-multipart` added to `requirements.txt`
+
+**Frontend** (added to `frontend/src/pages/DealConfig.jsx`):
+- `DatasetUpload` component above the seller form: drag-and-drop or click-to-browse dropzone
+- Shows corpus root hash, file stats, completeness %, quality verdict, and top null-rate issues after upload
+- Auto-enables quality metrics toggle and pre-fills thresholds from the upload preview
+- Includes `corpus_root`, `seller_proof`, `quality_metrics` in the `saveRoomConfig` call
+- "Remove and re-upload" link to replace the file
+- No-upload path unaffected — form works identically without a file
+
 ### Phase 4 — Credential Display + Download ✅ Complete
 
 **Frontend** (`frontend/src/pages/CredentialView.jsx` at `/room/:room_id/credential`):

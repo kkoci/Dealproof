@@ -58,3 +58,24 @@ export function startRoomDeal(roomId, token) {
     headers: { 'x-room-token': token },
   })
 }
+
+export async function uploadDataset(roomId, token, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${BASE_URL}/api/room/${roomId}/dataset`, {
+    method: 'POST',
+    headers: { 'x-room-token': token },  // no Content-Type — browser sets multipart boundary
+    body: formData,
+  })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const e = await res.json()
+      if (typeof e.detail === 'string') msg = e.detail
+      else if (Array.isArray(e.detail)) msg = e.detail.map(d => d.msg || JSON.stringify(d)).join('; ')
+      else if (e.detail) msg = JSON.stringify(e.detail)
+    } catch {}
+    throw new Error(msg)
+  }
+  return res.json()
+}
