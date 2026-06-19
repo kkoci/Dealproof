@@ -1187,6 +1187,30 @@ A hosted two-party deal room built on top of the existing FastAPI backend. Non-t
 seller and buyer can run an attested negotiation and each download a signed credential —
 no Swagger, no terminal.
 
+### Phase 6 — Public Credential Verification ✅ Complete
+
+**Backend** (`app/api/room_routes.py`):
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `GET /api/room/{id}/public` | None | Returns `deal_id` + status for a completed room — no token required |
+
+Existing `GET /api/deals/{id}/status` and `GET /api/deals/{id}/dcap-verify` already require no auth, so no further backend changes were needed.
+
+**Frontend**:
+
+| File | Purpose |
+|------|---------|
+| `pages/PublicCredentialView.jsx` | Public credential card at `/verify/{deal_id}` — no auth required |
+| `App.jsx` | New route `/verify/:deal_id` → `PublicCredentialView` |
+| `pages/CredentialView.jsx` | SHARE button now copies `/verify/{deal_id}` (public URL) instead of the room URL |
+
+`PublicCredentialView` is identical in layout to `CredentialView` but:
+- Requires no session token — works for any external verifier
+- Shows a live **DCAP attestation status badge** at the top (fetches `/dcap-verify` on load): teal "VERIFIED BY INTEL TDX" in production, amber "TEE SIMULATION MODE" locally
+- Read-only: no Download button, only "COPY LINK"
+- Footer: "Verified by DealProof · Intel TDX · Phala Cloud CVM" + "Start your own deal →"
+
 ### Phase 5 — Dataset Upload ✅ Complete
 
 **Backend** (`app/api/room_routes.py`):

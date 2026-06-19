@@ -116,6 +116,28 @@ async def buyer_register(body: BuyerRegisterRequest) -> BuyerJoinResponse:
     )
 
 
+@router.get("/{room_id}/public")
+async def get_room_public(room_id: str) -> dict:
+    """
+    Public endpoint — no auth required.
+    Returns deal_id + agreed price for a completed room so external verifiers
+    can load the credential at /verify/{deal_id} without a session token.
+    """
+    room = await db.get_room(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room["status"] not in ("complete", "failed"):
+        raise HTTPException(status_code=404, detail="No completed deal in this room yet")
+    if not room["deal_id"]:
+        raise HTTPException(status_code=404, detail="No deal associated with this room")
+    return {
+        "room_id": room_id,
+        "deal_id": room["deal_id"],
+        "status": room["status"],
+        "seller_name": room["seller_name"],
+    }
+
+
 @router.get("/{room_id}/status", response_model=RoomStatusResponse)
 async def get_room_status(room_id: str) -> RoomStatusResponse:
     """Return current room status. Polled every 3 s by the UI."""

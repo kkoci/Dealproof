@@ -736,6 +736,22 @@ Post-deal actions: "← Start a new deal", "Export for audit →" (JSON download
 
 **Stop after Phase 4 — wait for instructions before building Phase 5 (Dataset Upload).**
 
+### Phase 6 — Public Credential Verification ✅ Complete
+
+New backend endpoint in `app/api/room_routes.py`:
+- `GET /api/room/{room_id}/public` — no auth; returns `deal_id` + `status` + `seller_name` for completed rooms only
+
+New frontend page: `frontend/src/pages/PublicCredentialView.jsx` at `/verify/:deal_id`:
+- No auth required — uses existing `getDealStatus()` + `getDcapVerification()` which need no token
+- `DcapBadge` component: fetches `/dcap-verify` on load; shows teal "VERIFIED BY INTEL TDX" (production) or amber "TEE SIMULATION MODE" (sim)
+- Same credential card as `CredentialView` but read-only (no download button)
+- "COPY LINK" copies current URL; footer "Start your own deal →" links to `/`
+
+`CredentialView.jsx` SHARE button updated: now copies `/verify/{deal_id}` (public URL) instead of the room credential URL.
+`App.jsx`: added `/verify/:deal_id` → `PublicCredentialView`.
+
+**Stop after Phase 6 — wait for instructions before building Phase 7 (Deal History).**
+
 ### Phase 5 — Dataset Upload ✅ Complete
 
 New backend endpoint in `app/api/room_routes.py`:
