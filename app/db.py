@@ -320,6 +320,102 @@ async def get_corpus_by_root(corpus_root: str) -> dict | None:
     }
 
 
+async def create_compliance_audits_table() -> None:
+    """Create the compliance_audits table if it does not exist (SOC 2 vertical)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS compliance_audits (
+                audit_id           TEXT PRIMARY KEY,
+                org_name           TEXT NOT NULL,
+                config_corpus_root TEXT NOT NULL,
+                config_hashes_json TEXT NOT NULL,
+                controls_json      TEXT,
+                credential_json    TEXT,
+                quality_hash       TEXT,
+                tee_quote          TEXT,
+                status             TEXT DEFAULT 'pending',
+                created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def create_audit(
+    audit_id: str,
+    org_name: str,
+    config_corpus_root: str,
+    config_hashes_json: str,
+) -> None:
+    """Insert a new compliance audit row in 'pending' status."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO compliance_audits
+            (audit_id, org_name, config_corpus_root, config_hashes_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (audit_id, org_name, config_corpus_root, config_hashes_json),
+        )
+        await db.commit()
+
+
+async def update_audit(
+    audit_id: str,
+    status: str,
+    controls_json: str | None = None,
+    credential_json: str | None = None,
+    quality_hash: str | None = None,
+    tee_quote: str | None = None,
+) -> None:
+    """Update a compliance audit row — only touches non-None fields."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE compliance_audits
+            SET status = ?,
+                controls_json   = COALESCE(?, controls_json),
+                credential_json = COALESCE(?, credential_json),
+                quality_hash    = COALESCE(?, quality_hash),
+                tee_quote       = COALESCE(?, tee_quote)
+            WHERE audit_id = ?
+            """,
+            (status, controls_json, credential_json, quality_hash, tee_quote, audit_id),
+        )
+        await db.commit()
+
+
+async def get_audit(audit_id: str) -> dict | None:
+    """Fetch a compliance audit row by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT audit_id, org_name, config_corpus_root, config_hashes_json,
+                   controls_json, credential_json, quality_hash, tee_quote,
+                   status, created_at
+            FROM compliance_audits WHERE audit_id = ?
+            """,
+            (audit_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+    return {
+        "audit_id":           row[0],
+        "org_name":           row[1],
+        "config_corpus_root": row[2],
+        "config_hashes":      json.loads(row[3]) if row[3] else [],
+        "controls":           json.loads(row[4]) if row[4] else None,
+        "credential":         json.loads(row[5]) if row[5] else None,
+        "quality_hash":       row[6],
+        "tee_quote":          row[7],
+        "status":             row[8],
+        "created_at":         row[9],
+    }
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

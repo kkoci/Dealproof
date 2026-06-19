@@ -1108,6 +1108,41 @@ Dealproof/
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + `GET /api/ens/agents` | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **product/continuous-soc2** | **Continuous SOC 2 Assurance** | |
+| S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
+| S2 | ConfigInspectorAgent + ControlEvaluatorAgent | 🔜 Pending |
+| S3 | SOC2ControlCredential + TDX attestation | 🔜 Pending |
+| S4 | Synthetic config fixtures + tests | 🔜 Pending |
+| S5 | Frontend: compliance dashboard | 🔜 Pending |
+
+---
+
+## Continuous SOC 2 Assurance (`product/continuous-soc2` branch)
+
+New vertical alongside the negotiation flow. A SaaS startup uploads their AWS IAM policies and CloudTrail config; the TEE evaluates six CC6/CC7 controls deterministically, then an LLM adds qualitative context. The result is a `SOC2ControlCredential` with a TDX attestation quote — verifiable proof of control effectiveness without exposing raw infrastructure secrets to the auditor.
+
+**Analogy to existing system:**
+
+| Negotiation | SOC 2 |
+|-------------|-------|
+| Buyer/Seller agents | ConfigInspectorAgent + ControlEvaluatorAgent |
+| πCreds credential | SOC2ControlCredential |
+| Transcript corpus hash | Config corpus Merkle root |
+
+### Phase S1 — Config Ingestion + Hashing ✅ Complete
+
+**Endpoint:** `POST /api/soc2/audits/ingest`
+
+**Input:** `org_name` + `configs[]` — each with `source` (e.g. `iam_policies`), `format`, `content` (raw JSON object)
+
+**Output:**
+- `corpus_root` — length-prefixed Merkle root over per-file SHA-256 hashes (same algorithm as `transcript_hasher.py`)
+- `config_hashes` — per-file hash entries
+- `control_evidence_preview` — deterministic text snippets per CC6/CC7 control (no LLM)
+- `status: "pending"` — evaluation runs in Phase S3
+
+**New files:** `app/soc2/config_hasher.py`, `app/api/soc2_routes.py`
+**DB:** `compliance_audits` table in existing SQLite
 
 ---
 

@@ -223,6 +223,47 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **product/continuous-soc2** | **Continuous SOC 2 Assurance** | |
+| S1 | Config ingestion + Merkle hashing + deterministic evidence extraction | ✅ Complete |
+| S2 | ConfigInspectorAgent + ControlEvaluatorAgent | 🔜 Pending |
+| S3 | SOC2ControlCredential + TDX attestation | 🔜 Pending |
+| S4 | Synthetic config fixtures + tests | 🔜 Pending |
+| S5 | Frontend: compliance dashboard | 🔜 Pending |
+
+---
+
+## SOC 2 Vertical (`product/continuous-soc2` branch)
+
+New vertical mounted under `/api/soc2/` — ingests cloud infrastructure configs (IAM, CloudTrail, S3, CloudWatch), evaluates CC6/CC7 controls inside the TEE, and emits a `SOC2ControlCredential` with a TDX attestation quote. Analogous to the negotiation flow but pointed at compliance evidence instead of deal transcripts.
+
+**Do not touch the existing negotiation flow, πCreds logic, or agent behavior.**
+
+### Key files
+
+```
+app/soc2/__init__.py           Package marker
+app/soc2/config_hasher.py      hash_config_file(), compute_config_corpus_root(), extract_control_evidence()
+app/api/soc2_routes.py         POST /api/soc2/audits/ingest (Phase S1)
+app/db.py                      create_compliance_audits_table(), create_audit(), update_audit(), get_audit()
+```
+
+### Controls in scope
+
+| Control | What | Evidence source |
+|---------|------|----------------|
+| CC6.1 | MFA enforced on all IAM users | `iam_policies` |
+| CC6.2 | No wildcard `*` policies | `iam_policies` |
+| CC6.3 | Access reviews logged | `cloudtrail_config` |
+| CC6.6 | No public S3 buckets | `bucket_policies` |
+| CC7.1 | CloudTrail active | `cloudtrail_config` |
+| CC7.2 | Alerts configured | `cloudwatch_alarms` |
+
+### Phase S1 — Config Ingestion + Hashing ✅ Complete
+
+`POST /api/soc2/audits/ingest` accepts `org_name` + `configs[]` (source/format/content).
+Returns `corpus_root` (length-prefixed Merkle root, same algorithm as `transcript_hasher.py`),
+per-file hashes, and `control_evidence_preview` — deterministic text snippets per control, no LLM.
+Persists to `compliance_audits` table in SQLite.
 
 ---
 
