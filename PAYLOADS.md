@@ -21,6 +21,7 @@ All payloads are copy-paste ready for `http://localhost:8000`.
 | Eval: summary-only corpus | `POST /api/transcripts/ingest` | [Synthetic evals](#synthetic-evals) |
 | IoT sensor dataset (quality-aware deal) | `POST /api/deals/run` | [Structured datasets](#structured-datasets) |
 | Full kitchen-sink (every field active) | `POST /api/deals/run` | [Full kitchen-sink payload](#full-kitchen-sink-payload) |
+| Skill deal — wedding photo style transfer | `POST /api/deals/skill` | [Skill deals](#skill-deals) |
 
 ---
 
@@ -939,3 +940,112 @@ Get the base64 value: `python3 -c "import base64; print(base64.b64encode(open('y
   "transcript": ["<NegotiationRound objects>"]
 }
 ```
+
+---
+
+## Skill deals
+
+`POST /api/deals/skill` — buyer and seller negotiate price and usage terms for running
+a seller-owned skill (style transfer, inference pipeline, etc.) against buyer-supplied input.
+On agreement the skill executes inside the TEE and the result is attested alongside πCreds.
+
+**Endpoint:** `POST /api/deals/skill`
+**Schema:** `SkillDealRequest`
+
+All paths must be **absolute** — the server resolves them relative to its working directory,
+which may differ from the shell. Use `$PWD` or full paths as shown below.
+
+### Request
+
+```json
+{
+  "skill_id": "wedding.photo.style.v1",
+  "skill_path": "<REPO_ROOT>/examples/johnny_wedding_pil.skill.json",
+  "tee_root": "<REPO_ROOT>/examples/dev_assets",
+  "buyer_input_path": "<REPO_ROOT>/examples/evals/wedding/fixtures/test_outdoor.jpg",
+  "asking_price": 25.0,
+  "minimum_acceptable_price": 15.0,
+  "buyer_budget": 30.0,
+  "usage_terms": "single_use"
+}
+```
+
+**Field notes:**
+
+| Field | Description |
+|-------|-------------|
+| `skill_path` | Absolute path to `*.skill.json`. Seller-controlled — defines the pipeline. |
+| `tee_root` | Replaces `/tee/skill/` prefix in skill asset paths. For `johnny_wedding_pil`, point at `examples/dev_assets` so LUTs resolve to `dev_assets/luts/johnny_portra_warm_v2.cube`. |
+| `buyer_input_path` | Buyer's input image. Output is written next to it as `{stem}_styled{ext}`. |
+| `asking_price` | Seller's opening price. Must be ≥ `minimum_acceptable_price`. |
+| `minimum_acceptable_price` | Seller floor — ArbitratorAgent will not go below this. Must be ≤ `buyer_budget`. |
+
+### PowerShell one-liner
+
+Replace `<REPO_ROOT>` with the full path to your Dealproof directory:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/deals/skill" -ContentType "application/json" -Body '{"skill_id":"wedding.photo.style.v1","skill_path":"C:/Users/kkoci/Documents/shaperotator/Dealproof/examples/johnny_wedding_pil.skill.json","tee_root":"C:/Users/kkoci/Documents/shaperotator/Dealproof/examples/dev_assets","buyer_input_path":"C:/Users/kkoci/Documents/shaperotator/Dealproof/examples/evals/wedding/fixtures/test_outdoor.jpg","asking_price":25.0,"minimum_acceptable_price":15.0,"buyer_budget":30.0,"usage_terms":"single_use"}'
+```
+
+### Expected negotiation transcript shape
+
+Agents negotiate over price and usage terms. Typical 2-round flow with this spread ($15 floor, $30 budget, $25 ask):
+
+```
+Round 1  seller → offer    $25.00   "Opening at standard asking price for single-use license."
+Round 1  buyer  → counter  $18.00   "Opening counter — single-use is limited scope, starts low to negotiate."
+Round 1  seller → counter  $22.00   "LoRA + LUTs + TEE privacy protection justify premium. Coming down from $25."
+Round 2  buyer  → accept   $20.00   "Fair middle ground. Accepting."
+```
+
+The seller knows its `minimum_acceptable_price` ($15) and the buyer knows its `buyer_budget` ($30),
+but neither knows the other's hard limit — same information asymmetry as standard data deals.
+
+### Expected DealResult
+
+Key fields in a successful skill deal response. Attestation blobs are truncated.
+
+```json
+{
+  "deal_id": "<uuid>",
+  "agreed": true,
+  "final_price": 20.0,
+  "terms": { "access_scope": "single_use", "duration_days": 1 },
+  "attestation": "sim_quote:<hex>",
+  "picreds": [
+    { "type": "DealProofCredential", "credential_type": "policy", "subject": "buyer_agent", "deal_id": "<uuid>", "code_hash": "<hex>", "issued_at": "<unix_ts>" },
+    { "type": "DealProofCredential", "credential_type": "policy", "subject": "seller_agent", "deal_id": "<uuid>", "code_hash": "<hex>", "issued_at": "<unix_ts>" },
+    { "type": "DealProofCredential", "credential_type": "conduct", "subject": "deal",         "deal_id": "<uuid>", "code_hash": "",    "issued_at": "<unix_ts>" }
+  ],
+  "picreds_hash": "<hex>",
+  "picreds_attested": true,
+  "audit_report": {
+    "genuine_negotiation": true,
+    "round_count": 2,
+    "final_price": 20.0,
+    "summary": "Both parties demonstrated authentic adversarial bargaining through multiple rounds, with the seller opening high at 25.0, the buyer countering low at 18.0, and a gradual convergence through meaningful incremental concessions.",
+    "credential_hash": "<hex>"
+  },
+  "audit_error": null,
+  "skill_execution_receipt": {
+    "skill_id": "johnny-wedding-style",
+    "input_sha256": "<sha256 of buyer input image>",
+    "output_sha256": "<sha256 of styled output image>",
+    "lora_sha256": "FILL_AT_PACKAGING_TIME",
+    "backend": "pil-style:local",
+    "pipeline_steps": ["normalize", "style_inference", "grade"],
+    "receipt_hash": "<sha256 of canonical receipt JSON>"
+  },
+  "arbitrated": false,
+  "transcript": ["<NegotiationRound objects — see above>"]
+}
+```
+
+**What to observe:**
+
+- `skill_execution_receipt` is only present on skill deals — absent from all standard `POST /api/deals/run` responses.
+- `attestation` covers `final_price + terms + skill_id + picreds_hash + skill_receipt_hash + audit_credential_hash` — a single TDX quote binding the negotiation conduct AND the execution proof (SN3).
+- `lora_sha256: "FILL_AT_PACKAGING_TIME"` is **expected and intentional** — the PIL-local variant is a stand-in for Ian's real style model. When real LoRA weights land, this field will carry an actual SHA-256. The attestation and negotiation architecture does not change.
+- Output image is written to `<input_stem>_styled<ext>` next to the input file (e.g. `test_outdoor_styled.jpg`).
+- `memory_attested`, `data_verification_attestation`, `dkim_verification`, and `quality_attested` are all absent or false for skill deals — those layers apply to standard data deals only.

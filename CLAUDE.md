@@ -230,7 +230,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | SN1 | `app/skills/runner.py` package + `SkillExecutionAgent` + `SkillExecutionReceipt` schema | ✅ Complete |
 | SN2 | `POST /api/deals/skill` endpoint + `SkillDealRequest` schema | ✅ Complete |
 | SN3 | Combined TDX attestation (`picreds_hash + skill_receipt_hash`) + `tests/test_skill_deals.py` | ✅ Complete |
-| SN4 | Demo payload in PAYLOADS.md + end-to-end walkthrough | 🔜 Pending |
+| SN4 | Demo payload in PAYLOADS.md + end-to-end walkthrough | ✅ Complete |
 
 ---
 

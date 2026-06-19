@@ -1116,7 +1116,7 @@ Dealproof/
 | SN1 | SkillExecutionAgent + `app/skills/runner.py` package + `SkillExecutionReceipt` schema | ✅ Complete |
 | SN2 | `POST /api/deals/skill` endpoint + `SkillDealRequest` schema + negotiation over price/terms | ✅ Complete |
 | SN3 | Combined TDX attestation — `picreds_hash + skill_receipt_hash` in `report_data` + tests | ✅ Complete |
-| SN4 | Demo payload in PAYLOADS.md + end-to-end walkthrough | 🔜 Pending |
+| SN4 | Demo payload in PAYLOADS.md + end-to-end walkthrough | ✅ Complete |
 
 ---
 
