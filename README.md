@@ -1113,7 +1113,7 @@ Dealproof/
 | S2 | ConfigInspectorAgent + ControlEvaluatorAgent | ✅ Complete |
 | S3 | SOC2ControlCredential schema + evaluate + GET audit endpoints + TDX attestation | ✅ Complete |
 | S4 | Synthetic config fixtures + tests | ✅ Complete |
-| S5 | Frontend: compliance dashboard | 🔜 Pending |
+| S5 | Frontend: compliance dashboard | ✅ Complete |
 
 ---
 

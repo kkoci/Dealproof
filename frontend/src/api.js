@@ -104,3 +104,32 @@ export function getDcapVerification(id) {
 export function getDealVerification(id) {
   return request(`/api/deals/${id}/verification`)
 }
+
+// ── SOC 2 ──────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/soc2/audits/ingest
+ * @param {{ org_name: string, configs: Array<{source,format,content}> }} body
+ */
+export function soc2Ingest(body) {
+  return request('/api/soc2/audits/ingest', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/soc2/audits/:id/evaluate
+ * @param {string} auditId
+ */
+export function soc2Evaluate(auditId) {
+  return request(`/api/soc2/audits/${auditId}/evaluate`, { method: 'POST' })
+}
+
+/**
+ * GET /api/soc2/audits/:id
+ * @param {string} auditId
+ */
+export function soc2GetAudit(auditId) {
+  return request(`/api/soc2/audits/${auditId}`)
+}

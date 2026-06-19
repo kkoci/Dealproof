@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from 're
 import Home from './pages/Home.jsx'
 import CreateDeal from './pages/CreateDeal.jsx'
 import DealView from './pages/DealView.jsx'
+import Soc2Audit from './pages/Soc2Audit.jsx'
 
 function NavBar() {
   const location = useLocation()
@@ -45,6 +46,16 @@ function NavBar() {
               }`}
             >
               New Deal
+            </Link>
+            <Link
+              to="/soc2"
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                location.pathname === '/soc2'
+                  ? 'bg-emerald-600/20 text-emerald-400'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+              }`}
+            >
+              SOC 2
             </Link>
             <a
               href={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/docs`}
@@ -90,6 +101,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/create" element={<CreateDeal />} />
             <Route path="/deal/:id" element={<DealView />} />
+            <Route path="/soc2" element={<Soc2Audit />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>
