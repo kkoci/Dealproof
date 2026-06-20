@@ -1,67 +1,29 @@
 import React from 'react'
-import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
-import Home from './pages/Home.jsx'
-import CreateDeal from './pages/CreateDeal.jsx'
-import DealView from './pages/DealView.jsx'
+import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom'
+import FundraisingLanding from './pages/FundraisingLanding.jsx'
 import DiligenceLanding from './pages/DiligenceLanding.jsx'
 import DiligenceNew from './pages/DiligenceNew.jsx'
 import DiligenceView from './pages/DiligenceView.jsx'
 
 function NavBar() {
-  const location = useLocation()
-  const isFundraising = location.pathname.startsWith('/fundraising')
-
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-gray-950/90 backdrop-blur-md border-b border-gray-800/60">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
-          {isFundraising ? (
-            <Link to="/fundraising" className="flex items-center gap-2.5 group">
-              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/50">
-                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                </svg>
-              </div>
-              <span className="text-gray-100 font-semibold tracking-tight group-hover:text-white transition-colors">
-                Fundraising Credential
-              </span>
-            </Link>
-          ) : (
-            <Link to="/" className="flex items-center gap-2.5 group">
-              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/50">
-                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <span className="text-gray-100 font-semibold tracking-tight group-hover:text-white transition-colors">
-                DealProof
-              </span>
-            </Link>
-          )}
+          <Link to="/" className="flex items-center gap-2.5 group">
+            <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/50">
+              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+              </svg>
+            </div>
+            <span className="text-gray-100 font-semibold tracking-tight group-hover:text-white transition-colors">
+              Fundraising Credential
+            </span>
+          </Link>
 
           <div className="flex items-center gap-1">
-            {!isFundraising && (
-              <Link
-                to="/create"
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  location.pathname === '/create'
-                    ? 'bg-indigo-600/20 text-indigo-400'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-                }`}
-              >
-                New Deal
-              </Link>
-            )}
-            {!isFundraising && (
-              <Link
-                to="/fundraising"
-                className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 transition-colors"
-              >
-                Diligence
-              </Link>
-            )}
             <a
-              href={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/docs`}
+              href={`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/docs`}
               target="_blank"
               rel="noopener noreferrer"
               className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 transition-colors flex items-center gap-1.5"
@@ -101,9 +63,7 @@ export default function App() {
         <NavBar />
         <div className="pt-14">
           <Routes>
-            <Route path="/" element={<Navigate to="/fundraising" replace />} />
-            <Route path="/create" element={<CreateDeal />} />
-            <Route path="/deal/:id" element={<DealView />} />
+            <Route path="/" element={<FundraisingLanding />} />
             <Route path="/fundraising" element={<DiligenceLanding />} />
             <Route path="/fundraising/new" element={<DiligenceNew />} />
             <Route path="/fundraising/diligence/:id" element={<DiligenceView />} />
