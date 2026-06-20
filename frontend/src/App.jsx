@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import Home from './pages/Home.jsx'
 import CreateDeal from './pages/CreateDeal.jsx'
 import DealView from './pages/DealView.jsx'
@@ -101,7 +101,7 @@ export default function App() {
         <NavBar />
         <div className="pt-14">
           <Routes>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<Navigate to="/fundraising" replace />} />
             <Route path="/create" element={<CreateDeal />} />
             <Route path="/deal/:id" element={<DealView />} />
             <Route path="/fundraising" element={<DiligenceLanding />} />
