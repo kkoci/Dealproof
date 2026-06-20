@@ -4,6 +4,8 @@ import FundraisingLanding from './pages/FundraisingLanding.jsx'
 import DiligenceLanding from './pages/DiligenceLanding.jsx'
 import DiligenceNew from './pages/DiligenceNew.jsx'
 import DiligenceView from './pages/DiligenceView.jsx'
+import InvestorThresholdForm from './pages/InvestorThresholdForm.jsx'
+import MatchResultView from './pages/MatchResultView.jsx'
 
 function NavBar() {
   return (
@@ -67,6 +69,8 @@ export default function App() {
             <Route path="/fundraising" element={<DiligenceLanding />} />
             <Route path="/fundraising/new" element={<DiligenceNew />} />
             <Route path="/fundraising/diligence/:id" element={<DiligenceView />} />
+            <Route path="/fundraising/match/new" element={<InvestorThresholdForm />} />
+            <Route path="/fundraising/match/:id" element={<MatchResultView />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>

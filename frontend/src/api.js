@@ -139,3 +139,37 @@ export function evaluateDiligence(id, body = {}) {
 export function getDiligence(id) {
   return request(`/api/fundraising/diligence/${id}`)
 }
+
+/**
+ * POST /api/fundraising/diligence/:id/investor-thresholds
+ * @param {string} diligenceId
+ * @param {object} body — InvestorThresholds payload
+ * @returns {{ threshold_id, diligence_id, investor_id, disclosure_on_mismatch, created_at }}
+ */
+export function submitInvestorThresholds(diligenceId, body) {
+  return request(`/api/fundraising/diligence/${diligenceId}/investor-thresholds`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/fundraising/diligence/:id/match/:threshold_id
+ * @param {string} diligenceId
+ * @param {string} thresholdId
+ * @returns {MatchRunResponse}
+ */
+export function runMatch(diligenceId, thresholdId) {
+  return request(`/api/fundraising/diligence/${diligenceId}/match/${thresholdId}`, {
+    method: 'POST',
+  })
+}
+
+/**
+ * GET /api/fundraising/match/:match_id?viewer=founder|investor
+ * @param {string} matchId
+ * @param {'founder'|'investor'} viewer
+ */
+export function getMatch(matchId, viewer = 'investor') {
+  return request(`/api/fundraising/match/${matchId}?viewer=${viewer}`)
+}

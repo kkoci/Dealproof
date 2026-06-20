@@ -240,7 +240,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail + disclosure | ✅ Complete |
 | NE3 | `FundraisingMatchCredential` + match endpoint + founder/investor dual view + TDX attestation | ✅ Complete |
 | NE4 | Two-sided synthetic fixtures + full `tests/test_fundraising_match.py` (67 tests, 28-cell matrix) | ✅ Complete |
-| NE5 | Frontend: investor threshold form + match results view | 🔜 Pending |
+| NE5 | Frontend: investor threshold form + match results view + TrustStackBar match row | ✅ Complete |
 
 ---
 

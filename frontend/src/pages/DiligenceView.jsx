@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useParams, useLocation, useNavigate } from 'react-router-dom'
+import { useParams, useLocation, useNavigate, Link } from 'react-router-dom'
 import { getDiligence } from '../api.js'
 import TrustStackBar from '../components/TrustStackBar.jsx'
 
@@ -417,6 +417,27 @@ export default function DiligenceView() {
             <span className={`text-xs font-semibold tracking-wider px-3 py-1.5 rounded-full border flex-shrink-0 mt-1 ${!findings.any_flag_raised ? 'bg-emerald-950/50 text-emerald-300 border-emerald-800/50' : 'bg-yellow-950/50 text-yellow-300 border-yellow-800/50'}`}>
               {!findings.any_flag_raised ? '✓ ALL METRICS FAVORABLE' : '⚠ FLAGS RAISED'}
             </span>
+          </div>
+        </div>
+
+        {/* Investor match CTA */}
+        <div className="mb-8">
+          <div className="rounded-xl border border-indigo-800/30 bg-indigo-950/10 px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-sm font-medium text-gray-200">Match with an investor</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Set threshold criteria and run an attested two-sided match inside the TEE. Neither party sees the other's raw data.
+              </p>
+            </div>
+            <Link
+              to={`/fundraising/match/new?diligence_id=${id}`}
+              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors flex-shrink-0 flex items-center gap-2"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Match with Investor
+            </Link>
           </div>
         </div>
 

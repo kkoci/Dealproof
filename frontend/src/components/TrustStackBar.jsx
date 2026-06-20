@@ -25,9 +25,10 @@ function TrustRow({ label, status, value, mono }) {
   )
 }
 
-export default function TrustStackBar({ corpusRoot, credentialHash, teeQuote }) {
+export default function TrustStackBar({ corpusRoot, credentialHash, teeQuote, matchCredentialHash }) {
   const short = (h) => h ? `0x${h.slice(0, 8)}…` : null
   const hasQuote = !!teeQuote
+  const showMatch = matchCredentialHash !== undefined
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/30 overflow-hidden">
@@ -43,6 +44,9 @@ export default function TrustStackBar({ corpusRoot, credentialHash, teeQuote }) 
       <TrustRow label="DCAP ATTESTATION" status={hasQuote ? 'verified' : 'pending'} />
       <TrustRow label="METRICS CORPUS" status={corpusRoot ? 'verified' : 'pending'} value={short(corpusRoot)} mono />
       <TrustRow label="DILIGENCE CREDENTIAL" status={credentialHash ? 'verified' : 'pending'} value={short(credentialHash)} mono />
+      {showMatch && (
+        <TrustRow label="MATCH CREDENTIAL" status={matchCredentialHash ? 'verified' : 'pending'} value={short(matchCredentialHash)} mono />
+      )}
     </div>
   )
 }
