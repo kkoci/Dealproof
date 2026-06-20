@@ -43,6 +43,7 @@ Before starting any task, read in this order:
 | Persistence | SQLite via aiosqlite |
 | Smart contract | Solidity (DealProof.sol) on Sepolia — Phase 4 |
 | Frontend | React 18 + Vite 5 + Tailwind CSS |
+| Dev Credential | `app/devcred/` — GitHub API → git corpus hashing → SeniorDevCredential (TDX-attested) |
 
 ---
 
@@ -144,6 +145,11 @@ app/picreds/credential.py  make_credential(), hash_credentials()
 demo.py                    CLI demo — transcript + attestations + memory + πCreds + auditor + arbitrator
 memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
 frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
+
+--- Dev Credential vertical (product/dev-credential branch) ---
+app/devcred/__init__.py        Package init
+app/devcred/git_hasher.py      hash_commit(), compute_repo_corpus_root(), extract_commit_metrics() — no LLM
+app/devcred/routes.py          POST /api/devcred/ingest — GitHub API fetch, corpus hash, metrics; token never persisted
 ```
 
 ---
@@ -223,6 +229,12 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **Dev Credential vertical** | **product/dev-credential branch** | |
+| DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
+| DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | 🔜 Pending |
+| DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | 🔜 Pending |
+| DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (min 15 tests) | 🔜 Pending |
+| DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | 🔜 Pending |
 
 ---
 

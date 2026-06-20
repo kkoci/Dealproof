@@ -320,6 +320,78 @@ async def get_corpus_by_root(corpus_root: str) -> dict | None:
     }
 
 
+async def create_dev_credentials_table() -> None:
+    """Create dev_credentials table for the devcred vertical."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dev_credentials (
+                credential_id    TEXT PRIMARY KEY,
+                developer_handle TEXT,
+                repo_corpus_root TEXT NOT NULL,
+                commit_count     INTEGER,
+                metrics_json     TEXT,
+                credential_json  TEXT,
+                tee_quote        TEXT,
+                status           TEXT DEFAULT 'pending',
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def create_dev_credential(
+    credential_id: str,
+    developer_handle: str,
+    repo_corpus_root: str,
+    commit_count: int,
+    metrics: dict,
+) -> None:
+    """Insert or replace a dev credential record. Token never passed here."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO dev_credentials "
+            "(credential_id, developer_handle, repo_corpus_root, commit_count, metrics_json, status) "
+            "VALUES (?, ?, ?, ?, ?, 'ingested')",
+            (
+                credential_id,
+                developer_handle,
+                repo_corpus_root,
+                commit_count,
+                json.dumps(metrics),
+            ),
+        )
+        await db.commit()
+
+
+async def get_dev_credential(credential_id: str) -> dict | None:
+    """Fetch a dev_credential row by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT credential_id, developer_handle, repo_corpus_root, commit_count, "
+            "metrics_json, credential_json, tee_quote, status, created_at "
+            "FROM dev_credentials WHERE credential_id = ?",
+            (credential_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "credential_id": row[0],
+        "developer_handle": row[1],
+        "repo_corpus_root": row[2],
+        "commit_count": row[3],
+        "metrics": json.loads(row[4]) if row[4] else None,
+        "credential": json.loads(row[5]) if row[5] else None,
+        "tee_quote": row[6],
+        "status": row[7],
+        "created_at": row[8],
+    }
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

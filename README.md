@@ -257,6 +257,7 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
+tests/test_devcred.py     (Phase DC-1) — Git hasher: corpus root, metrics, token-not-persisted (added Phase DC-1)
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1108,6 +1109,12 @@ Dealproof/
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + `GET /api/ens/agents` | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **Dev Credential** | **product/dev-credential branch** | |
+| DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
+| DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | 🔜 Pending |
+| DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | 🔜 Pending |
+| DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` | 🔜 Pending |
+| DC-5 | Frontend — `/devcred/` credential card + trust stack | 🔜 Pending |
 
 ---
 
