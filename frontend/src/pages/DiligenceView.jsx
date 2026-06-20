@@ -301,7 +301,7 @@ function BeforeAfterToggle({ result }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
             </div>
-            <span className="text-xs text-gray-400 font-medium">DealProof Diligence Credential</span>
+            <span className="text-xs text-gray-400 font-medium">Fundraising Diligence Credential</span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/50 text-emerald-300 border border-emerald-800/50 font-semibold tracking-wider">TDX ATTESTED</span>
           </div>
 
@@ -327,7 +327,7 @@ function BeforeAfterToggle({ result }) {
           </div>
 
           <div className="mt-4 px-3 py-2.5 rounded-lg bg-indigo-950/30 border border-indigo-800/40 text-xs text-indigo-300">
-            Raw financial figures were never exposed to this credential or to DealProof. The enclave proves the metric. Nobody sees the underlying data — including us.
+            Raw financial figures were never exposed to this credential. The enclave proves the metric. Nobody sees the underlying data — including us.
           </div>
         </div>
       )}
@@ -401,9 +401,7 @@ export default function DiligenceView() {
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-2 text-xs text-gray-500 font-mono mb-3">
-            <span>dealproof</span>
-            <span>/</span>
-            <span className="text-indigo-400">fundraising</span>
+            <span className="text-indigo-400">Fundraising Credential</span>
             <span>/</span>
             <span className="text-gray-400 truncate max-w-[200px]">{id}</span>
           </div>

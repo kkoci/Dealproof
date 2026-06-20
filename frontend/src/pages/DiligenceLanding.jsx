@@ -371,10 +371,7 @@ export default function DiligenceLanding() {
       {/* Footer */}
       <footer className="border-t border-gray-800/60 px-4 py-6 mt-auto">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span className="text-xs text-gray-600">DealProof · Fundraising Diligence</span>
-          <Link to="/" className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
-            ← Back to DealProof
-          </Link>
+          <span className="text-xs text-gray-600">Fundraising Credential</span>
         </div>
       </footer>
     </div>

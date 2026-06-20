@@ -627,8 +627,7 @@ export default function DiligenceNew() {
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xs text-gray-500 font-mono mb-3">
-              <span>dealproof</span><span>/</span>
-              <span className="text-indigo-400">fundraising</span><span>/</span>
+              <span className="text-indigo-400">Fundraising Credential</span><span>/</span>
               <span className="text-gray-400">new-diligence</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-100 mb-1">Fundraising Diligence</h1>
