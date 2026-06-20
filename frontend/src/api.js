@@ -173,3 +173,19 @@ export function runMatch(diligenceId, thresholdId) {
 export function getMatch(matchId, viewer = 'investor') {
   return request(`/api/fundraising/match/${matchId}?viewer=${viewer}`)
 }
+
+// ---------------------------------------------------------------------------
+// Fundraising negotiation (AN3 endpoint)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/fundraising/negotiation/run
+ * @param {object} body — FundraisingNegotiationRequest
+ * @returns {Promise<FundraisingNegotiationCredential>}
+ */
+export function runFundraisingNegotiation(body) {
+  return request('/api/fundraising/negotiation/run', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}

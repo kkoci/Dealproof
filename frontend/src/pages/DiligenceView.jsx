@@ -420,23 +420,41 @@ export default function DiligenceView() {
           </div>
         </div>
 
-        {/* Investor match CTA */}
-        <div className="mb-8">
-          <div className="rounded-xl border border-indigo-800/30 bg-indigo-950/10 px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+        {/* Action CTAs */}
+        <div className="mb-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="rounded-xl border border-indigo-800/30 bg-indigo-950/10 px-5 py-4 flex flex-col gap-3">
             <div>
               <p className="text-sm font-medium text-gray-200">Match with an investor</p>
               <p className="text-xs text-gray-500 mt-0.5">
-                Set threshold criteria and run an attested two-sided match inside the TEE. Neither party sees the other's raw data.
+                Threshold-based two-sided match. Neither party sees the other's raw data.
               </p>
             </div>
             <Link
               to={`/fundraising/match/new?diligence_id=${id}`}
-              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors flex-shrink-0 flex items-center gap-2"
+              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors flex items-center gap-2 self-start"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
               Match with Investor
+            </Link>
+          </div>
+
+          <div className="rounded-xl border border-violet-800/30 bg-violet-950/10 px-5 py-4 flex flex-col gap-3">
+            <div>
+              <p className="text-sm font-medium text-gray-200">Negotiate valuation</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Founder + Investor agents negotiate inside the TEE. πCreds audit runs post-deal.
+              </p>
+            </div>
+            <Link
+              to={`/fundraising/negotiation/new?diligence_id=${id}`}
+              className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold transition-colors flex items-center gap-2 self-start"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Negotiate Valuation
             </Link>
           </div>
         </div>

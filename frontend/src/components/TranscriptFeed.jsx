@@ -20,8 +20,11 @@ function ActionBadge({ action }) {
   )
 }
 
-function TranscriptRound({ round }) {
+const DEFAULT_ROLE_LABELS = { seller: 'Seller', buyer: 'Buyer' }
+
+function TranscriptRound({ round, roleLabels = DEFAULT_ROLE_LABELS }) {
   const isSeller = round.role === 'seller'
+  const displayRole = roleLabels[round.role] || round.role
 
   return (
     <div className={`flex ${isSeller ? 'justify-end' : 'justify-start'} mb-4`}>
@@ -38,7 +41,7 @@ function TranscriptRound({ round }) {
               isSeller ? 'text-blue-400' : 'text-emerald-400'
             }`}
           >
-            {round.role}
+            {displayRole}
           </span>
           <span className="text-gray-600 text-xs">·</span>
           <span className="text-gray-500 text-xs font-mono">Round {round.round}</span>
@@ -80,7 +83,7 @@ function TranscriptRound({ round }) {
   )
 }
 
-export default function TranscriptFeed({ transcript = [], isLive = false }) {
+export default function TranscriptFeed({ transcript = [], isLive = false, roleLabels = DEFAULT_ROLE_LABELS }) {
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -114,7 +117,7 @@ export default function TranscriptFeed({ transcript = [], isLive = false }) {
 
       <div className="space-y-1">
         {transcript.map((round, idx) => (
-          <TranscriptRound key={`${round.round}-${idx}`} round={round} />
+          <TranscriptRound key={`${round.round}-${idx}`} round={round} roleLabels={roleLabels} />
         ))}
       </div>
 

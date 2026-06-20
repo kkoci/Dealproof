@@ -246,7 +246,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | AN1 | `FounderAgent` + `InvestorAgent` — mirrors Buyer/Seller, compatible with `run_negotiation()` | ✅ Complete |
 | AN2 | πCreds adaptation + SCAE founder_claim_consistency check | ✅ Complete |
 | AN3 | Contexto integration + `FundraisingNegotiationCredential` + `/api/fundraising/negotiation/run` | ✅ Complete |
-| AN4 | Tests + frontend negotiation flow | 🔜 Pending |
+| AN4 | Tests + frontend negotiation flow | ✅ Complete |
 
 ---
 
