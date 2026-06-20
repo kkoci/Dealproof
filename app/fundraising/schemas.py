@@ -147,3 +147,45 @@ class InvestorThresholdsResponse(BaseModel):
     investor_id: str
     disclosure_on_mismatch: str
     created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Negotiation Extension — Ext-Phase 3
+# ---------------------------------------------------------------------------
+
+class FundraisingMatchCredential(BaseModel):
+    """
+    TEE-attested two-sided match credential.
+
+    Produced by POST /api/fundraising/diligence/{id}/match/{threshold_id}.
+
+    metric_results shape varies by disclosure_on_mismatch — see
+    ThresholdMatchAgent.founder_view() / investor_view() for exact shape.
+
+    credential_hash = SHA-256(canonical JSON of all fields above it, sort_keys=True).
+    TDX report_data = SHA-256({source_diligence_credential_hash, match_credential_hash}).
+    """
+    credential_type: str = "FundraisingMatchCredential"
+    match_id: str
+    diligence_id: str
+    investor_id: str
+    overall_match: bool
+    metric_results: list[dict]              # shaped per investor_view (pass/fail + thresholds)
+    source_diligence_credential_hash: str   # hash of the FundraisingDiligenceCredential matched against
+    credential_hash: str
+    issued_at: str
+    tee_attested: bool
+
+
+class MatchRunResponse(BaseModel):
+    """Response from POST /api/fundraising/diligence/{id}/match/{threshold_id}."""
+    match_id: str
+    diligence_id: str
+    investor_id: str
+    overall_match: bool
+    founder_view: dict      # filtered per disclosure_on_mismatch
+    investor_view: dict     # full pass/fail + thresholds, no founder raw values
+    credential_hash: str
+    source_diligence_credential_hash: str
+    tee_quote: str
+    tee_attested: bool

@@ -1119,8 +1119,8 @@ Dealproof/
 | **Negotiation Extension** | **Two-sided threshold matching layer** | |
 | NE1 | `InvestorThresholds` schema + `investor_thresholds` DB table + `POST /api/fundraising/diligence/{id}/investor-thresholds` | ✅ Complete |
 | NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail with disclosure controls | ✅ Complete |
-| NE3 | `FundraisingMatchCredential` + match endpoint + dual-view (founder/investor) + TDX attestation | 🔜 Pending |
-| NE4 | Two-sided synthetic fixtures + `tests/test_fundraising_match.py` (15+ tests) | 🔄 Partial (Phase 1 tests complete) |
+| NE3 | `FundraisingMatchCredential` + match endpoint + dual-view (founder/investor) + TDX attestation | ✅ Complete |
+| NE4 | Two-sided synthetic fixtures + `tests/test_fundraising_match.py` (15+ tests) | 🔄 Partial (32 tests, fixtures in NE4) |
 | NE5 | Frontend: investor threshold form + match results view | 🔜 Pending |
 
 ---

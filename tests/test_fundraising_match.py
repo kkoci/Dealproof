@@ -466,3 +466,221 @@ def test_investor_thresholds_not_exposed_by_founder_endpoint(client):
     assert "0.15" not in body_str
     assert "0.20" not in body_str
     assert "investor_thresholds" not in body_str
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 3 helpers
+# ---------------------------------------------------------------------------
+
+_MOCK_SIGN = "sim_quote:match_test_hash"
+
+_EVAL_BODY: dict = {
+    "claimed_values": {"mom_growth_rate": 0.09, "gross_margin_pct": 0.76}
+}
+
+
+def _evaluate(client, diligence_id: str) -> dict:
+    """Evaluate an ingested diligence (mocks LLM + TDX)."""
+    mock_eval = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(return_value=None)
+    mock_sign = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
+        return_value=_MOCK_SIGN
+    )
+    with patch("app.fundraising.routes.MetricsEvaluatorAgent.evaluate", mock_eval), \
+         patch("app.fundraising.routes.sign_result", mock_sign):
+        resp = client.post(
+            f"/api/fundraising/diligence/{diligence_id}/evaluate",
+            json=_EVAL_BODY,
+        )
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def _submit_thresholds(client, diligence_id: str, **kwargs) -> str:
+    """Submit investor thresholds and return threshold_id."""
+    body = {"investor_id": "inv-phase3", **kwargs}
+    resp = client.post(
+        f"/api/fundraising/diligence/{diligence_id}/investor-thresholds",
+        json=body,
+    )
+    assert resp.status_code == 201
+    return resp.json()["threshold_id"]
+
+
+def _run_match(client, diligence_id: str, threshold_id: str) -> dict:
+    """Run a match (mocks TDX sign_result)."""
+    mock_sign = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(
+        return_value="sim_quote:match_attestation"
+    )
+    with patch("app.fundraising.routes.sign_result", mock_sign):
+        resp = client.post(
+            f"/api/fundraising/diligence/{diligence_id}/match/{threshold_id}"
+        )
+    assert resp.status_code == 201
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 3: match endpoint full pipeline
+# ---------------------------------------------------------------------------
+
+def test_match_endpoint_returns_201_and_credential_hash(client):
+    """Full pipeline: ingest → evaluate → submit thresholds → run match."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(client, did, min_mom_growth=0.05)
+    data = _run_match(client, did, tid)
+
+    assert "match_id" in data
+    assert len(data["match_id"]) == 36          # UUID
+    assert len(data["credential_hash"]) == 64   # SHA-256
+    assert data["diligence_id"] == did
+    assert "tee_quote" in data
+
+
+def test_match_endpoint_requires_evaluated_diligence(client):
+    """Running match on un-evaluated diligence returns 409."""
+    did = _ingest(client)
+    # No evaluate call
+    tid = _submit_thresholds(client, did)
+    resp = client.post(f"/api/fundraising/diligence/{did}/match/{tid}")
+    assert resp.status_code == 409
+
+
+def test_match_endpoint_rejects_mismatched_diligence_threshold(client):
+    """threshold_id linked to a different diligence → 422."""
+    did_a = _ingest(client)
+    did_b = _ingest(client)
+    _evaluate(client, did_a)
+    _evaluate(client, did_b)
+
+    # Threshold for did_a but used against did_b
+    tid_a = _submit_thresholds(client, did_a)
+    resp = client.post(f"/api/fundraising/diligence/{did_b}/match/{tid_a}")
+    assert resp.status_code == 422
+
+
+def test_match_credential_hashes_in_tee_payload(client):
+    """source_diligence_credential_hash + match_credential_hash both reach sign_result."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(client, did, min_mom_growth=0.05)
+
+    captured: dict = {}
+
+    async def capture_sign(terms, memory_hash=""):
+        captured.update(terms)
+        return "sim_quote:captured"
+
+    mock_eval = __import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock(return_value=None)
+    with patch("app.fundraising.routes.MetricsEvaluatorAgent.evaluate", mock_eval), \
+         patch("app.fundraising.routes.sign_result", capture_sign):
+        # Re-evaluate to ensure credential exists with known sign mock
+        client.post(
+            f"/api/fundraising/diligence/{did}/evaluate", json=_EVAL_BODY
+        )
+
+    # Reset and run match capture
+    captured.clear()
+    with patch("app.fundraising.routes.sign_result", capture_sign):
+        resp = client.post(f"/api/fundraising/diligence/{did}/match/{tid}")
+
+    assert resp.status_code == 201
+    assert "source_diligence_credential_hash" in captured
+    assert "match_credential_hash" in captured
+    assert captured["match_credential_hash"] == resp.json()["credential_hash"]
+
+
+def test_match_founder_view_disclosure_none(client):
+    """disclosure_on_mismatch=none: founder_view in response has only overall_match."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(
+        client, did,
+        min_mom_growth=0.50,  # will fail — clean company has ~9%
+        disclosure_on_mismatch="none",
+    )
+    data = _run_match(client, did, tid)
+
+    fv = data["founder_view"]
+    assert fv["overall_match"] is False
+    assert "failed_metrics" not in fv
+    assert "metric_results" not in fv
+
+
+def test_match_investor_view_never_has_founder_raw_values(client):
+    """investor_view must not expose any founder raw computed numbers."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(client, did, min_mom_growth=0.05)
+    data = _run_match(client, did, tid)
+
+    inv = data["investor_view"]
+    for entry in inv["metric_results"]:
+        assert "founder_value" not in entry
+
+
+def test_get_match_founder_view(client):
+    """GET /match/{id}?viewer=founder applies disclosure filtering."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(
+        client, did,
+        min_mom_growth=0.50,   # fail
+        disclosure_on_mismatch="category_only",
+    )
+    data = _run_match(client, did, tid)
+    match_id = data["match_id"]
+
+    resp = client.get(f"/api/fundraising/match/{match_id}?viewer=founder")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["viewer"] == "founder"
+    assert body["overall_match"] is False
+    assert "failed_metrics" in body
+    # Threshold value must not appear in founder view
+    assert "0.50" not in str(body)
+
+
+def test_get_match_investor_view(client):
+    """GET /match/{id}?viewer=investor returns full pass/fail + thresholds."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(client, did, min_mom_growth=0.05, disclosure_on_mismatch="none")
+    data = _run_match(client, did, tid)
+    match_id = data["match_id"]
+
+    resp = client.get(f"/api/fundraising/match/{match_id}?viewer=investor")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["viewer"] == "investor"
+    assert "metric_results" in body
+    # Investor view has thresholds
+    growth = next(m for m in body["metric_results"] if m["metric"] == "mom_growth")
+    assert growth["investor_threshold"] == pytest.approx(0.05)
+
+
+def test_get_match_invalid_viewer_returns_422(client):
+    """Unknown viewer param → 422."""
+    did = _ingest(client)
+    _evaluate(client, did)
+    tid = _submit_thresholds(client, did)
+    data = _run_match(client, did, tid)
+    resp = client.get(f"/api/fundraising/match/{data['match_id']}?viewer=admin")
+    assert resp.status_code == 422
+
+
+def test_get_match_404_on_unknown_id(client):
+    resp = client.get("/api/fundraising/match/nonexistent-match-id")
+    assert resp.status_code == 404
+
+
+def test_source_diligence_credential_hash_in_match_response(client):
+    """source_diligence_credential_hash links the match back to the diligence credential."""
+    did = _ingest(client)
+    eval_data = _evaluate(client, did)
+    source_hash = eval_data["credential_hash"]
+
+    tid = _submit_thresholds(client, did)
+    data = _run_match(client, did, tid)
+
+    assert data["source_diligence_credential_hash"] == source_hash

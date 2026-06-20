@@ -426,6 +426,105 @@ async def update_diligence_credential(
         await db.commit()
 
 
+async def create_match_results_table() -> None:
+    """Create the fundraising_match_results table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fundraising_match_results (
+                match_id                        TEXT PRIMARY KEY,
+                diligence_id                    TEXT NOT NULL,
+                threshold_id                    TEXT NOT NULL,
+                investor_id                     TEXT NOT NULL,
+                overall_match                   INTEGER NOT NULL,
+                match_raw_json                  TEXT NOT NULL,
+                source_diligence_credential_hash TEXT NOT NULL,
+                credential_hash                 TEXT NOT NULL,
+                disclosure_on_mismatch          TEXT NOT NULL,
+                tee_quote                       TEXT,
+                issued_at                       TEXT NOT NULL,
+                created_at                      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (diligence_id)  REFERENCES fundraising_diligences(diligence_id),
+                FOREIGN KEY (threshold_id)  REFERENCES investor_thresholds(threshold_id)
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_match_result(
+    match_id: str,
+    diligence_id: str,
+    threshold_id: str,
+    investor_id: str,
+    overall_match: bool,
+    match_raw: dict,
+    source_diligence_credential_hash: str,
+    credential_hash: str,
+    disclosure_on_mismatch: str,
+    tee_quote: str,
+    issued_at: str,
+) -> None:
+    """Persist a match result."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO fundraising_match_results
+              (match_id, diligence_id, threshold_id, investor_id, overall_match,
+               match_raw_json, source_diligence_credential_hash, credential_hash,
+               disclosure_on_mismatch, tee_quote, issued_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                match_id,
+                diligence_id,
+                threshold_id,
+                investor_id,
+                int(overall_match),
+                json.dumps(match_raw),
+                source_diligence_credential_hash,
+                credential_hash,
+                disclosure_on_mismatch,
+                tee_quote,
+                issued_at,
+            ),
+        )
+        await db.commit()
+
+
+async def get_match_result(match_id: str) -> dict | None:
+    """Fetch a match result by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT match_id, diligence_id, threshold_id, investor_id, overall_match,
+                   match_raw_json, source_diligence_credential_hash, credential_hash,
+                   disclosure_on_mismatch, tee_quote, issued_at, created_at
+            FROM fundraising_match_results WHERE match_id = ?
+            """,
+            (match_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "match_id": row[0],
+        "diligence_id": row[1],
+        "threshold_id": row[2],
+        "investor_id": row[3],
+        "overall_match": bool(row[4]),
+        "match_raw": json.loads(row[5]),
+        "source_diligence_credential_hash": row[6],
+        "credential_hash": row[7],
+        "disclosure_on_mismatch": row[8],
+        "tee_quote": row[9],
+        "issued_at": row[10],
+        "created_at": row[11],
+    }
+
+
 async def create_investor_thresholds_table() -> None:
     """Create the investor_thresholds table if it does not exist."""
     async with aiosqlite.connect(DB_PATH) as db:

@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     await db.create_transcript_corpora_table()
     await db.create_fundraising_diligences_table()
     await db.create_investor_thresholds_table()
+    await db.create_match_results_table()
     await db.reset_stale_negotiations()  # recover deals interrupted by crashes/restarts
     yield
 

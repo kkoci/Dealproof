@@ -8,13 +8,16 @@ Original phases (unchanged):
 
 Negotiation Extension:
   Ext-Phase 1: POST /api/fundraising/diligence/{id}/investor-thresholds
+  Ext-Phase 3: POST /api/fundraising/diligence/{id}/match/{threshold_id}
+               GET  /api/fundraising/match/{match_id}?viewer=founder|investor
 """
 import uuid
 import json
 import hashlib
 import dataclasses
+import datetime
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.fundraising.schemas import (
     DiligenceIngestRequest,
@@ -23,6 +26,8 @@ from app.fundraising.schemas import (
     DiligenceEvaluateResponse,
     InvestorThresholds,
     InvestorThresholdsResponse,
+    FundraisingMatchCredential,
+    MatchRunResponse,
 )
 from app.fundraising.metrics_hasher import (
     hash_metrics_record,
@@ -31,6 +36,11 @@ from app.fundraising.metrics_hasher import (
 )
 from app.fundraising.agents.metrics_inspector import MetricsInspectorAgent
 from app.fundraising.agents.metrics_evaluator import MetricsEvaluatorAgent, EvaluationReport
+from app.fundraising.agents.threshold_match import (
+    ThresholdMatchAgent,
+    founder_view as _founder_view,
+    investor_view as _investor_view,
+)
 from app.tee.attestation import sign_result
 import app.db as db
 
@@ -305,3 +315,236 @@ async def submit_investor_thresholds(
         disclosure_on_mismatch=payload.disclosure_on_mismatch,
         created_at=record["created_at"] or "",
     )
+
+
+# ---------------------------------------------------------------------------
+# Negotiation Extension — Ext-Phase 3
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/diligence/{diligence_id}/match/{threshold_id}",
+    response_model=MatchRunResponse,
+    status_code=201,
+)
+async def run_match(
+    diligence_id: str,
+    threshold_id: str,
+) -> MatchRunResponse:
+    """
+    Run a two-sided diligence match.
+
+    Fetches the founder's already-computed MetricsInspectionReport and the
+    investor's stored InvestorThresholds, then produces a
+    FundraisingMatchCredential attested by TDX.
+
+    The response contains two views of the result:
+      founder_view  — filtered per disclosure_on_mismatch (investor's choice)
+      investor_view — full pass/fail + thresholds; founder raw values never included
+
+    Both views share the same credential_hash and TDX quote so either party
+    can verify the integrity of the outcome they received.
+
+    Requires the diligence to have been evaluated first (status == 'evaluated').
+    """
+    # ------------------------------------------------------------------ #
+    # Step 1 — fetch founder's evaluated diligence
+    # ------------------------------------------------------------------ #
+    diligence_row = await db.get_diligence(diligence_id)
+    if diligence_row is None:
+        raise HTTPException(status_code=404, detail=f"Diligence '{diligence_id}' not found.")
+
+    if diligence_row["status"] != "evaluated" or not diligence_row["credential"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Diligence '{diligence_id}' has not been evaluated yet. "
+                "Call POST /api/fundraising/diligence/{id}/evaluate first."
+            ),
+        )
+
+    credential = diligence_row["credential"]
+    inspection_report: dict = credential.get("inspector_findings", {})
+    source_diligence_credential_hash: str = credential.get("credential_hash", "")
+
+    # ------------------------------------------------------------------ #
+    # Step 2 — fetch investor thresholds
+    # ------------------------------------------------------------------ #
+    threshold_record = await db.get_investor_thresholds(threshold_id)
+    if threshold_record is None:
+        raise HTTPException(status_code=404, detail=f"Threshold record '{threshold_id}' not found.")
+
+    if threshold_record["diligence_id"] != diligence_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Threshold '{threshold_id}' is linked to diligence "
+                f"'{threshold_record['diligence_id']}', not '{diligence_id}'."
+            ),
+        )
+
+    thresholds = InvestorThresholds(**threshold_record["thresholds"])
+
+    # ------------------------------------------------------------------ #
+    # Step 3 — run ThresholdMatchAgent (deterministic, no LLM)
+    # ------------------------------------------------------------------ #
+    agent = ThresholdMatchAgent()
+    match_result = agent.match(inspection_report, thresholds)
+
+    # Serialize the full internal result for storage (used by GET endpoint)
+    match_raw = {
+        "overall_match": match_result.overall_match,
+        "disclosure_level": match_result.disclosure_level,
+        "investor_id": match_result.investor_id,
+        "metric_results": [dataclasses.asdict(m) for m in match_result.metric_results],
+    }
+
+    # ------------------------------------------------------------------ #
+    # Step 4 — build FundraisingMatchCredential
+    # ------------------------------------------------------------------ #
+    match_id = str(uuid.uuid4())
+    issued_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    inv_view = _investor_view(match_result)
+
+    credential_fields: dict = {
+        "credential_type": "FundraisingMatchCredential",
+        "match_id": match_id,
+        "diligence_id": diligence_id,
+        "investor_id": thresholds.investor_id,
+        "overall_match": match_result.overall_match,
+        "metric_results": inv_view["metric_results"],
+        "source_diligence_credential_hash": source_diligence_credential_hash,
+        "issued_at": issued_at,
+    }
+    credential_hash = hashlib.sha256(
+        json.dumps(credential_fields, sort_keys=True).encode()
+    ).hexdigest()
+    credential_fields["credential_hash"] = credential_hash
+
+    # ------------------------------------------------------------------ #
+    # Step 5 — TDX attestation
+    # ------------------------------------------------------------------ #
+    tee_attested = True
+    tee_quote = ""
+    try:
+        tee_quote = await sign_result({
+            "source_diligence_credential_hash": source_diligence_credential_hash,
+            "match_credential_hash": credential_hash,
+        })
+    except Exception as exc:
+        tee_attested = False
+        logger.warning(
+            f"Match {match_id}: TDX attestation failed (non-fatal) — "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    # ------------------------------------------------------------------ #
+    # Step 6 — persist
+    # ------------------------------------------------------------------ #
+    await db.save_match_result(
+        match_id=match_id,
+        diligence_id=diligence_id,
+        threshold_id=threshold_id,
+        investor_id=thresholds.investor_id,
+        overall_match=match_result.overall_match,
+        match_raw=match_raw,
+        source_diligence_credential_hash=source_diligence_credential_hash,
+        credential_hash=credential_hash,
+        disclosure_on_mismatch=thresholds.disclosure_on_mismatch,
+        tee_quote=tee_quote,
+        issued_at=issued_at,
+    )
+
+    fdr_view = _founder_view(match_result)
+
+    logger.info(
+        f"Match {match_id} — diligence={diligence_id}, "
+        f"investor={thresholds.investor_id}, overall_match={match_result.overall_match}, "
+        f"disclosure={thresholds.disclosure_on_mismatch}, "
+        f"credential_hash={credential_hash[:16]}..."
+    )
+
+    return MatchRunResponse(
+        match_id=match_id,
+        diligence_id=diligence_id,
+        investor_id=thresholds.investor_id,
+        overall_match=match_result.overall_match,
+        founder_view=fdr_view,
+        investor_view=inv_view,
+        credential_hash=credential_hash,
+        source_diligence_credential_hash=source_diligence_credential_hash,
+        tee_quote=tee_quote,
+        tee_attested=tee_attested,
+    )
+
+
+@router.get("/match/{match_id}", status_code=200)
+async def get_match_result(
+    match_id: str,
+    viewer: str = Query(
+        "investor",
+        description=(
+            "Which party's view to return: 'founder' or 'investor'. "
+            # NOTE: In production this must be enforced by auth/session, not a
+            # query param. Using a param here for PoC convenience — harden before
+            # shipping to real users.
+        ),
+    ),
+) -> dict:
+    """
+    Fetch a match result in the caller's permitted view.
+
+    viewer=founder  — overall_match + disclosure-filtered detail
+    viewer=investor — full per-metric pass/fail + investor thresholds
+                      (never contains founder's raw computed values)
+
+    Both views include the same credential_hash and tee_quote so either party
+    can independently verify the integrity of the attested outcome.
+    """
+    if viewer not in ("founder", "investor"):
+        raise HTTPException(
+            status_code=422,
+            detail="viewer must be 'founder' or 'investor'.",
+        )
+
+    row = await db.get_match_result(match_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Match '{match_id}' not found.")
+
+    # Reconstruct a minimal ThresholdMatchResult-like structure from stored raw data
+    # so we can re-apply the view helpers consistently.
+    from app.fundraising.agents.threshold_match import (
+        ThresholdMatchResult,
+        MetricMatchResult,
+    )
+
+    raw = row["match_raw"]
+    metric_results = [
+        MetricMatchResult(
+            metric=m["metric"],
+            label=m["label"],
+            investor_threshold=m.get("investor_threshold"),
+            founder_value=m.get("founder_value"),
+            passed=m["passed"],
+        )
+        for m in raw.get("metric_results", [])
+    ]
+    result = ThresholdMatchResult(
+        overall_match=row["overall_match"],
+        metric_results=metric_results,
+        disclosure_level=row["disclosure_on_mismatch"],
+        investor_id=row["investor_id"],
+    )
+
+    match_view = _founder_view(result) if viewer == "founder" else _investor_view(result)
+
+    return {
+        "match_id": match_id,
+        "diligence_id": row["diligence_id"],
+        "viewer": viewer,
+        "credential_hash": row["credential_hash"],
+        "source_diligence_credential_hash": row["source_diligence_credential_hash"],
+        "tee_quote": row["tee_quote"],
+        "issued_at": row["issued_at"],
+        **match_view,
+    }
