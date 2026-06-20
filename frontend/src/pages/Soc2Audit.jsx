@@ -318,9 +318,7 @@ export default function Soc2Audit() {
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-2 text-xs text-gray-500 font-mono mb-3">
-            <span>dealproof</span>
-            <span>/</span>
-            <span className="text-gray-400">soc2-audit</span>
+            <span className="text-gray-400">Continuous SOC2</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-100 mb-2">
             SOC 2 Compliance Audit
