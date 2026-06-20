@@ -1,8 +1,13 @@
 """
-Fundraising diligence API routes — Phase 1 + Phase 3.
+Fundraising diligence API routes.
 
-Mounted at /api/fundraising/ alongside existing DealProof routes.
-Does not touch the negotiation flow, πCreds logic, or any existing endpoint.
+Original phases (unchanged):
+  Phase 1: POST /api/fundraising/diligence/ingest
+  Phase 3: POST /api/fundraising/diligence/{id}/evaluate
+           GET  /api/fundraising/diligence/{id}
+
+Negotiation Extension:
+  Ext-Phase 1: POST /api/fundraising/diligence/{id}/investor-thresholds
 """
 import uuid
 import json
@@ -16,6 +21,8 @@ from app.fundraising.schemas import (
     DiligenceIngestResponse,
     DiligenceEvaluateRequest,
     DiligenceEvaluateResponse,
+    InvestorThresholds,
+    InvestorThresholdsResponse,
 )
 from app.fundraising.metrics_hasher import (
     hash_metrics_record,
@@ -219,4 +226,82 @@ async def evaluate_diligence(
         evaluation=evaluation_dict,
         tee_quote=tee_quote,
         evaluator_available=evaluator_available,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Negotiation Extension — Ext-Phase 1
+# ---------------------------------------------------------------------------
+
+_VALID_DISCLOSURE_LEVELS = {"none", "category_only", "full_threshold"}
+
+
+@router.post(
+    "/diligence/{diligence_id}/investor-thresholds",
+    response_model=InvestorThresholdsResponse,
+    status_code=201,
+)
+async def submit_investor_thresholds(
+    diligence_id: str,
+    payload: InvestorThresholds,
+) -> InvestorThresholdsResponse:
+    """
+    Store an investor's private diligence thresholds for a given diligence_id.
+
+    The payload is intentionally separate from the founder's ingest/evaluate
+    endpoints — founders have no visibility into this endpoint or its data.
+
+    disclosure_on_mismatch controls what the founder learns if a threshold
+    isn't met (only the investor chooses this level, not the founder):
+      "none"           — founder sees only overall_match bool
+      "category_only"  — founder sees which metric names failed (default)
+      "full_threshold" — founder sees the investor's exact threshold value
+
+    Returns a threshold_id the investor uses when calling the match endpoint.
+    The raw threshold values are never returned here — the caller already
+    knows what they submitted.
+    """
+    if payload.disclosure_on_mismatch not in _VALID_DISCLOSURE_LEVELS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"disclosure_on_mismatch must be one of "
+                f"{sorted(_VALID_DISCLOSURE_LEVELS)}, "
+                f"got {payload.disclosure_on_mismatch!r}"
+            ),
+        )
+
+    # Confirm the diligence exists before linking thresholds to it
+    row = await db.get_diligence(diligence_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Diligence '{diligence_id}' not found.",
+        )
+
+    threshold_id = str(uuid.uuid4())
+
+    await db.save_investor_thresholds(
+        threshold_id=threshold_id,
+        diligence_id=diligence_id,
+        investor_id=payload.investor_id,
+        thresholds=payload.model_dump(),
+        disclosure_on_mismatch=payload.disclosure_on_mismatch,
+    )
+
+    # Fetch back the created_at so the response is accurate
+    record = await db.get_investor_thresholds(threshold_id)
+
+    logger.info(
+        f"Investor thresholds stored — threshold_id={threshold_id}, "
+        f"diligence_id={diligence_id}, investor_id={payload.investor_id}, "
+        f"disclosure={payload.disclosure_on_mismatch}"
+    )
+
+    return InvestorThresholdsResponse(
+        threshold_id=threshold_id,
+        diligence_id=diligence_id,
+        investor_id=payload.investor_id,
+        disclosure_on_mismatch=payload.disclosure_on_mismatch,
+        created_at=record["created_at"] or "",
     )

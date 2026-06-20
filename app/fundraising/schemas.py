@@ -1,8 +1,13 @@
 """
-Fundraising diligence Pydantic schemas — Phase 1 + Phase 3.
+Fundraising diligence Pydantic schemas.
 
-Phase 1: ingest request + response.
-Phase 3: evaluate request + FundraisingDiligenceCredential + evaluate response.
+Original phases:
+  Phase 1: ingest request + response.
+  Phase 3: evaluate request + FundraisingDiligenceCredential + evaluate response.
+
+Negotiation Extension:
+  Ext-Phase 1: InvestorThresholds + InvestorThresholdsResponse.
+  Ext-Phase 3: FundraisingMatchCredential + match endpoint schemas.
 """
 from typing import Any
 from pydantic import BaseModel, Field
@@ -86,3 +91,59 @@ class DiligenceEvaluateResponse(BaseModel):
     evaluation: dict | None       # null when MetricsEvaluatorAgent failed
     tee_quote: str                # TDX quote covering corpus_root + credential_hash
     evaluator_available: bool     # false when LLM evaluator was skipped/failed
+
+
+# ---------------------------------------------------------------------------
+# Negotiation Extension — Ext-Phase 1
+# ---------------------------------------------------------------------------
+
+class InvestorThresholds(BaseModel):
+    """
+    An investor's private diligence requirements for a given round.
+    Mirrors the six metrics computed by MetricsInspectorAgent so that
+    ThresholdMatchAgent can do a direct field-by-field comparison.
+
+    All threshold fields are optional — None means the investor doesn't
+    require that metric to pass a specific bar.
+
+    disclosure_on_mismatch controls what the *founder* learns when a
+    threshold isn't met:
+      "none"           — founder sees only overall_match bool
+      "category_only"  — founder sees which metric names failed (default)
+      "full_threshold" — founder sees the investor's exact threshold value
+    """
+    investor_id: str = Field(..., description="Opaque investor identifier — no PII required.")
+    min_mom_growth: float | None = Field(
+        None, description="Minimum acceptable MoM growth rate (decimal, e.g. 0.10 = 10%)."
+    )
+    max_customer_concentration_pct: float | None = Field(
+        None, description="Maximum acceptable top-customer revenue concentration (0–1)."
+    )
+    min_gross_margin: float | None = Field(
+        None, description="Minimum acceptable gross margin (decimal, e.g. 0.60 = 60%)."
+    )
+    min_runway_months: float | None = Field(
+        None, description="Minimum acceptable months of runway."
+    )
+    max_monthly_churn_pct: float | None = Field(
+        None, description="Maximum acceptable monthly churn rate (decimal, e.g. 0.03 = 3%)."
+    )
+    max_arr_delta_pct: float | None = Field(
+        None, description="Maximum acceptable ARR inconsistency delta (decimal, e.g. 0.10 = 10%)."
+    )
+    disclosure_on_mismatch: str = Field(
+        "category_only",
+        description=(
+            "How much detail the founder receives on threshold failures. "
+            "One of: 'none', 'category_only', 'full_threshold'."
+        ),
+    )
+
+
+class InvestorThresholdsResponse(BaseModel):
+    """Response from POST /api/fundraising/diligence/{id}/investor-thresholds."""
+    threshold_id: str
+    diligence_id: str
+    investor_id: str
+    disclosure_on_mismatch: str
+    created_at: str

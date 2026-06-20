@@ -175,20 +175,24 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (69 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (133 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+
+Note: `tests/conftest.py` stubs `web3` and `eth_account` so all HTTP tests run without installing blockchain packages.
 
 ```
-tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
-tests/test_negotiation.py     8   Negotiation loop, arbitrator, combined attestation payload
-tests/test_tee.py            10   KMS + TDX quote HTTP calls + GET /api/attest
-tests/test_props.py          23   Props verifier: helpers + failure paths + route gate
-tests/test_dkim_verifier.py  19   DKIM: parsing + DNS-over-HTTPS + verification paths
-tests/test_memory.py          4   Contexto client: add, search, hash, sidecar-down
-tests/test_picreds.py        11   πCreds: constraint checks (5 pure) + auditor + credentials + failure
-tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks)
-tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
-tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
-tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
+tests/test_agents.py              6   BuyerAgent + SellerAgent + AuditorAgent unit tests
+tests/test_negotiation.py         8   Negotiation loop, arbitrator, combined attestation payload
+tests/test_tee.py                10   KMS + TDX quote HTTP calls + GET /api/attest
+tests/test_props.py              23   Props verifier: helpers + failure paths + route gate
+tests/test_dkim_verifier.py      19   DKIM: parsing + DNS-over-HTTPS + verification paths
+tests/test_memory.py              4   Contexto client: add, search, hash, sidecar-down
+tests/test_picreds.py            11   πCreds: constraint checks (5 pure) + auditor + credentials + failure
+tests/test_e2e.py                13   Full HTTP stack end-to-end (TestClient + mocks)
+tests/test_contract.py            8   Phase 4 escrow: create/complete/refund
+tests/test_data_credential.py     7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
+tests/test_data_quality.py       13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
+tests/test_fundraising.py        20   Fundraising diligence: corpus root, inspector, SCAE scenarios, HTTP pipeline
+tests/test_fundraising_match.py   8   Negotiation extension Ext-Phase 1: InvestorThresholds schema + endpoint
 ```
 
 **Resilience guarantees:**
@@ -231,6 +235,12 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | F5 | Frontend: diligence dashboard + before/after demo view | ✅ Complete |
 | F6 | Landing page + one-click demo runner (Clean + SCAE scenarios) | ✅ Complete |
 | F7 | 5-step guided wizard replacing JSON textarea in DiligenceNew — live previews per step | ✅ Complete |
+| **Negotiation Extension** | **Two-sided threshold matching** | |
+| NE1 | `InvestorThresholds` schema + `investor_thresholds` DB table + submit endpoint | ✅ Complete |
+| NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail + disclosure | 🔜 Pending |
+| NE3 | `FundraisingMatchCredential` + match endpoint + founder/investor dual view + TDX attestation | 🔜 Pending |
+| NE4 | Two-sided synthetic fixtures + full `tests/test_fundraising_match.py` (15+ tests) | 🔄 Partial |
+| NE5 | Frontend: investor threshold form + match results view | 🔜 Pending |
 
 ---
 

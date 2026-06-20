@@ -426,6 +426,101 @@ async def update_diligence_credential(
         await db.commit()
 
 
+async def create_investor_thresholds_table() -> None:
+    """Create the investor_thresholds table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS investor_thresholds (
+                threshold_id              TEXT PRIMARY KEY,
+                diligence_id              TEXT NOT NULL,
+                investor_id               TEXT NOT NULL,
+                thresholds_json           TEXT NOT NULL,
+                disclosure_on_mismatch    TEXT DEFAULT 'category_only',
+                created_at                TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (diligence_id) REFERENCES fundraising_diligences(diligence_id)
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_investor_thresholds(
+    threshold_id: str,
+    diligence_id: str,
+    investor_id: str,
+    thresholds: dict,
+    disclosure_on_mismatch: str,
+) -> None:
+    """Persist an investor threshold record."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO investor_thresholds
+              (threshold_id, diligence_id, investor_id, thresholds_json, disclosure_on_mismatch)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                threshold_id,
+                diligence_id,
+                investor_id,
+                json.dumps(thresholds),
+                disclosure_on_mismatch,
+            ),
+        )
+        await db.commit()
+
+
+async def get_investor_thresholds(threshold_id: str) -> dict | None:
+    """Fetch an investor threshold record by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT threshold_id, diligence_id, investor_id, thresholds_json,
+                   disclosure_on_mismatch, created_at
+            FROM investor_thresholds WHERE threshold_id = ?
+            """,
+            (threshold_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "threshold_id": row[0],
+        "diligence_id": row[1],
+        "investor_id": row[2],
+        "thresholds": json.loads(row[3]),
+        "disclosure_on_mismatch": row[4],
+        "created_at": row[5],
+    }
+
+
+async def list_investor_thresholds_for_diligence(diligence_id: str) -> list[dict]:
+    """Return all threshold records linked to a diligence_id (investor IDs only, no raw data)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT threshold_id, investor_id, disclosure_on_mismatch, created_at
+            FROM investor_thresholds WHERE diligence_id = ?
+            ORDER BY created_at ASC
+            """,
+            (diligence_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    return [
+        {
+            "threshold_id": r[0],
+            "investor_id": r[1],
+            "disclosure_on_mismatch": r[2],
+            "created_at": r[3],
+        }
+        for r in rows
+    ]
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.
