@@ -620,6 +620,117 @@ async def list_investor_thresholds_for_diligence(diligence_id: str) -> list[dict
     ]
 
 
+async def create_fundraising_negotiations_table() -> None:
+    """Create the fundraising_negotiations table if it does not exist."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fundraising_negotiations (
+                negotiation_id              TEXT PRIMARY KEY,
+                diligence_id               TEXT NOT NULL,
+                investor_id                TEXT NOT NULL,
+                agreed                     INTEGER NOT NULL,
+                final_valuation            REAL,
+                transcript_json            TEXT NOT NULL,
+                conduct_audit_json         TEXT,
+                picreds_hash               TEXT,
+                memory_context_hash        TEXT,
+                memory_write_hash          TEXT,
+                diligence_credential_hash  TEXT NOT NULL,
+                credential_hash            TEXT NOT NULL,
+                tee_quote                  TEXT,
+                issued_at                  TEXT NOT NULL,
+                created_at                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (diligence_id) REFERENCES fundraising_diligences(diligence_id)
+            )
+            """
+        )
+        await db.commit()
+
+
+async def save_fundraising_negotiation(
+    negotiation_id: str,
+    diligence_id: str,
+    investor_id: str,
+    agreed: bool,
+    final_valuation: float | None,
+    transcript: list[dict],
+    conduct_audit: dict | None,
+    picreds_hash: str | None,
+    memory_context_hash: str | None,
+    memory_write_hash: str | None,
+    diligence_credential_hash: str,
+    credential_hash: str,
+    tee_quote: str | None,
+    issued_at: str,
+) -> None:
+    """Persist a fundraising negotiation result."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO fundraising_negotiations
+              (negotiation_id, diligence_id, investor_id, agreed, final_valuation,
+               transcript_json, conduct_audit_json, picreds_hash, memory_context_hash,
+               memory_write_hash, diligence_credential_hash, credential_hash, tee_quote, issued_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                negotiation_id,
+                diligence_id,
+                investor_id,
+                int(agreed),
+                final_valuation,
+                json.dumps(transcript),
+                json.dumps(conduct_audit) if conduct_audit is not None else None,
+                picreds_hash,
+                memory_context_hash,
+                memory_write_hash,
+                diligence_credential_hash,
+                credential_hash,
+                tee_quote,
+                issued_at,
+            ),
+        )
+        await db.commit()
+
+
+async def get_fundraising_negotiation(negotiation_id: str) -> dict | None:
+    """Fetch a fundraising negotiation record by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT negotiation_id, diligence_id, investor_id, agreed, final_valuation,
+                   transcript_json, conduct_audit_json, picreds_hash, memory_context_hash,
+                   memory_write_hash, diligence_credential_hash, credential_hash, tee_quote,
+                   issued_at, created_at
+            FROM fundraising_negotiations WHERE negotiation_id = ?
+            """,
+            (negotiation_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "negotiation_id": row[0],
+        "diligence_id": row[1],
+        "investor_id": row[2],
+        "agreed": bool(row[3]),
+        "final_valuation": row[4],
+        "transcript": json.loads(row[5]) if row[5] else [],
+        "conduct_audit": json.loads(row[6]) if row[6] else None,
+        "picreds_hash": row[7],
+        "memory_context_hash": row[8],
+        "memory_write_hash": row[9],
+        "diligence_credential_hash": row[10],
+        "credential_hash": row[11],
+        "tee_quote": row[12],
+        "issued_at": row[13],
+        "created_at": row[14],
+    }
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

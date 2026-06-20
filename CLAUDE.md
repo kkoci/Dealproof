@@ -175,7 +175,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (214 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (228 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 Note: `tests/conftest.py` stubs `web3` and `eth_account` so all HTTP tests run without installing blockchain packages.
 
@@ -193,6 +193,7 @@ tests/test_data_credential.py     7   Transcript hasher + DataCredentialAgent + 
 tests/test_data_quality.py       13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_fundraising.py        20   Fundraising diligence: corpus root, inspector, SCAE scenarios, HTTP pipeline
 tests/test_fundraising_match.py  67   Negotiation extension: schema+endpoint (8) + ThresholdMatchAgent (13) + match pipeline (11) + investor fixtures + matrix (35)
+tests/test_fundraising_negotiation.py  14   AN3: schema (2) + DB round-trip (2) + endpoint gates (2) + agreed path (3) + failed path (1) + resilience (2) + determinism + transcript (2)
 ```
 
 **Resilience guarantees:**
@@ -244,7 +245,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | **Agent Negotiation Upgrade** | **FounderAgent + InvestorAgent full stack** | |
 | AN1 | `FounderAgent` + `InvestorAgent` — mirrors Buyer/Seller, compatible with `run_negotiation()` | ✅ Complete |
 | AN2 | πCreds adaptation + SCAE founder_claim_consistency check | ✅ Complete |
-| AN3 | Contexto integration + `FundraisingNegotiationCredential` + `/api/fundraising/negotiation/run` | 🔜 Pending |
+| AN3 | Contexto integration + `FundraisingNegotiationCredential` + `/api/fundraising/negotiation/run` | ✅ Complete |
 | AN4 | Tests + frontend negotiation flow | 🔜 Pending |
 
 ---

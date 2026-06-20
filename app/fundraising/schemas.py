@@ -177,6 +177,63 @@ class FundraisingMatchCredential(BaseModel):
     tee_attested: bool
 
 
+# ---------------------------------------------------------------------------
+# Agent Negotiation Upgrade — AN3
+# ---------------------------------------------------------------------------
+
+class FundraisingNegotiationRequest(BaseModel):
+    """
+    Request body for POST /api/fundraising/negotiation/run.
+
+    diligence_id must reference an *evaluated* FundraisingDiligenceCredential.
+    The inspector_findings from that credential are injected into both agents
+    as TEE-verified authoritative grounding.
+
+    investor_max_valuation = budget ceiling (maps to buyer.budget in run_negotiation).
+    founder_floor_valuation = minimum acceptable (maps to seller.floor_price in run_negotiation).
+    """
+    diligence_id: str = Field(..., description="Evaluated diligence record to negotiate over.")
+    investor_id: str = Field(..., description="Opaque investor identifier.")
+    investor_max_valuation: float = Field(..., gt=0, description="Hard cap on pre-money valuation.")
+    investor_investment_amount: float = Field(..., gt=0, description="Capital to deploy.")
+    investor_target_ownership_pct: float = Field(..., gt=0, le=100, description="Target equity % (e.g. 15.0).")
+    investor_requirements: str | None = Field(None, description="Investment thesis / deal requirements.")
+    founder_floor_valuation: float = Field(..., gt=0, description="Minimum acceptable pre-money valuation.")
+    founder_valuation_ask: float = Field(..., gt=0, description="Opening pre-money valuation ask.")
+    max_rounds: int = Field(8, ge=1, le=20, description="Maximum negotiation rounds before deadlock.")
+
+
+class FundraisingNegotiationCredential(BaseModel):
+    """
+    TEE-attested fundraising negotiation credential.
+
+    Produced by POST /api/fundraising/negotiation/run.
+
+    tee_quote report_data = SHA-256({diligence_credential_hash, negotiation_picreds_hash,
+                                     final_valuation, agreed}).
+    credential_hash = SHA-256(all fields except credential_hash and tee_quote, sort_keys=True).
+    """
+    credential_type: str = "FundraisingNegotiationCredential"
+    negotiation_id: str
+    diligence_id: str
+    investor_id: str
+    diligence_credential_hash: str      # links this negotiation to its diligence credential
+    agreed: bool
+    final_valuation: float | None       # None when no agreement reached
+    round_count: int
+    transcript: list[dict]
+    conduct_audit: dict | None          # from audit_fundraising_conduct; None on failure
+    picreds_attested: bool              # True when conduct_audit succeeded
+    negotiation_picreds_hash: str | None  # SHA-256(conduct_audit, sort_keys=True)
+    memory_attested: bool               # True when post-deal memory write succeeded
+    memory_context_hash: str | None     # SHA-256 of recalled memories injected into prompts
+    memory_write_hash: str | None       # SHA-256 of outcome messages written to memory
+    credential_hash: str                # SHA-256(all fields above, sort_keys=True)
+    tee_quote: str                      # TDX quote; report_data covers diligence + picreds hashes
+    tee_attested: bool
+    issued_at: str
+
+
 class MatchRunResponse(BaseModel):
     """Response from POST /api/fundraising/diligence/{id}/match/{threshold_id}."""
     match_id: str

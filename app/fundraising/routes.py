@@ -28,6 +28,8 @@ from app.fundraising.schemas import (
     InvestorThresholdsResponse,
     FundraisingMatchCredential,
     MatchRunResponse,
+    FundraisingNegotiationRequest,
+    FundraisingNegotiationCredential,
 )
 from app.fundraising.metrics_hasher import (
     hash_metrics_record,
@@ -41,7 +43,12 @@ from app.fundraising.agents.threshold_match import (
     founder_view as _founder_view,
     investor_view as _investor_view,
 )
+from app.fundraising.agents.founder_agent import FounderAgent
+from app.fundraising.agents.investor_agent import InvestorAgent
+from app.agents.negotiation import run_negotiation
 from app.tee.attestation import sign_result
+from app.memory.client import search_memories, add_memories
+from app.picreds.auditor import audit_fundraising_conduct
 import app.db as db
 
 router = APIRouter(prefix="/api/fundraising")
@@ -548,3 +555,305 @@ async def get_match_result(
         "issued_at": row["issued_at"],
         **match_view,
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent Negotiation Upgrade — AN3
+# ---------------------------------------------------------------------------
+
+def _format_memories(results: list[dict]) -> str:
+    if not results:
+        return ""
+    lines = []
+    for r in results[:5]:
+        content = r.get("content") or r.get("text") or str(r)
+        lines.append(f"- {content}")
+    return "\n".join(lines)
+
+
+def _build_investor_diligence_summary(inspector_findings: dict, any_flag_raised: bool) -> str:
+    """
+    Build a ratios-only summary for the investor from inspector findings.
+    Raw founder financial figures are never included — only computed ratios.
+    """
+    lines = []
+    mom = inspector_findings.get("mom_growth_computed")
+    if mom is not None:
+        lines.append(f"  MoM Revenue Growth: {mom * 100:.1f}%")
+    margin = inspector_findings.get("gross_margin_computed")
+    if margin is not None:
+        lines.append(f"  Gross Margin: {margin * 100:.1f}%")
+    runway = inspector_findings.get("runway_months_computed")
+    if runway is not None:
+        lines.append(f"  Runway: {runway:.1f} months")
+    churn = inspector_findings.get("churn_rate_computed")
+    if churn is not None:
+        lines.append(f"  Monthly Churn: {churn * 100:.2f}%")
+    if any_flag_raised:
+        lines.append("  [FLAGS RAISED — see FundraisingDiligenceCredential for details]")
+    return "\n".join(lines) or "(no metric findings available)"
+
+
+@router.post(
+    "/negotiation/run",
+    response_model=FundraisingNegotiationCredential,
+    status_code=200,
+)
+async def run_fundraising_negotiation(
+    payload: FundraisingNegotiationRequest,
+) -> FundraisingNegotiationCredential:
+    """
+    Run a TEE-resident fundraising negotiation between FounderAgent + InvestorAgent.
+
+    Requires the diligence_id to reference an *evaluated* FundraisingDiligenceCredential —
+    the inspector_findings from that credential are injected into both agents as
+    TEE-verified authoritative grounding.
+
+    Flow:
+      M1  Contexto memory search for founder:{diligence_id} + investor:{investor_id} (non-fatal)
+      1   Build FounderAgent (with inspection_report) + InvestorAgent (with ratios-only summary)
+      2   run_negotiation() — same loop as Deal Room, FounderAgent as seller, InvestorAgent as buyer
+      M2  Post-deal memory write (non-fatal, only on agreement)
+      P   audit_fundraising_conduct — SCAE claim consistency + qualitative (non-fatal, only on agreement)
+      A   TDX attestation: SHA-256({diligence_credential_hash, negotiation_picreds_hash, final_valuation, agreed})
+      4   Persist + return FundraisingNegotiationCredential
+
+    Resilience: memory + πCreds are non-fatal; attestation always runs.
+    """
+    # --------------------------------------------------------------- #
+    # Step 0 — validate: diligence must exist and be evaluated
+    # --------------------------------------------------------------- #
+    row = await db.get_diligence(payload.diligence_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Diligence '{payload.diligence_id}' not found.",
+        )
+    if row["status"] != "evaluated" or not row["credential"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Diligence '{payload.diligence_id}' has not been evaluated "
+                f"(status: {row['status']}). "
+                "Call POST /api/fundraising/diligence/{id}/evaluate first."
+            ),
+        )
+
+    credential = row["credential"]
+    diligence_credential_hash: str = credential.get("credential_hash", "")
+    inspector_findings: dict = credential.get("inspector_findings", {})
+    any_flag_raised: bool = credential.get("any_flag_raised", False)
+    company_description = f"{row['company_name']} ({row['round_label'] or 'fundraising round'})"
+
+    negotiation_id = str(uuid.uuid4())
+    issued_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # --------------------------------------------------------------- #
+    # Step M1 — recall memory context for both agents (non-fatal)
+    # agent IDs: founder scoped to company, investor scoped to investor
+    # --------------------------------------------------------------- #
+    founder_agent_id = f"founder:{payload.diligence_id}"
+    investor_agent_id = f"investor:{payload.investor_id}"
+
+    founder_memory_context = ""
+    investor_memory_context = ""
+    memory_context_hash: str | None = None
+
+    try:
+        founder_mems = await search_memories(
+            founder_agent_id,
+            f"fundraising negotiation outcomes for {row['company_name']}",
+        )
+        investor_mems = await search_memories(
+            investor_agent_id,
+            "prior investments, accepted valuations, rejection patterns",
+        )
+        founder_memory_context = _format_memories(founder_mems)
+        investor_memory_context = _format_memories(investor_mems)
+    except Exception as exc:
+        logger.warning(f"Negotiation {negotiation_id}: memory search failed (non-fatal) — {exc}")
+
+    if founder_memory_context or investor_memory_context:
+        memory_context_hash = hashlib.sha256(
+            json.dumps(
+                {"founder": founder_memory_context, "investor": investor_memory_context},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+
+    # --------------------------------------------------------------- #
+    # Step 1 — build agents
+    # --------------------------------------------------------------- #
+    diligence_summary = _build_investor_diligence_summary(inspector_findings, any_flag_raised)
+
+    founder = FounderAgent(
+        floor_valuation=payload.founder_floor_valuation,
+        valuation_ask=payload.founder_valuation_ask,
+        company_description=company_description,
+        inspection_report=inspector_findings,
+        memory_context=founder_memory_context,
+    )
+    investor = InvestorAgent(
+        max_valuation=payload.investor_max_valuation,
+        investment_amount=payload.investor_investment_amount,
+        target_ownership_pct=payload.investor_target_ownership_pct,
+        requirements=payload.investor_requirements or "",
+        diligence_summary=diligence_summary,
+        memory_context=investor_memory_context,
+    )
+
+    # --------------------------------------------------------------- #
+    # Step 2 — negotiation loop
+    # FounderAgent = seller, InvestorAgent = buyer in run_negotiation()
+    # --------------------------------------------------------------- #
+    result = await run_negotiation(
+        buyer=investor,
+        seller=founder,
+        max_rounds=payload.max_rounds,
+    )
+
+    transcript_data = [
+        {
+            "round": r.round,
+            "role": r.role,
+            "action": r.action,
+            "price": r.price,
+            "reasoning": r.reasoning,
+        }
+        for r in result.transcript
+    ]
+
+    # --------------------------------------------------------------- #
+    # Steps M2 / P — post-deal steps (non-fatal, only on agreement)
+    # --------------------------------------------------------------- #
+    memory_attested = False
+    memory_write_hash: str | None = None
+    conduct_audit: dict | None = None
+    picreds_attested = False
+    negotiation_picreds_hash: str | None = None
+
+    if result.agreed:
+        # Step M2: write deal outcome to both agent memories
+        try:
+            outcome_messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Fundraising negotiation: {company_description}. "
+                        f"Investor: {payload.investor_id}."
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"Agreed at pre-money valuation {result.final_price}. "
+                        f"Terms: {result.terms}."
+                    ),
+                },
+            ]
+            memory_write_hash = hashlib.sha256(
+                json.dumps(outcome_messages, sort_keys=True).encode()
+            ).hexdigest()
+            await add_memories(founder_agent_id, outcome_messages, user_id=negotiation_id)
+            await add_memories(investor_agent_id, outcome_messages, user_id=negotiation_id)
+            memory_attested = True
+            logger.info(f"Negotiation {negotiation_id}: memories stored for both agents")
+        except Exception as exc:
+            logger.warning(f"Negotiation {negotiation_id}: memory store failed (non-fatal) — {exc}")
+
+        # Step P: πCreds — audit_fundraising_conduct (non-fatal)
+        try:
+            conduct_audit = await audit_fundraising_conduct(
+                transcript_data,
+                investor_cap=payload.investor_max_valuation,
+                floor_valuation=payload.founder_floor_valuation,
+                final_valuation=result.final_price,
+                inspection_report=inspector_findings,
+            )
+            negotiation_picreds_hash = hashlib.sha256(
+                json.dumps(conduct_audit, sort_keys=True).encode()
+            ).hexdigest()
+            picreds_attested = True
+            logger.info(f"Negotiation {negotiation_id}: πCreds audit complete")
+        except Exception as exc:
+            logger.warning(f"Negotiation {negotiation_id}: πCreds audit failed (non-fatal) — {exc}")
+
+    # --------------------------------------------------------------- #
+    # Step A — TDX attestation
+    # report_data covers diligence provenance + conduct audit + outcome
+    # --------------------------------------------------------------- #
+    tee_quote = await sign_result({
+        "diligence_credential_hash": diligence_credential_hash,
+        "negotiation_picreds_hash": negotiation_picreds_hash or "",
+        "final_valuation": result.final_price,
+        "agreed": result.agreed,
+    })
+
+    # --------------------------------------------------------------- #
+    # Step 4 — build credential_hash + persist
+    # --------------------------------------------------------------- #
+    credential_fields: dict = {
+        "credential_type": "FundraisingNegotiationCredential",
+        "negotiation_id": negotiation_id,
+        "diligence_id": payload.diligence_id,
+        "investor_id": payload.investor_id,
+        "diligence_credential_hash": diligence_credential_hash,
+        "agreed": result.agreed,
+        "final_valuation": result.final_price,
+        "round_count": len(result.transcript),
+        "conduct_audit": conduct_audit,
+        "picreds_attested": picreds_attested,
+        "negotiation_picreds_hash": negotiation_picreds_hash,
+        "memory_attested": memory_attested,
+        "memory_context_hash": memory_context_hash,
+        "memory_write_hash": memory_write_hash,
+        "issued_at": issued_at,
+    }
+    credential_hash_value = hashlib.sha256(
+        json.dumps(credential_fields, sort_keys=True).encode()
+    ).hexdigest()
+
+    await db.save_fundraising_negotiation(
+        negotiation_id=negotiation_id,
+        diligence_id=payload.diligence_id,
+        investor_id=payload.investor_id,
+        agreed=result.agreed,
+        final_valuation=result.final_price,
+        transcript=transcript_data,
+        conduct_audit=conduct_audit,
+        picreds_hash=negotiation_picreds_hash,
+        memory_context_hash=memory_context_hash,
+        memory_write_hash=memory_write_hash,
+        diligence_credential_hash=diligence_credential_hash,
+        credential_hash=credential_hash_value,
+        tee_quote=tee_quote,
+        issued_at=issued_at,
+    )
+
+    logger.info(
+        f"Negotiation {negotiation_id} complete — "
+        f"diligence={payload.diligence_id}, investor={payload.investor_id}, "
+        f"agreed={result.agreed}, final_valuation={result.final_price}, "
+        f"credential_hash={credential_hash_value[:16]}..."
+    )
+
+    return FundraisingNegotiationCredential(
+        negotiation_id=negotiation_id,
+        diligence_id=payload.diligence_id,
+        investor_id=payload.investor_id,
+        diligence_credential_hash=diligence_credential_hash,
+        agreed=result.agreed,
+        final_valuation=result.final_price,
+        round_count=len(result.transcript),
+        transcript=transcript_data,
+        conduct_audit=conduct_audit,
+        picreds_attested=picreds_attested,
+        negotiation_picreds_hash=negotiation_picreds_hash,
+        memory_attested=memory_attested,
+        memory_context_hash=memory_context_hash,
+        memory_write_hash=memory_write_hash,
+        credential_hash=credential_hash_value,
+        tee_quote=tee_quote,
+        tee_attested=True,
+        issued_at=issued_at,
+    )
