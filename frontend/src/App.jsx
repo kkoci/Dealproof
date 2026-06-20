@@ -9,56 +9,57 @@ import DevCredResults from './pages/devcred/Results.jsx'
 
 function NavBar() {
   const location = useLocation()
+  const isDevCred = location.pathname.startsWith('/devcred')
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-gray-950/90 backdrop-blur-md border-b border-gray-800/60">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
-          <Link
-            to="/"
-            className="flex items-center gap-2.5 group"
-          >
-            <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/50">
-              <svg
-                className="w-4 h-4 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                />
-              </svg>
-            </div>
-            <span className="text-gray-100 font-semibold tracking-tight group-hover:text-white transition-colors">
-              DealProof
-            </span>
-          </Link>
+          {isDevCred ? (
+            <Link to="/devcred/" className="flex items-center gap-2.5 group">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/50">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>
+              </div>
+              <span className="text-gray-100 font-semibold tracking-tight group-hover:text-white transition-colors">
+                Dev Credential
+              </span>
+            </Link>
+          ) : (
+            <Link to="/" className="flex items-center gap-2.5 group">
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-900/50">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              </div>
+              <span className="text-gray-100 font-semibold tracking-tight group-hover:text-white transition-colors">
+                DealProof
+              </span>
+            </Link>
+          )}
 
           <div className="flex items-center gap-1">
-            <Link
-              to="/create"
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                location.pathname === '/create'
-                  ? 'bg-indigo-600/20 text-indigo-400'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-              }`}
-            >
-              New Deal
-            </Link>
-            <Link
-              to="/devcred/"
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                location.pathname.startsWith('/devcred')
-                  ? 'bg-indigo-600/20 text-indigo-400'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
-              }`}
-            >
-              Dev Credential
-            </Link>
+            {!isDevCred && (
+              <Link
+                to="/create"
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  location.pathname === '/create'
+                    ? 'bg-indigo-600/20 text-indigo-400'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                }`}
+              >
+                New Deal
+              </Link>
+            )}
+            {!isDevCred && (
+              <Link
+                to="/devcred/"
+                className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 transition-colors"
+              >
+                Dev Credential
+              </Link>
+            )}
             <a
               href={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/docs`}
               target="_blank"
