@@ -54,7 +54,7 @@ function NavBar() {
               New Deal
             </Link>
             <a
-              href={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/docs`}
+              href={`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/docs`}
               target="_blank"
               rel="noopener noreferrer"
               className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 transition-colors flex items-center gap-1.5"

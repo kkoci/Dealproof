@@ -250,7 +250,7 @@ export default function Home() {
               GitHub
             </a>
             <a
-              href="/docs"
+              href={`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/docs`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"

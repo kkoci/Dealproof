@@ -91,7 +91,7 @@ export default function LandingPage() {
           <span className="font-semibold tracking-tight text-dp-text">DealProof</span>
         </div>
         <a
-          href="/docs"
+          href={`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/docs`}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs font-mono text-dp-muted hover:text-dp-text transition-colors"
