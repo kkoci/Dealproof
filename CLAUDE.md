@@ -175,7 +175,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (198 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (214 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 Note: `tests/conftest.py` stubs `web3` and `eth_account` so all HTTP tests run without installing blockchain packages.
 
@@ -186,7 +186,7 @@ tests/test_tee.py                10   KMS + TDX quote HTTP calls + GET /api/atte
 tests/test_props.py              23   Props verifier: helpers + failure paths + route gate
 tests/test_dkim_verifier.py      19   DKIM: parsing + DNS-over-HTTPS + verification paths
 tests/test_memory.py              4   Contexto client: add, search, hash, sidecar-down
-tests/test_picreds.py            11   πCreds: constraint checks (5 pure) + auditor + credentials + failure
+tests/test_picreds.py            27   πCreds: constraint checks (5 pure) + auditor + credentials + failure + AN2 fundraising checks (16)
 tests/test_e2e.py                13   Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py            8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py     7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
@@ -243,7 +243,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | NE5 | Frontend: investor threshold form + match results view + TrustStackBar match row | ✅ Complete |
 | **Agent Negotiation Upgrade** | **FounderAgent + InvestorAgent full stack** | |
 | AN1 | `FounderAgent` + `InvestorAgent` — mirrors Buyer/Seller, compatible with `run_negotiation()` | ✅ Complete |
-| AN2 | πCreds adaptation + SCAE founder_claim_consistency check | 🔜 Pending |
+| AN2 | πCreds adaptation + SCAE founder_claim_consistency check | ✅ Complete |
 | AN3 | Contexto integration + `FundraisingNegotiationCredential` + `/api/fundraising/negotiation/run` | 🔜 Pending |
 | AN4 | Tests + frontend negotiation flow | 🔜 Pending |
 

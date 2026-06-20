@@ -246,3 +246,251 @@ def test_picreds_failure_does_not_block_deal():
     assert body["picreds"] is None
     assert body["picreds_hash"] is None
     assert body["picreds_attested"] is False
+
+
+# ---------------------------------------------------------------------------
+# AN2 — Fundraising πCreds: _extract_claims_from_reasoning
+# ---------------------------------------------------------------------------
+
+_INSPECTION = {
+    "mom_growth_computed":   0.092,
+    "gross_margin_computed": 0.762,
+    "runway_months_computed": 14.1,
+    "churn_rate_computed":   0.025,
+}
+
+
+def test_extract_claims_num_first():
+    from app.picreds.constraints import _extract_claims_from_reasoning
+    claims = _extract_claims_from_reasoning("25% MoM growth and 76% gross margin")
+    assert claims.get("mom_growth") == [0.25]
+    assert claims.get("gross_margin") == [0.76]
+
+
+def test_extract_claims_kwd_first():
+    from app.picreds.constraints import _extract_claims_from_reasoning
+    claims = _extract_claims_from_reasoning("MoM growth is 9.2% and gross margin of 76%")
+    assert claims["mom_growth"] == [0.092]
+    assert claims["gross_margin"] == [0.76]
+
+
+def test_extract_claims_runway_and_churn():
+    from app.picreds.constraints import _extract_claims_from_reasoning
+    claims = _extract_claims_from_reasoning("runway of 14 months, monthly churn of 2.5%")
+    assert claims["runway_months"] == [14.0]
+    assert claims["churn_rate"] == [0.025]
+
+
+def test_extract_claims_dedup_same_value():
+    """Same value matched by both orderings should appear once."""
+    from app.picreds.constraints import _extract_claims_from_reasoning
+    claims = _extract_claims_from_reasoning("9.2% MoM growth; MoM growth is 9.2%")
+    assert claims["mom_growth"] == [0.092]
+
+
+def test_extract_claims_no_metrics():
+    from app.picreds.constraints import _extract_claims_from_reasoning
+    claims = _extract_claims_from_reasoning("Our team is world-class and our market is huge.")
+    assert claims == {}
+
+
+# ---------------------------------------------------------------------------
+# AN2 — check_founder_claim_consistency
+# ---------------------------------------------------------------------------
+
+def test_founder_claim_consistency_honest_pass():
+    from app.picreds.constraints import check_founder_claim_consistency
+    result = check_founder_claim_consistency(
+        [{"role": "seller", "round": 1, "price": 15e6,
+          "reasoning": "Our MoM growth is 9.2% and gross margin is 76%."}],
+        _INSPECTION,
+    )
+    assert result.passed is True
+
+
+def test_founder_claim_consistency_scae_inflated_growth():
+    """Founder claims 25% MoM growth; hard finding is 9.2% — >15% relative error."""
+    from app.picreds.constraints import check_founder_claim_consistency
+    result = check_founder_claim_consistency(
+        [{"role": "seller", "round": 1, "price": 20e6,
+          "reasoning": "Our MoM growth is 25%, justifying a premium valuation."}],
+        _INSPECTION,
+    )
+    assert result.passed is False
+    assert "mom" in result.finding.lower() or "growth" in result.finding.lower()
+    assert len(result.evidence) == 1
+
+
+def test_founder_claim_consistency_inflated_runway():
+    from app.picreds.constraints import check_founder_claim_consistency
+    result = check_founder_claim_consistency(
+        [{"role": "seller", "round": 1, "price": 15e6,
+          "reasoning": "We have runway of 30 months, so no pressure."}],
+        _INSPECTION,
+    )
+    assert result.passed is False
+
+
+def test_founder_claim_consistency_buyer_role_ignored():
+    """InvestorAgent (buyer role) claims are not checked."""
+    from app.picreds.constraints import check_founder_claim_consistency
+    result = check_founder_claim_consistency(
+        [{"role": "buyer", "round": 1, "price": 10e6,
+          "reasoning": "MoM growth is 25%"}],
+        _INSPECTION,
+    )
+    assert result.passed is True
+
+
+def test_founder_claim_consistency_missing_inspection_key_skipped():
+    """If a metric key is absent from inspection_report, that metric is skipped."""
+    from app.picreds.constraints import check_founder_claim_consistency
+    result = check_founder_claim_consistency(
+        [{"role": "seller", "round": 1, "price": 15e6,
+          "reasoning": "MoM growth is 25%"}],
+        {},  # empty inspection — no hard findings → nothing to check
+    )
+    assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# AN2 — check_investor_cap_respected
+# ---------------------------------------------------------------------------
+
+def test_investor_cap_respected_pass():
+    from app.picreds.constraints import check_investor_cap_respected
+    result = check_investor_cap_respected(
+        [{"round": 1, "role": "buyer", "price": 10e6}], 12e6
+    )
+    assert result.passed is True
+    assert result.check_name == "investor_cap_respected"
+
+
+def test_investor_cap_respected_fail():
+    from app.picreds.constraints import check_investor_cap_respected
+    result = check_investor_cap_respected(
+        [{"round": 1, "role": "buyer", "price": 13_500_000}], 12_000_000
+    )
+    assert result.passed is False
+    assert "valuation cap" in result.finding
+
+
+# ---------------------------------------------------------------------------
+# AN2 — run_fundraising_checks
+# ---------------------------------------------------------------------------
+
+def test_run_fundraising_checks_all_pass():
+    from app.picreds.constraints import run_fundraising_checks
+    transcript = [
+        {"role": "seller", "round": 1, "price": 15e6,
+         "reasoning": "MoM growth is 9% and gross margin is 76%."},
+        {"role": "buyer",  "round": 1, "price": 10e6, "reasoning": ""},
+        {"role": "seller", "round": 2, "price": 12e6, "reasoning": ""},
+        {"role": "buyer",  "round": 2, "price": 11.5e6, "reasoning": ""},
+    ]
+    results = run_fundraising_checks(
+        transcript, investor_cap=12e6, floor_valuation=8e6,
+        inspection_report=_INSPECTION,
+    )
+    expected_keys = {"investor_cap", "founder_floor", "capitulation", "convergence",
+                     "founder_claim_consistency"}
+    assert set(results.keys()) == expected_keys
+    assert all(r.passed for r in results.values()), \
+        [(k, r.finding) for k, r in results.items() if not r.passed]
+
+
+def test_run_fundraising_checks_scae_flagged():
+    from app.picreds.constraints import run_fundraising_checks
+    transcript = [
+        {"role": "seller", "round": 1, "price": 15e6,
+         "reasoning": "We have 30% MoM growth — a clear Series A signal."},
+    ]
+    results = run_fundraising_checks(
+        transcript, investor_cap=20e6, floor_valuation=8e6,
+        inspection_report=_INSPECTION,
+    )
+    assert results["founder_claim_consistency"].passed is False
+    # Other checks pass
+    assert results["investor_cap"].passed is True
+    assert results["founder_floor"].passed is True
+
+
+# ---------------------------------------------------------------------------
+# AN2 — audit_fundraising_conduct (mocked LLM)
+# ---------------------------------------------------------------------------
+
+FUNDRAISING_CONDUCT_RESPONSE = {
+    "no_collusion_detected": True,
+    "genuine_negotiation": True,
+    "metric_argument_quality": "strong",
+    "findings": ["Founder arguments grounded in attested metrics."],
+    "assessment": "Both agents complied with their hard constraints.",
+}
+
+
+@pytest.mark.asyncio
+async def test_audit_fundraising_conduct_all_pass():
+    from app.picreds.auditor import audit_fundraising_conduct
+
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_mock_anthropic_response(FUNDRAISING_CONDUCT_RESPONSE)
+    )
+
+    transcript = [
+        {"role": "seller", "round": 1, "price": 15e6,
+         "reasoning": "MoM growth is 9% and margin is 76%."},
+        {"role": "buyer",  "round": 1, "price": 10e6, "reasoning": ""},
+        {"role": "seller", "round": 2, "price": 12e6, "reasoning": ""},
+        {"role": "buyer",  "round": 2, "price": 11.5e6, "reasoning": ""},
+    ]
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        result = await audit_fundraising_conduct(
+            transcript,
+            investor_cap=12e6,
+            floor_valuation=8e6,
+            final_valuation=11.5e6,
+            inspection_report=_INSPECTION,
+        )
+
+    assert result["investor_cap_respected"] is True
+    assert result["founder_floor_respected"] is True
+    assert result["no_sudden_capitulation"] is True
+    assert result["convergence_pattern_valid"] is True
+    assert result["founder_claim_consistency"] is True
+    assert result["genuine_negotiation"] is True
+    assert result["no_collusion_detected"] is True
+    assert result["metric_argument_quality"] == "strong"
+    assert len(result["hard_constraint_findings"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_audit_fundraising_conduct_scae_overrides_llm():
+    """If founder_claim_consistency fails, genuine_negotiation is forced False."""
+    from app.picreds.auditor import audit_fundraising_conduct
+
+    # LLM claims genuine — but hard check will fail due to inflated claims
+    llm_says_genuine = {**FUNDRAISING_CONDUCT_RESPONSE, "genuine_negotiation": True}
+    mock_client = AsyncMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=_mock_anthropic_response(llm_says_genuine)
+    )
+
+    transcript = [
+        {"role": "seller", "round": 1, "price": 15e6,
+         "reasoning": "We have 50% MoM growth — industry-leading metrics."},
+    ]
+
+    with patch("anthropic.AsyncAnthropic", return_value=mock_client):
+        result = await audit_fundraising_conduct(
+            transcript,
+            investor_cap=20e6,
+            floor_valuation=8e6,
+            final_valuation=15e6,
+            inspection_report=_INSPECTION,
+        )
+
+    assert result["founder_claim_consistency"] is False
+    # Code override: LLM said True but hard check failed → must be False
+    assert result["genuine_negotiation"] is False
