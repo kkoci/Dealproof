@@ -1118,7 +1118,7 @@ Dealproof/
 | F7 | 5-step guided wizard replacing JSON textarea in DiligenceNew — live previews per step | ✅ Complete |
 | **Negotiation Extension** | **Two-sided threshold matching layer** | |
 | NE1 | `InvestorThresholds` schema + `investor_thresholds` DB table + `POST /api/fundraising/diligence/{id}/investor-thresholds` | ✅ Complete |
-| NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail with disclosure controls | 🔜 Pending |
+| NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail with disclosure controls | ✅ Complete |
 | NE3 | `FundraisingMatchCredential` + match endpoint + dual-view (founder/investor) + TDX attestation | 🔜 Pending |
 | NE4 | Two-sided synthetic fixtures + `tests/test_fundraising_match.py` (15+ tests) | 🔄 Partial (Phase 1 tests complete) |
 | NE5 | Frontend: investor threshold form + match results view | 🔜 Pending |
