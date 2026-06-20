@@ -1,8 +1,9 @@
 """
 Developer credential routes — /api/devcred/.
 
-Phase 1: Git ingestion + corpus hashing.
-  POST /api/devcred/ingest — fetch commits, extract metrics, compute corpus root.
+Phase 1: POST /api/devcred/ingest — fetch commits, extract metrics, compute corpus root.
+Phase 3: POST /api/devcred/{credential_id}/evaluate — full pipeline → SeniorDevCredential + TDX quote.
+         GET  /api/devcred/{credential_id}           — status + credential if complete.
 
 Privacy constraints:
   - github_token: used in-memory during this request, never written to disk or DB
@@ -10,13 +11,25 @@ Privacy constraints:
   - employer names: never appear in the system
   - raw diffs + file paths: not stored, only aggregate metrics
 """
+import hashlib
+import json
 import math
+from datetime import datetime, timezone
+
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import app.db as db
 from app.devcred.git_hasher import compute_repo_corpus_root, extract_commit_metrics
+from app.devcred.agents.git_inspector import GitInspectorAgent, GitInspectionReport
+from app.devcred.agents.git_evaluator import GitEvaluatorAgent, GitEvaluation
+from app.devcred.schemas import (
+    SeniorDevCredential,
+    DevCredEvaluateResponse,
+    DevCredStatusResponse,
+)
+from app.tee.attestation import sign_result
 
 router = APIRouter(prefix="/api/devcred", tags=["devcred"])
 
@@ -224,4 +237,142 @@ async def ingest_repos(body: DevCredIngest) -> DevCredIngestResponse:
         commit_count=len(all_commits),
         repo_count=len(body.repos),
         metrics_preview=metrics_preview,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 helpers
+# ---------------------------------------------------------------------------
+
+def _hash_credential(cred_fields: dict) -> str:
+    """SHA-256 of canonical credential JSON — embedded in TDX report_data."""
+    return hashlib.sha256(
+        json.dumps(cred_fields, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _fallback_evaluation(hard: GitInspectionReport, metrics: dict) -> GitEvaluation:
+    """Used when GitEvaluatorAgent fails — produce a minimal evaluation from hard findings."""
+    languages = list(metrics.get("languages", {}).keys())
+    return GitEvaluation(
+        seniority_level=hard.seniority_signal,
+        primary_languages=hard.languages_deep or languages[:3],
+        specializations=[],
+        contribution_pattern=(
+            f"{hard.avg_commit_quality.title()}-quality commits over {hard.years_active:.1f} years."
+        ),
+        qualitative_assessment=(
+            "LLM evaluation unavailable; assessment derived from deterministic metrics only."
+        ),
+        confidence="low",
+        caveats=["LLM evaluation failed — hard findings only", "manual review recommended"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/{credential_id}/evaluate", response_model=DevCredEvaluateResponse)
+async def evaluate_credential(credential_id: str) -> DevCredEvaluateResponse:
+    """
+    Run the full two-layer analysis pipeline on an ingested corpus.
+
+    Pipeline:
+      1. GitInspectorAgent.inspect(metrics) → hard findings (deterministic)
+      2. GitEvaluatorAgent.evaluate(metrics, hard_findings) → qualitative fields
+      3. Build SeniorDevCredential
+      4. credential_hash = SHA-256(credential fields)
+      5. Embed {credential_hash, repo_corpus_root} in TDX report_data
+      6. Persist to dev_credentials, return credential + TDX quote
+    """
+    record = await db.get_dev_credential(credential_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Credential not found: {credential_id}")
+    if record["status"] not in ("ingested", "pending"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Credential already evaluated (status={record['status']})",
+        )
+
+    metrics: dict = record["metrics"] or {}
+    repo_corpus_root: str = record["repo_corpus_root"]
+    developer_handle: str = record["developer_handle"] or "unknown"
+    commit_count: int = record["commit_count"] or 0
+
+    # Step 1 — deterministic hard findings
+    inspector = GitInspectorAgent()
+    hard = inspector.inspect(metrics)
+
+    # Step 2 — LLM qualitative evaluation (non-fatal)
+    evaluator = GitEvaluatorAgent()
+    evaluation = await evaluator.evaluate(metrics, hard)
+    if evaluation is None:
+        evaluation = _fallback_evaluation(hard, metrics)
+
+    # Step 3 — build credential (credential_hash placeholder)
+    issued_at = datetime.now(timezone.utc).isoformat()
+    cred_fields = {
+        "credential_type": "SeniorDevCredential",
+        "credential_id": credential_id,
+        "developer_handle": developer_handle,
+        "repo_corpus_root": repo_corpus_root,
+        "commit_count": commit_count,
+        "years_active": hard.years_active,
+        "hard_seniority_signal": hard.seniority_signal,
+        "seniority_level": evaluation.seniority_level,
+        "primary_languages": evaluation.primary_languages,
+        "specializations": evaluation.specializations,
+        "has_test_culture": hard.has_test_culture,
+        "qualitative_assessment": evaluation.qualitative_assessment,
+        "confidence": evaluation.confidence,
+        "caveats": evaluation.caveats,
+        "issued_at": issued_at,
+    }
+
+    # Step 4 — credential_hash over all fields (before tee_attested is set)
+    credential_hash = _hash_credential(cred_fields)
+    cred_fields["credential_hash"] = credential_hash
+
+    # Step 5 — TDX attestation: bind credential_hash + corpus_root
+    tee_quote = await sign_result({
+        "credential_hash": credential_hash,
+        "repo_corpus_root": repo_corpus_root,
+    })
+    tee_attested = bool(tee_quote)
+    cred_fields["tee_attested"] = tee_attested
+
+    credential = SeniorDevCredential(**cred_fields)
+
+    # Step 6 — persist
+    await db.update_dev_credential_result(
+        credential_id=credential_id,
+        credential=cred_fields,
+        tee_quote=tee_quote,
+    )
+
+    return DevCredEvaluateResponse(
+        credential_id=credential_id,
+        credential=credential,
+        tee_quote=tee_quote,
+        tee_attested=tee_attested,
+    )
+
+
+@router.get("/{credential_id}", response_model=DevCredStatusResponse)
+async def get_credential_status(credential_id: str) -> DevCredStatusResponse:
+    """Return current status and credential (if evaluation is complete)."""
+    record = await db.get_dev_credential(credential_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Credential not found: {credential_id}")
+
+    credential = None
+    if record["credential"]:
+        credential = SeniorDevCredential(**record["credential"])
+
+    return DevCredStatusResponse(
+        credential_id=credential_id,
+        status=record["status"],
+        credential=credential,
+        tee_quote=record["tee_quote"],
     )

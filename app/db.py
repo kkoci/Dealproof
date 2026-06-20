@@ -365,6 +365,21 @@ async def create_dev_credential(
         await db.commit()
 
 
+async def update_dev_credential_result(
+    credential_id: str,
+    credential: dict,
+    tee_quote: str,
+) -> None:
+    """Persist the evaluated credential JSON and TDX quote. Sets status='complete'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE dev_credentials SET credential_json = ?, tee_quote = ?, status = 'complete' "
+            "WHERE credential_id = ?",
+            (json.dumps(credential), tee_quote, credential_id),
+        )
+        await db.commit()
+
+
 async def get_dev_credential(credential_id: str) -> dict | None:
     """Fetch a dev_credential row by ID. Returns dict or None."""
     async with aiosqlite.connect(DB_PATH) as db:

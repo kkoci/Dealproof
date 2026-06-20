@@ -152,6 +152,8 @@ app/devcred/git_hasher.py                  hash_commit(), compute_repo_corpus_ro
 app/devcred/routes.py                      POST /api/devcred/ingest — GitHub API fetch, corpus hash, metrics; token never persisted
 app/devcred/agents/git_inspector.py        GitInspectorAgent — deterministic hard findings (years, languages_deep, test_culture, seniority_signal)
 app/devcred/agents/git_evaluator.py        GitEvaluatorAgent — LLM evaluation grounded in hard findings; seniority clamped >= hard signal
+app/devcred/schemas.py                     SeniorDevCredential + DevCredEvaluateResponse + DevCredStatusResponse
+(routes.py Phase 3)                        POST /api/devcred/{id}/evaluate + GET /api/devcred/{id}
 ```
 
 ---
@@ -234,7 +236,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | **Dev Credential vertical** | **product/dev-credential branch** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | ✅ Complete |
-| DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | 🔜 Pending |
+| DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
 | DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (min 15 tests) | 🔜 Pending |
 | DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | 🔜 Pending |
 

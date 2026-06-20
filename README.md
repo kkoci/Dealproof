@@ -1112,7 +1112,7 @@ Dealproof/
 | **Dev Credential** | **product/dev-credential branch** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
-| DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | 🔜 Pending |
+| DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | ✅ Complete |
 | DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` | 🔜 Pending |
 | DC-5 | Frontend — `/devcred/` credential card + trust stack | 🔜 Pending |
 
