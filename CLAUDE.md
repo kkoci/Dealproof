@@ -227,7 +227,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | F1 | `app/fundraising/` package — metrics hasher + ingest endpoint + DB table | ✅ Complete |
 | F2 | `MetricsInspectorAgent` (deterministic) + `MetricsEvaluatorAgent` (LLM) | ✅ Complete |
 | F3 | `FundraisingDiligenceCredential` + evaluate endpoint + TDX attestation | ✅ Complete |
-| F4 | Synthetic fixtures + `tests/test_fundraising.py` (18+ tests, SCAE scenarios) | 🔜 Pending |
+| F4 | Synthetic fixtures + `tests/test_fundraising.py` (20 tests, SCAE scenarios) | ✅ Complete |
 | F5 | Frontend: diligence dashboard + before/after demo view | 🔜 Pending |
 
 ---
