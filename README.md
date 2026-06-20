@@ -1114,6 +1114,7 @@ Dealproof/
 | F3 | `FundraisingDiligenceCredential` + evaluate endpoint + TDX attestation | ✅ Complete |
 | F4 | Synthetic fixtures + `tests/test_fundraising.py` (20 tests, SCAE scenarios) | ✅ Complete |
 | F5 | Frontend: diligence dashboard + before/after demo view | ✅ Complete |
+| F6 | Landing page + one-click demo runner (Clean + SCAE scenarios) | ✅ Complete |
 
 ---
 

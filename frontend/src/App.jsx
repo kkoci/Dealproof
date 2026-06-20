@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from 're
 import Home from './pages/Home.jsx'
 import CreateDeal from './pages/CreateDeal.jsx'
 import DealView from './pages/DealView.jsx'
+import DiligenceLanding from './pages/DiligenceLanding.jsx'
 import DiligenceNew from './pages/DiligenceNew.jsx'
 import DiligenceView from './pages/DiligenceView.jsx'
 
@@ -49,7 +50,7 @@ function NavBar() {
               New Deal
             </Link>
             <Link
-              to="/fundraising/new"
+              to="/fundraising"
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 location.pathname.startsWith('/fundraising')
                   ? 'bg-indigo-600/20 text-indigo-400'
@@ -102,6 +103,7 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/create" element={<CreateDeal />} />
             <Route path="/deal/:id" element={<DealView />} />
+            <Route path="/fundraising" element={<DiligenceLanding />} />
             <Route path="/fundraising/new" element={<DiligenceNew />} />
             <Route path="/fundraising/diligence/:id" element={<DiligenceView />} />
             <Route path="*" element={<NotFound />} />
