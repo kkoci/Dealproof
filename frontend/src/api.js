@@ -104,3 +104,38 @@ export function getDcapVerification(id) {
 export function getDealVerification(id) {
   return request(`/api/deals/${id}/verification`)
 }
+
+// ---------------------------------------------------------------------------
+// Dev Credential endpoints
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/devcred/ingest
+ * Token is sent once and never stored server-side.
+ * @param {{ github_token: string, repos: string[], credential_id: string }} body
+ * @returns {Promise<{ credential_id, corpus_root, commit_count, repo_count, metrics_preview }>}
+ */
+export function ingestRepos(body) {
+  return request('/api/devcred/ingest', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/devcred/:id/evaluate
+ * @param {string} credentialId
+ * @returns {Promise<{ credential_id, credential, tee_quote, tee_attested }>}
+ */
+export function evaluateDevCredential(credentialId) {
+  return request(`/api/devcred/${credentialId}/evaluate`, { method: 'POST' })
+}
+
+/**
+ * GET /api/devcred/:id
+ * @param {string} credentialId
+ * @returns {Promise<{ credential_id, status, credential, tee_quote }>}
+ */
+export function getDevCredential(credentialId) {
+  return request(`/api/devcred/${credentialId}`)
+}

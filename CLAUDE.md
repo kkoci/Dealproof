@@ -144,7 +144,7 @@ app/picreds/constraints.py Deterministic constraint checks (no LLM) — authorit
 app/picreds/credential.py  make_credential(), hash_credentials()
 demo.py                    CLI demo — transcript + attestations + memory + πCreds + auditor + arbitrator
 memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
-frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
+frontend/                  React 18 + Vite 5 + Tailwind — main deal UI + Dev Credential pages
 
 --- Dev Credential vertical (product/dev-credential branch) ---
 app/devcred/__init__.py        Package init
@@ -156,6 +156,10 @@ app/devcred/schemas.py                     SeniorDevCredential + DevCredEvaluate
 (routes.py Phase 3)                        POST /api/devcred/{id}/evaluate + GET /api/devcred/{id}
 scripts/generate_git_fixtures.py           7 scenarios: genuine_senior/mid/junior + 3 SCAE adversarial + thin_history
 tests/test_devcred.py                      29 tests — corpus root, SCAE ×3, inspector ×4, clamp, pipeline, schema, hash
+frontend/src/pages/devcred/Landing.jsx     /devcred/ — hero, flow diagram, privacy pills, 3-step explanation
+frontend/src/pages/devcred/Setup.jsx       /devcred/new — token input (cleared post-submit), repo selector, progress steps
+frontend/src/pages/devcred/Results.jsx     /devcred/:id — credential card + TrustStackBar + share/download actions
+frontend/src/components/TrustStackBar.jsx  Animated trust stack: TDX ENCLAVE → DCAP → REPO CORPUS → DEV CREDENTIAL
 ```
 
 ---

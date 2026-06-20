@@ -1114,7 +1114,7 @@ Dealproof/
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
 | DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | ✅ Complete |
 | DC-4 | Synthetic fixtures (7 scenarios) + SCAE tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
-| DC-5 | Frontend — `/devcred/` credential card + trust stack | 🔜 Pending |
+| DC-5 | Frontend — `/devcred/` landing, `/devcred/new` setup, `/devcred/:id` credential card + TrustStackBar | ✅ Complete |
 
 ---
 
