@@ -1120,7 +1120,7 @@ Dealproof/
 | NE1 | `InvestorThresholds` schema + `investor_thresholds` DB table + `POST /api/fundraising/diligence/{id}/investor-thresholds` | ✅ Complete |
 | NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail with disclosure controls | ✅ Complete |
 | NE3 | `FundraisingMatchCredential` + match endpoint + dual-view (founder/investor) + TDX attestation | ✅ Complete |
-| NE4 | Two-sided synthetic fixtures + `tests/test_fundraising_match.py` (15+ tests) | 🔄 Partial (32 tests, fixtures in NE4) |
+| NE4 | Two-sided synthetic fixtures + `tests/test_fundraising_match.py` (67 tests, 28-cell matrix) | ✅ Complete |
 | NE5 | Frontend: investor threshold form + match results view | 🔜 Pending |
 
 ---

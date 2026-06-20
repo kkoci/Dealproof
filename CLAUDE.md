@@ -175,7 +175,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (157 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (198 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 Note: `tests/conftest.py` stubs `web3` and `eth_account` so all HTTP tests run without installing blockchain packages.
 
@@ -192,7 +192,7 @@ tests/test_contract.py            8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py     7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py       13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_fundraising.py        20   Fundraising diligence: corpus root, inspector, SCAE scenarios, HTTP pipeline
-tests/test_fundraising_match.py  32   Negotiation extension: schema+endpoint (8) + ThresholdMatchAgent (13) + match pipeline (11)
+tests/test_fundraising_match.py  67   Negotiation extension: schema+endpoint (8) + ThresholdMatchAgent (13) + match pipeline (11) + investor fixtures + matrix (35)
 ```
 
 **Resilience guarantees:**
@@ -239,7 +239,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | NE1 | `InvestorThresholds` schema + `investor_thresholds` DB table + submit endpoint | ✅ Complete |
 | NE2 | `ThresholdMatchAgent` (deterministic, no LLM) — per-metric pass/fail + disclosure | ✅ Complete |
 | NE3 | `FundraisingMatchCredential` + match endpoint + founder/investor dual view + TDX attestation | ✅ Complete |
-| NE4 | Two-sided synthetic fixtures + full `tests/test_fundraising_match.py` (15+ tests) | 🔄 Partial |
+| NE4 | Two-sided synthetic fixtures + full `tests/test_fundraising_match.py` (67 tests, 28-cell matrix) | ✅ Complete |
 | NE5 | Frontend: investor threshold form + match results view | 🔜 Pending |
 
 ---

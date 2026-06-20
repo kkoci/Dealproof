@@ -4,7 +4,8 @@ Fundraising Negotiation Extension tests.
 This file grows phase by phase:
   Ext-Phase 1: InvestorThresholds schema + storage endpoint (tests 1–8)
   Ext-Phase 2: ThresholdMatchAgent deterministic matching (tests 9–22)
-  Ext-Phase 3: FundraisingMatchCredential + attestation (tests 23+)
+  Ext-Phase 3: FundraisingMatchCredential + attestation (tests 23–32)
+  Ext-Phase 4: Investor fixture scenarios + full match matrix (tests 33+)
 """
 import pytest
 from pathlib import Path
@@ -12,13 +13,19 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.fundraising.schemas import InvestorThresholds
+from app.fundraising.agents.metrics_inspector import MetricsInspectorAgent
+from app.fundraising.metrics_hasher import extract_metric_evidence
 from app.fundraising.agents.threshold_match import (
     ThresholdMatchAgent,
     ThresholdMatchResult,
     founder_view,
     investor_view,
 )
-from scripts.generate_fundraising_fixtures import SCENARIOS
+from scripts.generate_fundraising_fixtures import (
+    SCENARIOS,
+    INVESTOR_THRESHOLD_SCENARIOS,
+    MATCH_MATRIX,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -684,3 +691,170 @@ def test_source_diligence_credential_hash_in_match_response(client):
     data = _run_match(client, did, tid)
 
     assert data["source_diligence_credential_hash"] == source_hash
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 4: investor fixture scenarios
+# ---------------------------------------------------------------------------
+
+def _make_inspection_report(scenario_name: str) -> dict:
+    """Run MetricsInspectorAgent on a fixture scenario and return the report dict."""
+    import dataclasses
+    records = [r for r in SCENARIOS[scenario_name]["metrics_records"]]
+    evidence = extract_metric_evidence(records)
+    cv = SCENARIOS[scenario_name].get("claimed_values")
+    report = MetricsInspectorAgent().inspect(evidence, cv)
+    return dataclasses.asdict(report)
+
+
+def _make_investor_thresholds(scenario_key: str) -> InvestorThresholds:
+    data = INVESTOR_THRESHOLD_SCENARIOS[scenario_key].copy()
+    return InvestorThresholds(**data)
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 4: investor profile unit tests (4 profiles × known properties)
+# ---------------------------------------------------------------------------
+
+def test_lenient_seed_investor_passes_all_founders():
+    """lenient_seed_investor clears every founder scenario — no false negatives."""
+    agent = ThresholdMatchAgent()
+    thresholds = _make_investor_thresholds("lenient_seed_investor")
+    for founder_key in SCENARIOS:
+        report = _make_inspection_report(founder_key)
+        result = agent.match(report, thresholds)
+        assert result.overall_match is True, (
+            f"lenient_seed_investor should pass {founder_key!r} but got FAIL. "
+            f"Failed metrics: {[m.metric for m in result.metric_results if not m.passed and m.investor_threshold is not None]}"
+        )
+
+
+def test_concentration_sensitive_passes_only_clean(  ):
+    """concentration_sensitive (≤25%) only clears clean_series_a (23.4%); all others ≥37.7%."""
+    agent = ThresholdMatchAgent()
+    thresholds = _make_investor_thresholds("concentration_sensitive")
+    for founder_key, expected_pass in MATCH_MATRIX["concentration_sensitive"].items():
+        report = _make_inspection_report(founder_key)
+        result = agent.match(report, thresholds)
+        assert result.overall_match is expected_pass, (
+            f"concentration_sensitive × {founder_key!r}: expected {expected_pass}, got {result.overall_match}"
+        )
+
+
+def test_runway_focused_fails_exactly_two_scenarios():
+    """runway_focused (≥12m) fails runway_risk (4.0m) and mixed_signals (4.7m) only."""
+    agent = ThresholdMatchAgent()
+    thresholds = _make_investor_thresholds("runway_focused")
+    failures = [
+        key for key, expected in MATCH_MATRIX["runway_focused"].items()
+        if not expected
+    ]
+    assert set(failures) == {"runway_risk", "mixed_signals"}
+
+    for founder_key, expected_pass in MATCH_MATRIX["runway_focused"].items():
+        report = _make_inspection_report(founder_key)
+        result = agent.match(report, thresholds)
+        assert result.overall_match is expected_pass, (
+            f"runway_focused × {founder_key!r}: expected {expected_pass}, got {result.overall_match}"
+        )
+
+
+def test_strict_growth_investor_passes_only_high_growth():
+    """strict_growth (≥10% MoM + ≤5% ARR delta) only passes conc_risk and mixed_signals."""
+    agent = ThresholdMatchAgent()
+    thresholds = _make_investor_thresholds("strict_growth_investor")
+    for founder_key, expected_pass in MATCH_MATRIX["strict_growth_investor"].items():
+        report = _make_inspection_report(founder_key)
+        result = agent.match(report, thresholds)
+        assert result.overall_match is expected_pass, (
+            f"strict_growth × {founder_key!r}: expected {expected_pass}, got {result.overall_match}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 4: full match matrix — parametrized (28 combinations)
+# ---------------------------------------------------------------------------
+
+_MATRIX_PARAMS = [
+    (investor_key, founder_key, expected)
+    for investor_key, founders in MATCH_MATRIX.items()
+    for founder_key, expected in founders.items()
+]
+
+
+@pytest.mark.parametrize(
+    "investor_key,founder_key,expected_match",
+    _MATRIX_PARAMS,
+    ids=[f"{inv}×{fnd}" for inv, fnd, _ in _MATRIX_PARAMS],
+)
+def test_match_matrix(investor_key, founder_key, expected_match):
+    """
+    Cross-product test: each investor scenario × each founder scenario.
+    Verifies the full 4×7 = 28-cell match matrix produces expected outcomes.
+    """
+    agent = ThresholdMatchAgent()
+    thresholds = _make_investor_thresholds(investor_key)
+    report = _make_inspection_report(founder_key)
+    result = agent.match(report, thresholds)
+    assert result.overall_match is expected_match, (
+        f"{investor_key} × {founder_key}: expected {expected_match}, got {result.overall_match}. "
+        f"Failed on: {[m.metric for m in result.metric_results if not m.passed and m.investor_threshold is not None]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 4: privacy — founder view never exposes investor identity detail
+# ---------------------------------------------------------------------------
+
+def test_founder_view_never_exposes_investor_id_beyond_opaque_id():
+    """
+    The founder view must not contain any investor-identifying information
+    beyond the opaque investor_id string already surfaced at the top level.
+    """
+    thresholds = _make_investor_thresholds("concentration_sensitive")
+    report = _make_inspection_report("clean_series_a")
+    result = ThresholdMatchAgent().match(report, thresholds)
+    fv = founder_view(result)
+
+    # The opaque investor_id is allowed (it's in the match record top-level anyway)
+    # but NO threshold values, no profile names, no rich identifying detail
+    fv_str = str(fv)
+    assert "inv-concentration" not in fv_str  # raw investor_id not in view body
+    assert "0.25" not in fv_str               # threshold value not revealed
+
+
+def test_investor_id_not_in_founder_view_for_all_disclosure_levels():
+    """investor_id must not leak into founder_view regardless of disclosure level."""
+    for disclosure in ("none", "category_only", "full_threshold"):
+        thresholds = _make_investor_thresholds("strict_growth_investor")
+        thresholds = InvestorThresholds(
+            **{**INVESTOR_THRESHOLD_SCENARIOS["strict_growth_investor"],
+               "disclosure_on_mismatch": disclosure}
+        )
+        report = _make_inspection_report("runway_risk")
+        result = ThresholdMatchAgent().match(report, thresholds)
+        fv = founder_view(result)
+        assert "inv-strict-growth" not in str(fv), (
+            f"investor_id leaked into founder_view with disclosure={disclosure!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Ext-Phase 4: regression — existing test_fundraising.py scenarios unaffected
+# ---------------------------------------------------------------------------
+
+def test_existing_fundraising_inspector_unaffected_by_extension():
+    """
+    Regression: MetricsInspectorAgent still produces the same authoritative
+    flags for the original scenarios after the extension was added.
+    """
+    for scenario_key, scenario in SCENARIOS.items():
+        records = scenario["metrics_records"]
+        evidence = extract_metric_evidence(records)
+        report = MetricsInspectorAgent().inspect(evidence, scenario.get("claimed_values"))
+        expected = scenario.get("expected", {})
+        for field, val in expected.items():
+            actual = getattr(report, field, None)
+            assert actual == val, (
+                f"Regression in {scenario_key!r}: {field} expected {val}, got {actual}"
+            )

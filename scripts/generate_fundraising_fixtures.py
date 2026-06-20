@@ -187,7 +187,7 @@ SCENARIOS["runway_risk"] = {
     "claimed_values": {"mom_growth_rate": 0.10, "gross_margin_pct": 0.75},
     "expected": {
         "runway_flag": True,
-        "customer_concentration_flag": False,
+        "customer_concentration_flag": True,   # 3 customers, top = 12k/30k = 40% → flagged
         "churn_flag": False,
         "any_flag_raised": True,
     },
@@ -220,7 +220,7 @@ SCENARIOS["churn_risk"] = {
     "expected": {
         "churn_flag": True,
         "runway_flag": False,
-        "customer_concentration_flag": False,
+        "customer_concentration_flag": True,   # 3 customers, top = 20k/53k ≈ 37.7% > 30%
         "any_flag_raised": True,
     },
 }
@@ -319,6 +319,128 @@ SCENARIOS["mixed_signals"] = {
         "churn_flag": False,
         "mom_growth_verified": True,
         "any_flag_raised": True,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Investor threshold scenarios — Negotiation Extension Phase 4
+#
+# Four investor profiles with known, deterministic outcomes against each
+# founder scenario above. See MATCH_MATRIX below for the full cross-product.
+#
+# Computed metric ranges across all founder scenarios (reference):
+#   mom_growth_computed:    0.054 – 0.112
+#   top_customer_pct:       0.234 – 0.450
+#   gross_margin_computed:  0.610 – 0.767
+#   runway_months_computed: 4.0   – 15.56
+#   churn_rate_computed:    0.017 – 0.0995
+#   arr_delta_pct (abs):    0.000 – 0.5625
+# ---------------------------------------------------------------------------
+
+INVESTOR_THRESHOLD_SCENARIOS: dict[str, dict] = {}
+
+# ------------------------------------------------------------------
+# lenient_seed_investor
+# Low bars across all six metrics — every founder scenario passes.
+# Useful as a "green-light" baseline and for testing that no false
+# negatives are introduced when all thresholds are clearly met.
+# ------------------------------------------------------------------
+INVESTOR_THRESHOLD_SCENARIOS["lenient_seed_investor"] = {
+    "investor_id": "inv-lenient-seed",
+    "min_mom_growth": 0.03,
+    "max_customer_concentration_pct": 0.50,
+    "min_gross_margin": 0.40,
+    "min_runway_months": 3.0,
+    "max_monthly_churn_pct": 0.15,
+    "max_arr_delta_pct": 0.70,
+    "disclosure_on_mismatch": "category_only",
+}
+
+# ------------------------------------------------------------------
+# strict_growth_investor
+# Requires strong MoM growth (≥10%) and tight ARR consistency (≤5%
+# absolute delta). Only customer_concentration_risk (10.4%) and
+# mixed_signals (11.2%) clear the growth bar; both have ~0% ARR delta.
+# ------------------------------------------------------------------
+INVESTOR_THRESHOLD_SCENARIOS["strict_growth_investor"] = {
+    "investor_id": "inv-strict-growth",
+    "min_mom_growth": 0.10,
+    "max_arr_delta_pct": 0.05,
+    "disclosure_on_mismatch": "full_threshold",
+}
+
+# ------------------------------------------------------------------
+# concentration_sensitive
+# Very low maximum top-customer concentration (≤25%). Only
+# clean_series_a (23.4%) passes; every other scenario has ≥37.7%.
+# Everything else is None — this investor only cares about one thing.
+# ------------------------------------------------------------------
+INVESTOR_THRESHOLD_SCENARIOS["concentration_sensitive"] = {
+    "investor_id": "inv-concentration",
+    "max_customer_concentration_pct": 0.25,
+    "disclosure_on_mismatch": "category_only",
+}
+
+# ------------------------------------------------------------------
+# runway_focused
+# Requires ≥12 months of runway. runway_risk (4.0m) and mixed_signals
+# (4.7m) fail; the other five scenarios all have ≥13.3 months.
+# ------------------------------------------------------------------
+INVESTOR_THRESHOLD_SCENARIOS["runway_focused"] = {
+    "investor_id": "inv-runway",
+    "min_runway_months": 12.0,
+    "disclosure_on_mismatch": "category_only",
+}
+
+# ---------------------------------------------------------------------------
+# Match matrix — expected outcomes for each investor × founder combination.
+#
+# Format: MATCH_MATRIX[investor_key][founder_key] = True (PASS) | False (FAIL)
+# ---------------------------------------------------------------------------
+
+MATCH_MATRIX: dict[str, dict[str, bool]] = {
+    "lenient_seed_investor": {
+        "clean_series_a":             True,
+        "customer_concentration_risk": True,
+        "runway_risk":                True,
+        "churn_risk":                 True,
+        "arr_inflation":              True,
+        "margin_misrepresentation":   True,
+        "mixed_signals":              True,
+    },
+    "strict_growth_investor": {
+        # min_mom_growth=0.10: clean(9%)✗, conc_risk(10.4%)✓, runway(9.5%)✗,
+        #   churn(8%)✗, arr_infl(5.4%)✗, margin_misrep(5.4%)✗, mixed(11.2%)✓
+        # max_arr_delta=0.05: arr_inflation(56.25%)✗ (already fails growth)
+        "clean_series_a":             False,
+        "customer_concentration_risk": True,
+        "runway_risk":                False,
+        "churn_risk":                 False,
+        "arr_inflation":              False,
+        "margin_misrepresentation":   False,
+        "mixed_signals":              True,
+    },
+    "concentration_sensitive": {
+        # max_concentration=0.25: clean(23.4%)✓, all others ≥37.7% ✗
+        "clean_series_a":             True,
+        "customer_concentration_risk": False,
+        "runway_risk":                False,
+        "churn_risk":                 False,
+        "arr_inflation":              False,
+        "margin_misrepresentation":   False,
+        "mixed_signals":              False,
+    },
+    "runway_focused": {
+        # min_runway=12.0: clean(14.1)✓, conc_risk(15.6)✓, runway_risk(4.0)✗,
+        #   churn(13.3)✓, arr_infl(15.0)✓, margin(15.0)✓, mixed(4.7)✗
+        "clean_series_a":             True,
+        "customer_concentration_risk": True,
+        "runway_risk":                False,
+        "churn_risk":                 True,
+        "arr_inflation":              True,
+        "margin_misrepresentation":   True,
+        "mixed_signals":              False,
     },
 }
 
