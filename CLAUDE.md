@@ -148,8 +148,10 @@ frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pe
 
 --- Dev Credential vertical (product/dev-credential branch) ---
 app/devcred/__init__.py        Package init
-app/devcred/git_hasher.py      hash_commit(), compute_repo_corpus_root(), extract_commit_metrics() — no LLM
-app/devcred/routes.py          POST /api/devcred/ingest — GitHub API fetch, corpus hash, metrics; token never persisted
+app/devcred/git_hasher.py                  hash_commit(), compute_repo_corpus_root(), extract_commit_metrics() — no LLM
+app/devcred/routes.py                      POST /api/devcred/ingest — GitHub API fetch, corpus hash, metrics; token never persisted
+app/devcred/agents/git_inspector.py        GitInspectorAgent — deterministic hard findings (years, languages_deep, test_culture, seniority_signal)
+app/devcred/agents/git_evaluator.py        GitEvaluatorAgent — LLM evaluation grounded in hard findings; seniority clamped >= hard signal
 ```
 
 ---
@@ -231,7 +233,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 | **Dev Credential vertical** | **product/dev-credential branch** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
-| DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | 🔜 Pending |
+| DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | ✅ Complete |
 | DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | 🔜 Pending |
 | DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (min 15 tests) | 🔜 Pending |
 | DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | 🔜 Pending |
