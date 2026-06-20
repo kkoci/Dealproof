@@ -225,7 +225,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 | **product/fundraising-credential** | **Fundraising Diligence Vertical** | |
 | F1 | `app/fundraising/` package — metrics hasher + ingest endpoint + DB table | ✅ Complete |
-| F2 | `MetricsInspectorAgent` (deterministic) + `MetricsEvaluatorAgent` (LLM) | 🔜 Pending |
+| F2 | `MetricsInspectorAgent` (deterministic) + `MetricsEvaluatorAgent` (LLM) | ✅ Complete |
 | F3 | `FundraisingDiligenceCredential` + evaluate endpoint + TDX attestation | 🔜 Pending |
 | F4 | Synthetic fixtures + `tests/test_fundraising.py` (18+ tests, SCAE scenarios) | 🔜 Pending |
 | F5 | Frontend: diligence dashboard + before/after demo view | 🔜 Pending |
