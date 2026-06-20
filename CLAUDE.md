@@ -241,6 +241,11 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | NE3 | `FundraisingMatchCredential` + match endpoint + founder/investor dual view + TDX attestation | ✅ Complete |
 | NE4 | Two-sided synthetic fixtures + full `tests/test_fundraising_match.py` (67 tests, 28-cell matrix) | ✅ Complete |
 | NE5 | Frontend: investor threshold form + match results view + TrustStackBar match row | ✅ Complete |
+| **Agent Negotiation Upgrade** | **FounderAgent + InvestorAgent full stack** | |
+| AN1 | `FounderAgent` + `InvestorAgent` — mirrors Buyer/Seller, compatible with `run_negotiation()` | ✅ Complete |
+| AN2 | πCreds adaptation + SCAE founder_claim_consistency check | 🔜 Pending |
+| AN3 | Contexto integration + `FundraisingNegotiationCredential` + `/api/fundraising/negotiation/run` | 🔜 Pending |
+| AN4 | Tests + frontend negotiation flow | 🔜 Pending |
 
 ---
 
