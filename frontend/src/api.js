@@ -104,3 +104,38 @@ export function getDcapVerification(id) {
 export function getDealVerification(id) {
   return request(`/api/deals/${id}/verification`)
 }
+
+// ---------------------------------------------------------------------------
+// Fundraising diligence
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/fundraising/diligence/ingest
+ * @param {object} body — { company_name, round_label?, metrics_records }
+ */
+export function ingestDiligence(body) {
+  return request('/api/fundraising/diligence/ingest', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/fundraising/diligence/:id/evaluate
+ * @param {string} id
+ * @param {object} body — { claimed_values? }
+ */
+export function evaluateDiligence(id, body = {}) {
+  return request(`/api/fundraising/diligence/${id}/evaluate`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/fundraising/diligence/:id
+ * @param {string} id
+ */
+export function getDiligence(id) {
+  return request(`/api/fundraising/diligence/${id}`)
+}

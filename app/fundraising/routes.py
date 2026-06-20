@@ -77,6 +77,24 @@ async def ingest_diligence(payload: DiligenceIngestRequest) -> DiligenceIngestRe
     )
 
 
+@router.get("/diligence/{diligence_id}", status_code=200)
+async def get_diligence_status(diligence_id: str) -> dict:
+    """Fetch a diligence record — returns status + credential if evaluated."""
+    row = await db.get_diligence(diligence_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Diligence '{diligence_id}' not found.")
+    return {
+        "diligence_id": row["diligence_id"],
+        "company_name": row["company_name"],
+        "round_label": row["round_label"],
+        "corpus_root": row["metrics_corpus_root"],
+        "status": row["status"],
+        "credential": row["credential"],
+        "tee_quote": row["tee_quote"],
+        "created_at": row["created_at"],
+    }
+
+
 @router.post(
     "/diligence/{diligence_id}/evaluate",
     response_model=DiligenceEvaluateResponse,
