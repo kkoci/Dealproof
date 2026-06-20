@@ -230,6 +230,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | F4 | Synthetic fixtures + `tests/test_fundraising.py` (20 tests, SCAE scenarios) | ✅ Complete |
 | F5 | Frontend: diligence dashboard + before/after demo view | ✅ Complete |
 | F6 | Landing page + one-click demo runner (Clean + SCAE scenarios) | ✅ Complete |
+| F7 | 5-step guided wizard replacing JSON textarea in DiligenceNew — live previews per step | ✅ Complete |
 
 ---
 
