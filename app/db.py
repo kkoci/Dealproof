@@ -404,6 +404,28 @@ async def get_diligence(diligence_id: str) -> dict | None:
     }
 
 
+async def update_diligence_credential(
+    diligence_id: str,
+    credential: dict,
+    credential_hash: str,
+    tee_quote: str,
+) -> None:
+    """Store evaluated credential + TDX quote; set status to 'evaluated'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            UPDATE fundraising_diligences
+               SET credential_json = ?,
+                   quality_hash    = ?,
+                   tee_quote       = ?,
+                   status          = 'evaluated'
+             WHERE diligence_id = ?
+            """,
+            (json.dumps(credential), credential_hash, tee_quote, diligence_id),
+        )
+        await db.commit()
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.
