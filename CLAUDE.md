@@ -154,6 +154,8 @@ app/devcred/agents/git_inspector.py        GitInspectorAgent — deterministic h
 app/devcred/agents/git_evaluator.py        GitEvaluatorAgent — LLM evaluation grounded in hard findings; seniority clamped >= hard signal
 app/devcred/schemas.py                     SeniorDevCredential + DevCredEvaluateResponse + DevCredStatusResponse
 (routes.py Phase 3)                        POST /api/devcred/{id}/evaluate + GET /api/devcred/{id}
+scripts/generate_git_fixtures.py           7 scenarios: genuine_senior/mid/junior + 3 SCAE adversarial + thin_history
+tests/test_devcred.py                      29 tests — corpus root, SCAE ×3, inspector ×4, clamp, pipeline, schema, hash
 ```
 
 ---
@@ -237,7 +239,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | ✅ Complete |
 | DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
-| DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (min 15 tests) | 🔜 Pending |
+| DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
 | DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | 🔜 Pending |
 
 ---

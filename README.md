@@ -257,7 +257,7 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
-tests/test_devcred.py     (Phase DC-1) — Git hasher: corpus root, metrics, token-not-persisted (added Phase DC-1)
+tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1113,7 +1113,7 @@ Dealproof/
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
 | DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | ✅ Complete |
-| DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` | 🔜 Pending |
+| DC-4 | Synthetic fixtures (7 scenarios) + SCAE tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
 | DC-5 | Frontend — `/devcred/` credential card + trust stack | 🔜 Pending |
 
 ---
