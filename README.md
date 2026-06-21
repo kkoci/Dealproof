@@ -245,18 +245,24 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-69 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar) is either mocked or redirected to a temp file.
+244 tests pass, 2 skipped — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar) is either mocked or redirected to a temp file.
 
 ```
-tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests
-tests/test_negotiation.py     4 tests  — Negotiation loop, combined attestation payload
-tests/test_tee.py            10 tests  — KMS + TDX quote HTTP calls, report_data construction, GET /api/attest
-tests/test_props.py          23 tests  — Props verifier: all pure helpers + failure paths + route gate
-tests/test_dkim_verifier.py  19 tests  — DKIM email proof: parsing, DNS-over-HTTPS, verification paths
-tests/test_memory.py          4 tests  — Contexto memory client: add, search, hash, sidecar-down resilience
-tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
-tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
-tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
+tests/test_agents.py                   6   BuyerAgent + SellerAgent + AuditorAgent unit tests
+tests/test_negotiation.py              8   Negotiation loop, arbitrator, combined attestation payload
+tests/test_tee.py                     10   KMS + TDX quote HTTP calls + GET /api/attest
+tests/test_props.py                   23   Props verifier: helpers + failure paths + route gate
+tests/test_dkim_verifier.py           19   DKIM: parsing + DNS-over-HTTPS + verification paths
+tests/test_memory.py                   4   Contexto client: add, search, hash, sidecar-down
+tests/test_picreds.py                 27   πCreds: constraint checks + auditor + AN2 fundraising checks
+tests/test_e2e.py                     13   Full HTTP stack end-to-end (TestClient + mocks)
+tests/test_contract.py                 8   Phase 4 escrow: create/complete/refund
+tests/test_data_credential.py          7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
+tests/test_data_quality.py            13   DataQualityAgent: happy path, failure path, hash determinism, schema
+tests/test_fundraising.py             20   Fundraising diligence: corpus root, inspector, SCAE scenarios, HTTP pipeline
+tests/test_fundraising_match.py       67   Threshold matching: schema + ThresholdMatchAgent + pipeline + 28-cell matrix
+tests/test_fundraising_negotiation.py 14   AN3: schema + DB + endpoints + agreed/failed paths + resilience
+tests/test_devcred.py                 16   Dev credential: corpus root + metrics + inspector + SCAE + HTTP pipeline
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1122,6 +1128,17 @@ Dealproof/
 | NE3 | `FundraisingMatchCredential` + match endpoint + dual-view (founder/investor) + TDX attestation | ✅ Complete |
 | NE4 | Two-sided synthetic fixtures + `tests/test_fundraising_match.py` (67 tests, 28-cell matrix) | ✅ Complete |
 | NE5 | Frontend: investor threshold form + match results view + TrustStackBar match row | ✅ Complete |
+| **Agent Negotiation Upgrade** | **FounderAgent + InvestorAgent full stack** | |
+| AN1 | `FounderAgent` + `InvestorAgent` — mirrors Buyer/Seller, compatible with `run_negotiation()` | ✅ Complete |
+| AN2 | πCreds adaptation + SCAE `check_founder_claim_consistency` check | ✅ Complete |
+| AN3 | Contexto integration + `FundraisingNegotiationCredential` + `POST /api/fundraising/negotiation/run` | ✅ Complete |
+| AN4 | Tests + frontend negotiation flow (NegotiationForm, NegotiationResultView) | ✅ Complete |
+| **product/dev-credential** | **Developer Credential Vertical** | |
+| DC1 | `app/devcred/git_hasher.py` — hash_commit, Merkle corpus root, extract_commit_metrics | ✅ Complete |
+| DC2 | `GitInspectorAgent` (deterministic) + `GitEvaluatorAgent` (LLM) — two-layer seniority | ✅ Complete |
+| DC3 | `SeniorDevCredential` + `/api/devcred/ingest` + `/api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
+| DC4 | Synthetic git fixtures + `tests/test_devcred.py` (16 tests, 3 SCAE scenarios) | ✅ Complete |
+| DC5 | Frontend: `DevCredLanding` + `DevCredNew` + `DevCredView` — `/devcred/` routes | ✅ Complete |
 
 ---
 

@@ -122,7 +122,7 @@ class InvestorAgent:
 
         response = await self.client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=512,
+            max_tokens=2048,
             system=self.system_prompt,
             messages=messages,
         )
