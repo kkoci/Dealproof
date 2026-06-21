@@ -13,7 +13,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.fundraising.routes import router as fundraising_router
-from app.devcred.routes import router as devcred_router
 from app.config import settings
 import app.db as db
 
@@ -30,7 +29,6 @@ async def lifespan(app: FastAPI):
     await db.create_investor_thresholds_table()
     await db.create_match_results_table()
     await db.create_fundraising_negotiations_table()
-    await db.create_dev_credentials_table()
     await db.reset_stale_negotiations()  # recover deals interrupted by crashes/restarts
     yield
 
@@ -57,7 +55,6 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(fundraising_router)
-app.include_router(devcred_router)
 
 
 @app.get("/health")
