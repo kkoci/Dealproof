@@ -175,7 +175,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (228 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (244 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 Note: `tests/conftest.py` stubs `web3` and `eth_account` so all HTTP tests run without installing blockchain packages.
 
@@ -194,6 +194,7 @@ tests/test_data_quality.py       13   DataQualityAgent: happy path, failure path
 tests/test_fundraising.py        20   Fundraising diligence: corpus root, inspector, SCAE scenarios, HTTP pipeline
 tests/test_fundraising_match.py  67   Negotiation extension: schema+endpoint (8) + ThresholdMatchAgent (13) + match pipeline (11) + investor fixtures + matrix (35)
 tests/test_fundraising_negotiation.py  14   AN3: schema (2) + DB round-trip (2) + endpoint gates (2) + agreed path (3) + failed path (1) + resilience (2) + determinism + transcript (2)
+tests/test_devcred.py            16   Dev credential: corpus root (2) + metrics (1) + inspector seniority (3) + SCAE (2) + HTTP ingest/evaluate/GET (5) + privacy (1) + attestation (1) + floor enforcement (1)
 ```
 
 **Resilience guarantees:**
@@ -247,6 +248,12 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | AN2 | πCreds adaptation + SCAE founder_claim_consistency check | ✅ Complete |
 | AN3 | Contexto integration + `FundraisingNegotiationCredential` + `/api/fundraising/negotiation/run` | ✅ Complete |
 | AN4 | Tests + frontend negotiation flow | ✅ Complete |
+| **product/dev-credential** | **Developer Credential Vertical** | |
+| DC1 | `app/devcred/git_hasher.py` — hash_commit, corpus root, extract_commit_metrics | ✅ Complete |
+| DC2 | `GitInspectorAgent` (deterministic) + `GitEvaluatorAgent` (LLM) — two-layer seniority | ✅ Complete |
+| DC3 | `SeniorDevCredential` + `/api/devcred/ingest` + `/api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
+| DC4 | Synthetic git fixtures + `tests/test_devcred.py` (16 tests, 3 SCAE scenarios) | ✅ Complete |
+| DC5 | Frontend: `DevCredLanding` + `DevCredNew` + `DevCredView` — `/devcred/` routes | ✅ Complete |
 
 ---
 

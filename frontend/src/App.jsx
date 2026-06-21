@@ -8,6 +8,9 @@ import InvestorThresholdForm from './pages/InvestorThresholdForm.jsx'
 import MatchResultView from './pages/MatchResultView.jsx'
 import NegotiationForm from './pages/NegotiationForm.jsx'
 import NegotiationResultView from './pages/NegotiationResultView.jsx'
+import DevCredLanding from './pages/DevCredLanding.jsx'
+import DevCredNew from './pages/DevCredNew.jsx'
+import DevCredView from './pages/DevCredView.jsx'
 
 function NavBar() {
   return (
@@ -75,6 +78,9 @@ export default function App() {
             <Route path="/fundraising/match/:id" element={<MatchResultView />} />
             <Route path="/fundraising/negotiation/new" element={<NegotiationForm />} />
             <Route path="/fundraising/negotiation/:id" element={<NegotiationResultView />} />
+            <Route path="/devcred" element={<DevCredLanding />} />
+            <Route path="/devcred/new" element={<DevCredNew />} />
+            <Route path="/devcred/:id" element={<DevCredView />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>

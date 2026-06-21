@@ -189,3 +189,38 @@ export function runFundraisingNegotiation(body) {
     body: JSON.stringify(body),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Dev credential
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/devcred/ingest
+ * @param {object} body — DevCredIngestRequest
+ */
+export function ingestDevCred(body) {
+  return request('/api/devcred/ingest', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/devcred/:id/evaluate
+ * @param {string} id
+ * @param {object} body — DevCredEvaluateRequest
+ */
+export function evaluateDevCred(id, body = {}) {
+  return request(`/api/devcred/${id}/evaluate`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/devcred/:id
+ * @param {string} id
+ */
+export function getDevCred(id) {
+  return request(`/api/devcred/${id}`)
+}
