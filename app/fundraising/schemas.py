@@ -242,6 +242,7 @@ class MatchRunResponse(BaseModel):
     overall_match: bool
     founder_view: dict      # filtered per disclosure_on_mismatch
     investor_view: dict     # full pass/fail + thresholds, no founder raw values
+    corpus_root: str
     credential_hash: str
     source_diligence_credential_hash: str
     tee_quote: str

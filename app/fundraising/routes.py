@@ -369,6 +369,7 @@ async def run_match(
             ),
         )
 
+    corpus_root: str = diligence_row.get("corpus_root", "")
     credential = diligence_row["credential"]
     inspection_report: dict = credential.get("inspector_findings", {})
     source_diligence_credential_hash: str = credential.get("credential_hash", "")
@@ -478,6 +479,7 @@ async def run_match(
         overall_match=match_result.overall_match,
         founder_view=fdr_view,
         investor_view=inv_view,
+        corpus_root=corpus_root,
         credential_hash=credential_hash,
         source_diligence_credential_hash=source_diligence_credential_hash,
         tee_quote=tee_quote,
@@ -518,6 +520,9 @@ async def get_match_result(
     if row is None:
         raise HTTPException(status_code=404, detail=f"Match '{match_id}' not found.")
 
+    diligence_row = await db.get_diligence(row["diligence_id"])
+    corpus_root = diligence_row.get("corpus_root", "") if diligence_row else ""
+
     # Reconstruct a minimal ThresholdMatchResult-like structure from stored raw data
     # so we can re-apply the view helpers consistently.
     from app.fundraising.agents.threshold_match import (
@@ -549,6 +554,7 @@ async def get_match_result(
         "match_id": match_id,
         "diligence_id": row["diligence_id"],
         "viewer": viewer,
+        "corpus_root": corpus_root,
         "credential_hash": row["credential_hash"],
         "source_diligence_credential_hash": row["source_diligence_credential_hash"],
         "tee_quote": row["tee_quote"],

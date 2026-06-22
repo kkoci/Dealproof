@@ -460,6 +460,7 @@ export default function MatchResultView() {
           {/* Center — trust stack with both hashes */}
           <div className="lg:col-span-1">
             <TrustStackBar
+              corpusRoot={data.corpus_root}
               credentialHash={data.source_diligence_credential_hash}
               teeQuote={data.tee_quote}
               matchCredentialHash={data.credential_hash}
