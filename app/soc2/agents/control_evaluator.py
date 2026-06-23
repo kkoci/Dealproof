@@ -73,7 +73,11 @@ class ControlEvaluatorAgent:
     """
 
     def __init__(self):
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self.client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=30.0,
+            max_retries=1,
+        )
 
     async def evaluate(
         self,
