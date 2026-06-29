@@ -1,0 +1,14 @@
+{
+  "name": "dealproof-tc-sidecar",
+  "version": "1.0.0",
+  "description": "TinyCloud transcript sidecar for DealProof — wraps tc CLI for KV/SQL reads under delegation",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --hot run src/index.ts"
+  },
+  "dependencies": {
+    "@tinycloud/cli": "latest",
+    "viem": "^2.0.0"
+  }
+}

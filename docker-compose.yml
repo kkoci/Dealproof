@@ -29,15 +29,34 @@ services:
     environment:
       - DSTACK_SIMULATOR_ENDPOINT=http://dstack-simulator:8090
       - MEMORY_SERVICE_URL=http://memory-service:4011
+      - TC_SIDECAR_URL=http://tc-sidecar:4099
     depends_on:
       - dstack-simulator
       - memory-service
+      - tc-sidecar
 
   dstack-simulator:
     image: phalanetwork/tappd-simulator:latest
     platform: linux/amd64
     ports:
       - "8090:8090"
+
+  tc-sidecar:
+    build:
+      context: ./tinycloud-sidecar
+      dockerfile: Dockerfile
+    image: kkoci/dealproof-tc-sidecar:latest
+    platform: linux/amd64
+    ports:
+      - "4099:4099"
+    volumes:
+      - tc-sidecar-data:/data
+    env_file:
+      - .env
+    environment:
+      - TC_SIDECAR_PORT=4099
+      - TC_SIDECAR_DATA_DIR=/data
+    restart: unless-stopped
 
   memory-service:
     build:
@@ -60,3 +79,4 @@ services:
 
 volumes:
   memory-data:
+  tc-sidecar-data:

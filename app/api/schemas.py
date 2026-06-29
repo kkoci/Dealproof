@@ -255,12 +255,9 @@ class CorpusIngest(BaseModel):
     mode: str = "direct"                     # "direct" | "tinycloud" | "local"
     # direct mode: provide conversations inline
     conversations: list[TinyCloudConversation] = []
-    # tinycloud mode: fetch at runtime via the local bridge (http://localhost:4098)
-    # or directly from the TinyCloud node when running in a non-Python environment.
-    # tinycloud_session_token is accepted for future direct-node auth; the bridge
-    # handles auth transparently so it is not required when using the bridge.
-    tinycloud_session_token: str | None = None
-    tinycloud_host: str = "http://localhost:4098"   # bridge by default; node.tinycloud.xyz for direct
+    # tinycloud mode: fetch via the tc-sidecar (http://localhost:4099 by default).
+    # Override with TC_SIDECAR_URL env var or tinycloud_host field.
+    tinycloud_host: str = ""   # empty → read from settings.tc_sidecar_url
     # local mode: read from TinyCloud/feed/ saved corpus files (dev / offline)
     # If omitted, defaults to <project_root>/TinyCloud/feed relative to routes.py
     local_corpus_path: str | None = None

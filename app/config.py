@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     arc_chain_id: int = 0                # ARC_CHAIN_ID
     arcid_registry_address: str = ""     # ARCID_REGISTRY_ADDRESS
 
+    # TinyCloud transcript sidecar (TC_SIDECAR_URL)
+    # Local dev: http://localhost:4099  (sidecar started separately)
+    # Phala compose: http://tc-sidecar:4099  (set via TC_SIDECAR_URL env var)
+    tc_sidecar_url: str = "http://localhost:4099"
+
     # App
     debug: bool = True
     log_level: str = "INFO"

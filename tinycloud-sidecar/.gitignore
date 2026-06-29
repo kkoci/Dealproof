@@ -1,0 +1,4 @@
+node_modules/
+.sidecar-data/
+bun.lock
+*.env

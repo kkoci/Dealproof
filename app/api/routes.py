@@ -22,6 +22,7 @@ import uuid
 import logging
 import httpx
 from fastapi import APIRouter, HTTPException
+from app.config import settings
 
 from app.api.schemas import (
     DealCreate, DealResult, DealStatus, NegotiationRound, DCAPVerification,
@@ -758,10 +759,9 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
     for use as data_hash in POST /api/deals/run.
 
     direct    — supply conversations inline in the request body (no auth)
-    tinycloud — fetch live via the local bridge (http://localhost:4098, default)
-                or directly from node.tinycloud.xyz via tinycloud_host override.
-                The bridge wraps `tc` CLI auth transparently; tinycloud_session_token
-                is accepted but not required when the bridge is running.
+    tinycloud — fetch via the tc-sidecar (defaults to settings.tc_sidecar_url).
+                The sidecar handles tc CLI auth internally under the stored
+                delegation; no session token or auth header needed here.
     local     — read from TinyCloud/feed/ saved corpus files; no network needed.
                 Uses local_corpus_path or auto-discovers <project_root>/TinyCloud/feed.
     """
@@ -769,27 +769,18 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
 
     if payload.mode == "tinycloud":
         conversations_raw: list[dict] = []
-        host = payload.tinycloud_host.rstrip("/")
-        # Bridge needs no auth header; direct node calls use the UCAN delegation token
-        headers: dict[str, str] = {}
-        if payload.tinycloud_session_token:
-            headers["Authorization"] = payload.tinycloud_session_token
+        host = (payload.tinycloud_host or settings.tc_sidecar_url).rstrip("/")
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # Step 1: fetch conversation rows via SQL
-                sql_resp = await client.post(
-                    f"{host}/v1/sql",
-                    json={
-                        "database": "xyz.tinycloud.listen/conversations",
-                        "query": "SELECT id, title, source, started_at, summary FROM conversation LIMIT 300",
-                    },
-                    headers=headers,
-                )
-                sql_resp.raise_for_status()
-                rows = sql_resp.json().get("rows", [])
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # Step 1: fetch conversation rows from sidecar
+                conv_resp = await client.get(f"{host}/internal/conversations", params={"limit": 300})
+                if conv_resp.status_code == 503:
+                    raise HTTPException(status_code=503, detail=conv_resp.json().get("error", "tc-sidecar: no delegation stored"))
+                conv_resp.raise_for_status()
+                rows = conv_resp.json().get("rows", [])
 
-                # Step 2: fetch transcript KV blob per conversation
+                # Step 2: fetch transcript KV blob per conversation from sidecar
                 for row in rows:
                     conv = {
                         "id": row["id"],
@@ -799,21 +790,26 @@ async def ingest_corpus(payload: CorpusIngest) -> CorpusIngestResponse:
                         "summary": row.get("summary"),
                         "sentences": [],
                     }
-                    kv_key = f"xyz.tinycloud.listen/transcript/{row['id']}"
                     try:
-                        kv_resp = await client.get(f"{host}/v1/kv/{kv_key}", headers=headers)
-                        if kv_resp.status_code == 200:
-                            raw_kv = kv_resp.json()
-                            if isinstance(raw_kv, list):
-                                conv["sentences"] = raw_kv
+                        tr_resp = await client.get(f"{host}/internal/transcript/{row['id']}")
+                        if tr_resp.status_code == 503:
+                            raise HTTPException(status_code=503, detail=tr_resp.json().get("error", "tc-sidecar: no delegation stored"))
+                        if tr_resp.status_code == 200:
+                            raw_sentences = tr_resp.json()
+                            if isinstance(raw_sentences, list):
+                                conv["sentences"] = raw_sentences
+                    except HTTPException:
+                        raise
                     except Exception:
-                        pass  # KV miss — summary fallback handled in _hash_conversation
+                        pass  # 404 or transient error — summary fallback in _hash_conversation
                     conversations_raw.append(conv)
 
+        except HTTPException:
+            raise
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: HTTP {exc.response.status_code}")
+            raise HTTPException(status_code=503, detail=f"tc-sidecar unavailable: HTTP {exc.response.status_code}")
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"TinyCloud unavailable: {exc}")
+            raise HTTPException(status_code=503, detail=f"tc-sidecar unavailable: {exc}")
 
     elif payload.mode == "local":
         # Read from TinyCloud/feed/ bulk-downloaded corpus files — no network needed.
