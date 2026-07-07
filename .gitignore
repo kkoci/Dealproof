@@ -55,6 +55,10 @@ node_modules/
 contracts/artifacts/
 contracts/cache/
 
+# Tinycloud ignore for main branch
+app/api/TRANSCRIPT_INGEST_PROPOSAL.md
+tinycloud-sidecar/
+
 # Project-specific docs (internal planning)
 ARCHITECTURE.md
 CONTEXTO_INTEGRATION.md
