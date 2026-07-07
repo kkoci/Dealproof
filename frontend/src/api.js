@@ -28,6 +28,28 @@ async function request(path, options = {}) {
   return res.json()
 }
 
+async function requestMultipart(path, formData) {
+  const url = `${BASE_URL}${path}`
+  const res = await fetch(url, { method: 'POST', body: formData })
+
+  if (!res.ok) {
+    let errorMessage = `HTTP ${res.status}: ${res.statusText}`
+    try {
+      const errBody = await res.json()
+      if (errBody.detail) {
+        errorMessage = typeof errBody.detail === 'string'
+          ? errBody.detail
+          : JSON.stringify(errBody.detail)
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(errorMessage)
+  }
+
+  return res.json()
+}
+
 /**
  * GET /health
  * @returns {{ status: string, tee_mode: string }}
@@ -168,4 +190,35 @@ export function offercheckCandidateMove(sessionId, body) {
  */
 export function offercheckGetSession(sessionId, token) {
   return request(`/api/offercheck/sessions/${sessionId}?token=${encodeURIComponent(token)}`)
+}
+
+/**
+ * POST /api/offercheck/parse-offer-letter — upload a PDF, get draft fields to review
+ * @param {File} file
+ * @returns {Promise<object>} OfferLetterExtraction { competing_offer, confidence, notes }
+ */
+export function offercheckParseOfferLetter(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return requestMultipart('/api/offercheck/parse-offer-letter', formData)
+}
+
+/**
+ * GET /api/offercheck/sessions/:id/attest?token=... — TDX attestation receipt (terminal states only)
+ * @param {string} sessionId
+ * @param {string} token
+ * @returns {Promise<object>} AttestationReceipt
+ */
+export function offercheckGetAttestation(sessionId, token) {
+  return request(`/api/offercheck/sessions/${sessionId}/attest?token=${encodeURIComponent(token)}`)
+}
+
+/**
+ * GET /api/offercheck/sessions/:id/dcap-verify?token=... — parsed DCAP quote fields
+ * @param {string} sessionId
+ * @param {string} token
+ * @returns {Promise<object>} DcapVerification
+ */
+export function offercheckGetDcapVerify(sessionId, token) {
+  return request(`/api/offercheck/sessions/${sessionId}/dcap-verify?token=${encodeURIComponent(token)}`)
 }

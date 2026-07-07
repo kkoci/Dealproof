@@ -1,5 +1,5 @@
 """
-Tests for the Offer Check vertical (vertical/hr-offer-check branch, Phase 1).
+Tests for the Offer Check vertical (vertical/hr-offer-check branch, Phase 1 + 2).
 
 Covers:
   - verifier.check_consistency: plausible offer passes, fabricated ones flagged
@@ -7,11 +7,15 @@ Covers:
   - privacy: SessionView never leaks the other party's raw numbers
   - full HTTP e2e: demo scenario (candidate $180K vs Stripe, employer band $155K-$195K)
     goes through 3 counter rounds before converging, per acceptance criteria
+  - Phase 2: TDX attestation on session close, DCAP quote parsing, PDF offer-letter parsing
 """
+import io
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import negotiation, store, verifier
+from app.offercheck import negotiation, parsing, store, verifier
 from app.offercheck.schemas import CompetingOffer
 
 
@@ -292,3 +296,225 @@ def test_invalid_token_rejected(client):
 def test_unknown_session_returns_404(client):
     resp = client.get("/api/offercheck/sessions/does-not-exist", params={"token": "x"})
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: attestation
+# ---------------------------------------------------------------------------
+
+def test_attested_terms_excludes_private_inputs():
+    """agreed_price is the disclosed outcome and belongs in the attestation —
+    but the private inputs that produced it (band, offer letter) must not."""
+    session = _new_session(candidate_ask=185_000.0)
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    negotiation.apply_move(session, actor="employer", move="accept", value=None)
+
+    terms = negotiation.attested_terms(session)
+    serialized = str(terms)
+    assert "155000" not in serialized  # band_min, private and never disclosed
+    assert "175000" not in serialized  # band_mid, private and never disclosed
+    assert "Stripe" not in serialized
+    assert terms["state"] == "AGREED"
+    assert terms["agreed_price"] == 185_000.0  # the disclosed outcome — expected to be present
+    assert terms["competing_offer_hash"] == negotiation.competing_offer_hash(session)
+    assert terms["employer_band_hash"] == negotiation.employer_band_hash(session)
+
+
+def test_competing_offer_hash_deterministic_and_sensitive():
+    session_a = _new_session(candidate_ask=185_000.0)
+    session_b = _new_session(candidate_ask=185_000.0)
+    assert negotiation.competing_offer_hash(session_a) == negotiation.competing_offer_hash(session_b)
+
+    session_c = _new_session(candidate_ask=185_000.0)
+    session_c.competing_offer.base_salary = 999_000
+    assert negotiation.competing_offer_hash(session_c) != negotiation.competing_offer_hash(session_a)
+
+
+def test_employer_band_hash_none_before_band_set():
+    session = _new_session()
+    assert negotiation.employer_band_hash(session) is None
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    assert negotiation.employer_band_hash(session) is not None
+
+
+def test_attest_endpoint_unavailable_before_terminal(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {
+                "company": "Meta", "role": "Engineer", "base_salary": 190_000,
+                "equity_value": 50_000, "bonus": 10_000, "start_date": "2026-08-01",
+            },
+            "candidate_ask": 200_000,
+        },
+    )
+    body = submit.json()
+    resp = client.get(
+        f"/api/offercheck/sessions/{body['session_id']}/attest",
+        params={"token": body["candidate_token"]},
+    )
+    assert resp.status_code == 409
+
+
+def test_attest_and_dcap_verify_after_agreement(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {
+                "company": "Meta", "role": "Engineer", "base_salary": 190_000,
+                "equity_value": 50_000, "bonus": 10_000, "start_date": "2026-08-01",
+            },
+            "candidate_ask": 200_000,
+        },
+    )
+    body = submit.json()
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 180_000, "band_mid": 195_000, "band_max": 210_000},
+    )
+    move = client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/move",
+        json={"token": employer_token, "move": "accept", "value": None},
+    )
+    assert move.json()["state"] == "AGREED"
+
+    receipt = client.get(f"/api/offercheck/sessions/{session_id}/attest", params={"token": candidate_token})
+    assert receipt.status_code == 200
+    receipt_body = receipt.json()
+    assert receipt_body["state"] == "AGREED"
+    assert receipt_body["agreed_price"] == 200_000
+    assert receipt_body["attestation"].startswith("sim_quote:")
+    assert receipt_body["tee_attested"] is False  # simulation mode in tests
+    assert receipt_body["tee_mode"] == "simulation"
+    assert "Meta" not in receipt.text
+    assert "190000" not in receipt.text
+
+    # Employer's token works too — the outcome is mutually known once terminal.
+    receipt_as_employer = client.get(f"/api/offercheck/sessions/{session_id}/attest", params={"token": employer_token})
+    assert receipt_as_employer.status_code == 200
+    assert receipt_as_employer.json()["attestation"] == receipt_body["attestation"]
+
+    dcap = client.get(f"/api/offercheck/sessions/{session_id}/dcap-verify", params={"token": candidate_token})
+    assert dcap.status_code == 200
+    dcap_body = dcap.json()
+    assert dcap_body["mode"] == "simulation"
+    assert dcap_body["verification_status"] == "simulation_only"
+    assert dcap_body["session_id"] == session_id
+
+
+def test_attest_and_dcap_available_after_walkaway(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {
+                "company": "Netflix", "role": "Engineer", "base_salary": 210_000,
+                "equity_value": 60_000, "bonus": 10_000, "start_date": "2026-08-01",
+            },
+            "candidate_ask": 230_000,
+        },
+    )
+    body = submit.json()
+    session_id, employer_token = body["session_id"], body["employer_token"]
+
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 150_000, "band_mid": 160_000, "band_max": 170_000},
+    )
+    walk = client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/move",
+        json={"token": employer_token, "move": "walk", "value": None},
+    )
+    assert walk.json()["state"] == "WALKAWAY"
+
+    receipt = client.get(f"/api/offercheck/sessions/{session_id}/attest", params={"token": employer_token})
+    assert receipt.status_code == 200
+    assert receipt.json()["state"] == "WALKAWAY"
+    assert receipt.json()["agreed_price"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: PDF offer-letter parsing
+# ---------------------------------------------------------------------------
+
+def _mock_pdf_reader(text: str):
+    reader = MagicMock()
+    page = MagicMock()
+    page.extract_text.return_value = text
+    reader.pages = [page]
+    return reader
+
+
+def _mock_anthropic_response(payload: dict):
+    import json as _json
+    msg = MagicMock()
+    msg.content = [MagicMock(text=_json.dumps(payload))]
+    return msg
+
+
+def test_extract_text_from_pdf_raises_on_empty_text():
+    with patch("app.offercheck.parsing.PdfReader", return_value=_mock_pdf_reader("")):
+        with pytest.raises(parsing.OfferLetterParseError):
+            parsing.extract_text_from_pdf(b"%PDF-fake")
+
+
+def test_extract_text_from_pdf_raises_on_unreadable_bytes():
+    with patch("app.offercheck.parsing.PdfReader", side_effect=Exception("not a pdf")):
+        with pytest.raises(parsing.OfferLetterParseError):
+            parsing.extract_text_from_pdf(b"not-a-real-pdf")
+
+
+@pytest.mark.asyncio
+async def test_extract_offer_from_text_parses_claude_json():
+    expected = {
+        "company": "Stripe", "role": "Senior Engineer", "base_salary": 165000,
+        "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01",
+        "confidence": "high", "notes": [],
+    }
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_mock_anthropic_response(expected))
+    with patch("app.offercheck.parsing.anthropic.AsyncAnthropic", return_value=mock_client):
+        result = await parsing.extract_offer_from_text("some offer letter text")
+    assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_extract_offer_from_text_raises_on_claude_failure():
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(side_effect=RuntimeError("api down"))
+    with patch("app.offercheck.parsing.anthropic.AsyncAnthropic", return_value=mock_client):
+        with pytest.raises(parsing.OfferLetterParseError):
+            await parsing.extract_offer_from_text("some offer letter text")
+
+
+def test_parse_offer_letter_endpoint_returns_draft_fields(client):
+    extracted = {
+        "company": "Stripe", "role": "Senior Engineer", "base_salary": 165000,
+        "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01",
+        "confidence": "high", "notes": ["inferred equity from grant/vesting"],
+    }
+    with patch("app.offercheck.parsing.extract_text_from_pdf", return_value="raw pdf text"), \
+         patch("app.offercheck.parsing.anthropic.AsyncAnthropic") as mock_anthropic_cls:
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=_mock_anthropic_response(extracted))
+        mock_anthropic_cls.return_value = mock_client
+
+        resp = client.post(
+            "/api/offercheck/parse-offer-letter",
+            files={"file": ("offer.pdf", io.BytesIO(b"%PDF-fake-bytes"), "application/pdf")},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["competing_offer"]["company"] == "Stripe"
+    assert body["confidence"] == "high"
+    assert body["notes"] == ["inferred equity from grant/vesting"]
+
+
+def test_parse_offer_letter_endpoint_422_on_unreadable_pdf(client):
+    with patch("app.offercheck.parsing.PdfReader", side_effect=Exception("not a pdf")):
+        resp = client.post(
+            "/api/offercheck/parse-offer-letter",
+            files={"file": ("offer.pdf", io.BytesIO(b"garbage"), "application/pdf")},
+        )
+    assert resp.status_code == 422

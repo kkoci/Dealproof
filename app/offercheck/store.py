@@ -36,6 +36,7 @@ class Session:
     employer_current_offer: float | None = None
     agreed_price: float | None = None
     history: list[RoundEntry] = field(default_factory=list)
+    attestation: str | None = None
 
 
 _SESSIONS: dict[str, Session] = {}

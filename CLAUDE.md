@@ -146,12 +146,13 @@ memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
 frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
 
 --- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md ---
-app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, Move/SessionState literals
-app/offercheck/verifier.py    check_consistency() — Phase 1 software-only plausibility check, no LLM/TEE
-app/offercheck/negotiation.py Pure state machine: set_employer_band(), apply_move(), current_turn(), live_gap_pct()
-app/offercheck/store.py       In-memory Session store (Phase 1: no DB, no auth beyond opaque tokens)
-app/offercheck/routes.py      POST /api/offercheck/sessions, /employer/band, /employer/move, /candidate/move, GET /sessions/{id}
-frontend/src/pages/offercheck/  Landing, CandidateNew, CandidateSession, EmployerSession
+app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction
+app/offercheck/verifier.py    check_consistency() — software-only plausibility check, no LLM/TEE
+app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash()
+app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens)
+app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
+app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, GET /sessions/{id}, /attest, /dcap-verify
+frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload), CandidateSession, EmployerSession (+ attestation receipt panel)
 ```
 
 ---
@@ -183,7 +184,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (133 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (145 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -197,7 +198,7 @@ tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
-tests/test_offercheck.py     17   Offer Check: consistency checks, revision-loop state machine, privacy, HTTP e2e
+tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -234,7 +235,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 | **Offer Check — vertical/hr-offer-check** | | |
 | OC-P1 | Phase 1 POC — revision-loop state machine, in-memory sessions, no TEE/LLM/DB (`app/offercheck/`) | ✅ Complete |
-| OC-P2 | TEE enclave verification, real PDF offer-letter parsing, DCAP attestation receipt | 🔜 Pending |
+| OC-P2 | TDX attestation receipt on session close, DCAP quote parsing, PDF offer-letter upload + Claude extraction | ✅ Complete |
 | OC-P3 | Company auth, ATS integrations, πCreds conduct credential, billing | 🔜 Pending |
 
 ---
@@ -447,19 +448,21 @@ Fix: copy `key.json` → `session.json.jwk` (see `TinyCloud/TINYCLOUD_WORKFLOW.m
 
 Standalone product sharing this repo for dev speed — see `build_spec_offer_check.md` for the full
 phased spec. Follows the same per-vertical isolation pattern as SOC2 / Dev Credential / Fundraising
-(`app/<vertical>/` module + own router prefix + `frontend/src/pages/<vertical>/`). **Phase 1 is
-deliberately dependency-free**: no TEE, no LLM,
-no database — pure Python state machine over in-memory sessions, so the revision-loop product
-concept can be validated before trust infrastructure is added in Phase 2.
+(`app/<vertical>/` module + own router prefix + `frontend/src/pages/<vertical>/`). **Phase 1 was
+deliberately dependency-free**: no TEE, no LLM, no database — pure Python state machine over
+in-memory sessions, so the revision-loop product concept could be validated before trust
+infrastructure was added. **Phase 2 (current)** still has no database — sessions are still
+in-memory — but adds attestation and PDF parsing on top of the same state machine.
 
 **The revision loop is the product** (Tina's bar, per the build spec) — never collapse this to a
 single above/below screener. Candidate and employer alternate accept/counter/walk moves, up to 5
 rounds, and each counter must causally change the other party's next move.
 
 ```
-app/offercheck/store.py       Session dataclass — id, tokens, competing_offer, band, history (in-memory dict)
+app/offercheck/store.py       Session dataclass — id, tokens, competing_offer, band, history, attestation (in-memory dict)
 app/offercheck/verifier.py    check_consistency() — rule-based plausibility screen, NOT a legal verification
-app/offercheck/negotiation.py set_employer_band(), apply_move() — the state machine, pure functions
+app/offercheck/negotiation.py set_employer_band(), apply_move(), attested_terms() — state machine + hashing, pure functions
+app/offercheck/parsing.py     extract_text_from_pdf() (pypdf) + extract_offer_from_text() (Claude) — draft prefill only
 app/offercheck/routes.py      /api/offercheck/* — token-derived actor identity, never trusted from client input
 ```
 
@@ -480,10 +483,27 @@ inside `apply_move()` — there is no separate "check if expired" endpoint or cr
 πCreds constraints above: an employer opening at an acceptable band and the candidate accepting
 immediately is a legitimate fast deal, not a protocol violation.
 
-Phase 2 adds: TDX enclave-resident verification (reusing `app/tee/attestation.py`), real PDF
-offer-letter parsing, and a DCAP attestation receipt — see `build_spec_offer_check.md` Phase 2 for
-the target file layout (`enclave/`, `attestation/`, `parsing/`). None of that exists yet; Phase 1
-`verifier.py` is explicitly software-only and must not be confused with a TEE guarantee.
+**Attestation (Phase 2):** `routes.py::_maybe_attest` runs after every `apply_move()` call and is a
+no-op unless `session.state` just became terminal — it's idempotent, so both `employer_move` and
+`candidate_move` can call it unconditionally without tracking who closed the session. It calls the
+*same* `app/tee/attestation.sign_result()` used by core DealProof — no separate offercheck-specific
+enclave code path, because the whole FastAPI process (core + offercheck routes) already runs inside
+the TDX CVM in production; attestation is "produce a quote over the outcome," not "run verification
+somewhere special." The hashed payload (`negotiation.attested_terms()`) deliberately excludes every
+raw number — `competing_offer_hash` and `employer_band_hash` are SHA-256 digests, and only the
+already-mutually-known outcome (`state`, `round_number`, `agreed_price`) appears in the clear.
+`GET /sessions/{id}/attest` and `/dcap-verify` (the latter reusing `app/tee/dcap.parse_tdx_quote`
+verbatim) both 409 until the session is terminal, and accept either party's token — the receipt is
+identical regardless of viewer once the outcome is closed.
+
+**PDF parsing (Phase 2) is a draft prefill, not a data source:** `POST /parse-offer-letter` returns
+`ExtractedOfferFields` (schemas.py) — a deliberately *unvalidated* shape (`base_salary` can be `0`)
+distinct from the strict `CompetingOffer` model that `POST /sessions` enforces. A bad or low-confidence
+extraction can never become the record of truth; the candidate reviews/edits it client-side first.
+Extraction failures (`OfferLetterParseError` — unreadable PDF, scanned image with no text layer,
+Claude call failure) return HTTP 422 with a clear detail message; the candidate falls back to manual
+entry in the same form. This mirrors the non-fatal resilience pattern used everywhere else in this
+repo (memory sidecar, πCreds, Auditor, DKIM) — parsing failing never blocks the product.
 
 ---
 

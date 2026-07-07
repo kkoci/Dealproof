@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateMove, offercheckGetSession } from '../../api.js'
+import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetSession } from '../../api.js'
 
 const POLL_MS = 3000
 
@@ -32,6 +32,47 @@ function GapMeter({ gapPct }) {
           style={{ left: `calc(${pos}% - 6px)` }}
         />
       </div>
+    </div>
+  )
+}
+
+function AttestationPanel({ sessionId, token, visible }) {
+  const [receipt, setReceipt] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    if (!visible) return
+    let cancelled = false
+    offercheckGetAttestation(sessionId, token)
+      .then((data) => { if (!cancelled) setReceipt(data) })
+      .catch((e) => { if (!cancelled) setErr(e.message || 'Attestation not available yet') })
+    return () => { cancelled = true }
+  }, [sessionId, token, visible])
+
+  if (!visible) return null
+
+  return (
+    <div className="mt-4 p-4 rounded-xl bg-gray-900/40 border border-gray-800/40">
+      {receipt ? (
+        <>
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`relative flex h-2 w-2`}>
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${receipt.tee_attested ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
+            </span>
+            <span className="text-xs font-semibold text-gray-200">
+              {receipt.tee_attested
+                ? 'Verified by hardware attestation'
+                : 'Simulation mode — no real TEE hardware'}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 leading-relaxed mb-2">
+            This verification ran inside a TDX enclave. Neither party's raw data was observable by the platform.
+          </p>
+          <p className="text-[11px] font-mono text-gray-600 break-all">{receipt.attestation}</p>
+        </>
+      ) : (
+        <p className="text-xs text-gray-500 italic">{err || 'Loading attestation receipt…'}</p>
+      )}
     </div>
   )
 }
@@ -195,6 +236,8 @@ export default function CandidateSession() {
             )}
           </div>
         )}
+
+        <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
       </div>
     </div>
   )

@@ -80,6 +80,63 @@ class RoundSummary(BaseModel):
     move: Move
 
 
+class AttestationReceipt(BaseModel):
+    """
+    TDX attestation receipt for a closed session (Phase 2). Never contains
+    raw candidate/employer numbers — only hashes of the private inputs plus
+    the publicly-known outcome. See app.offercheck.negotiation.attested_terms.
+    """
+    session_id: str
+    state: SessionState
+    round_number: int
+    agreed_price: float | None
+    competing_offer_hash: str
+    employer_band_hash: str | None
+    attestation: str
+    tee_attested: bool
+    tee_mode: str
+
+
+class DcapVerification(BaseModel):
+    """Parsed DCAP quote fields for an offercheck attestation — mirrors app.tee.dcap.parse_tdx_quote."""
+    session_id: str
+    mode: str
+    version: int | None = None
+    tee_type: str | None = None
+    qe_vendor_id: str | None = None
+    report_data_hex: str | None = None
+    deal_terms_hash: str | None = None
+    cert_chain_valid: bool | None = None
+    qe_sig_valid: bool | None = None
+    att_key_binding_valid: bool | None = None
+    td_sig_valid: bool | None = None
+    intel_verified: bool = False
+    pck_cert_subject: str | None = None
+    verification_status: str
+    error: str | None = None
+
+
+class ExtractedOfferFields(BaseModel):
+    """
+    Draft fields from PDF extraction — deliberately unvalidated (base_salary
+    may come back 0 on a low-confidence read). The candidate reviews/corrects
+    these in the form before they ever reach the strict CompetingOffer model
+    via POST /sessions.
+    """
+    company: str = ""
+    role: str = ""
+    base_salary: float = 0
+    equity_value: float = 0
+    bonus: float = 0
+    start_date: str = ""
+
+
+class OfferLetterExtraction(BaseModel):
+    competing_offer: ExtractedOfferFields
+    confidence: Literal["high", "medium", "low"]
+    notes: list[str]
+
+
 class SessionView(BaseModel):
     """Viewer-scoped snapshot. Never includes the other party's raw numbers."""
     session_id: str

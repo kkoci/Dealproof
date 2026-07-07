@@ -3,12 +3,17 @@ Revision-loop state machine — the core product (see build_spec_offer_check.md)
 
 Pure functions operating on an in-memory Session (app.offercheck.store). No
 I/O, no LLM, no TEE — Phase 1 is deliberately dependency-free so the flow can
-be validated before trust infrastructure is added in Phase 2.
+be validated before trust infrastructure is added in Phase 2. Phase 2 adds
+attestation (below): the terms are hashed here, but the actual TDX quote
+request happens in routes.py, which is the only I/O boundary.
 
 States: PENDING_EMPLOYER -> EMPLOYER_RESPONDED <-> CANDIDATE_COUNTERED -> AGREED | WALKAWAY | EXPIRED
 Turn order: employer moves first (after setting their private band), then
 alternates. Max 5 rounds; the 5th unresolved counter auto-expires the session.
 """
+import hashlib
+import json
+
 from app.offercheck.store import RoundEntry, Session
 
 TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED"}
@@ -107,3 +112,48 @@ def apply_move(session: Session, actor: str, move: str, value: float | None) -> 
             session.state = "EMPLOYER_RESPONDED"
         if session.round_number >= session.max_rounds:
             session.state = "EXPIRED"
+
+
+# ---------------------------------------------------------------------------
+# Attestation (Phase 2) — hashing only; routes.py owns the tappd I/O call.
+# ---------------------------------------------------------------------------
+
+def competing_offer_hash(session: Session) -> str:
+    payload = {
+        "company": session.competing_offer.company,
+        "role": session.competing_offer.role,
+        "base_salary": session.competing_offer.base_salary,
+        "equity_value": session.competing_offer.equity_value,
+        "bonus": session.competing_offer.bonus,
+        "start_date": session.competing_offer.start_date,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def employer_band_hash(session: Session) -> str | None:
+    if not session.band_set:
+        return None
+    payload = {"band_min": session.band_min, "band_mid": session.band_mid, "band_max": session.band_max}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def attested_terms(session: Session) -> dict:
+    """
+    The payload whose SHA-256 digest is bound into the TDX quote's report_data.
+
+    Deliberately excludes every raw number: only hashes of the private
+    competing-offer and employer-band inputs are included, alongside the
+    publicly-known outcome (state, round count, agreed price). A verifier can
+    confirm the outcome is genuine and, if either party later chooses to
+    disclose their raw inputs, confirm those inputs match what was attested —
+    without the quote itself ever exposing them.
+    """
+    return {
+        "session_id": session.id,
+        "state": session.state,
+        "round_number": session.round_number,
+        "agreed_price": session.agreed_price,
+        "consistency_verified": session.consistency.verified,
+        "competing_offer_hash": competing_offer_hash(session),
+        "employer_band_hash": employer_band_hash(session),
+    }

@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { offercheckSubmit } from '../../api.js'
+import { offercheckParseOfferLetter, offercheckSubmit } from '../../api.js'
 
 const inputClass =
   'w-full px-3 py-2.5 rounded-lg bg-gray-900/60 border border-gray-700/60 text-gray-200 placeholder-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all'
@@ -19,8 +19,38 @@ export default function CandidateNew() {
   })
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [parsing, setParsing] = useState(false)
+  const [parseNotice, setParseNotice] = useState(null)
+  const fileInputRef = useRef(null)
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+
+  const handlePdfUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setParsing(true)
+    setError('')
+    setParseNotice(null)
+    try {
+      const result = await offercheckParseOfferLetter(file)
+      const co = result.competing_offer
+      setForm((f) => ({
+        ...f,
+        company: co.company || f.company,
+        role: co.role || f.role,
+        base_salary: co.base_salary ? String(co.base_salary) : f.base_salary,
+        equity_value: co.equity_value ? String(co.equity_value) : f.equity_value,
+        bonus: co.bonus ? String(co.bonus) : f.bonus,
+        start_date: co.start_date || f.start_date,
+      }))
+      setParseNotice({ confidence: result.confidence, notes: result.notes })
+    } catch (err) {
+      setError(err.message || 'Could not read that PDF — enter the details manually below')
+    } finally {
+      setParsing(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -53,9 +83,42 @@ export default function CandidateNew() {
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Your competing offer</h1>
-        <p className="text-sm text-gray-500 mb-8">
+        <p className="text-sm text-gray-500 mb-6">
           These details stay private. The employer only ever sees a gap percentage.
         </p>
+
+        <div className="mb-6 p-4 rounded-xl bg-gray-900/40 border border-gray-800/40 border-dashed">
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <div>
+              <p className="text-sm font-medium text-gray-200">Upload your offer letter (PDF)</p>
+              <p className="text-xs text-gray-500 mt-0.5">Optional — we'll prefill the fields below for you to review</p>
+            </div>
+            <span className="shrink-0 px-3 py-2 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 text-xs font-medium transition-all">
+              {parsing ? 'Reading…' : 'Choose file'}
+            </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf"
+              onChange={handlePdfUpload}
+              disabled={parsing}
+              className="hidden"
+            />
+          </label>
+          {parseNotice && (
+            <div className="mt-3 pt-3 border-t border-gray-800/60 text-xs">
+              <span className={`font-medium ${parseNotice.confidence === 'high' ? 'text-emerald-400' : parseNotice.confidence === 'medium' ? 'text-amber-400' : 'text-red-400'}`}>
+                {parseNotice.confidence} confidence extraction
+              </span>
+              <span className="text-gray-500"> — double-check the fields below</span>
+              {parseNotice.notes?.length > 0 && (
+                <ul className="mt-1 list-disc list-inside text-gray-500 space-y-0.5">
+                  {parseNotice.notes.map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
