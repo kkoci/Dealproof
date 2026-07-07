@@ -60,6 +60,7 @@ app/api/TRANSCRIPT_INGEST_PROPOSAL.md
 tinycloud-sidecar/
 
 # Project-specific docs (internal planning)
+build_spec_offer_check.md
 ARCHITECTURE.md
 CONTEXTO_INTEGRATION.md
 dealproof_attested_memory.md

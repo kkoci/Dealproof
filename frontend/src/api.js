@@ -104,3 +104,68 @@ export function getDcapVerification(id) {
 export function getDealVerification(id) {
   return request(`/api/deals/${id}/verification`)
 }
+
+// ---------------------------------------------------------------------------
+// Offer Check (vertical/hr-offer-check) — /api/offercheck/*
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/offercheck/sessions — candidate submits competing offer + ask
+ * @param {object} body { competing_offer, candidate_ask }
+ * @returns {Promise<object>} CandidateSubmitResponse
+ */
+export function offercheckSubmit(body) {
+  return request('/api/offercheck/sessions', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/employer/band — one-time private band submission
+ * @param {string} sessionId
+ * @param {object} body { employer_token, band_min, band_mid, band_max }
+ * @returns {Promise<object>} EmployerBandResponse
+ */
+export function offercheckSetEmployerBand(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/band`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/employer/move
+ * @param {string} sessionId
+ * @param {object} body { token, move, value }
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckEmployerMove(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/move`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/candidate/move
+ * @param {string} sessionId
+ * @param {object} body { token, move, value }
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckCandidateMove(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/move`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/offercheck/sessions/:id?token=... — viewer-scoped status poll
+ * @param {string} sessionId
+ * @param {string} token
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckGetSession(sessionId, token) {
+  return request(`/api/offercheck/sessions/${sessionId}?token=${encodeURIComponent(token)}`)
+}

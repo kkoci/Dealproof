@@ -144,6 +144,14 @@ app/picreds/credential.py  make_credential(), hash_credentials()
 demo.py                    CLI demo — transcript + attestations + memory + πCreds + auditor + arbitrator
 memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
 frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
+
+--- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md ---
+app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, Move/SessionState literals
+app/offercheck/verifier.py    check_consistency() — Phase 1 software-only plausibility check, no LLM/TEE
+app/offercheck/negotiation.py Pure state machine: set_employer_band(), apply_move(), current_turn(), live_gap_pct()
+app/offercheck/store.py       In-memory Session store (Phase 1: no DB, no auth beyond opaque tokens)
+app/offercheck/routes.py      POST /api/offercheck/sessions, /employer/band, /employer/move, /candidate/move, GET /sessions/{id}
+frontend/src/pages/offercheck/  Landing, CandidateNew, CandidateSession, EmployerSession
 ```
 
 ---
@@ -175,7 +183,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (69 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (133 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -189,6 +197,7 @@ tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
+tests/test_offercheck.py     17   Offer Check: consistency checks, revision-loop state machine, privacy, HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -223,6 +232,10 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + GET /api/ens/agents | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **Offer Check — vertical/hr-offer-check** | | |
+| OC-P1 | Phase 1 POC — revision-loop state machine, in-memory sessions, no TEE/LLM/DB (`app/offercheck/`) | ✅ Complete |
+| OC-P2 | TEE enclave verification, real PDF offer-letter parsing, DCAP attestation receipt | 🔜 Pending |
+| OC-P3 | Company auth, ATS integrations, πCreds conduct credential, billing | 🔜 Pending |
 
 ---
 
@@ -427,6 +440,50 @@ POST /api/deals/{id}/credential
 Fix: copy `key.json` → `session.json.jwk` (see `TinyCloud/TINYCLOUD_WORKFLOW.md` § Step 3).
 
 **Prize targets:** ENS ($4k) + Arc ($2k) + Hedera ($3k) + Unlink ($1k) + World ($2.5k) = $12.5k
+
+---
+
+## Offer Check Architecture (`vertical/hr-offer-check`, Phase 1)
+
+Standalone product sharing this repo for dev speed — see `build_spec_offer_check.md` for the full
+phased spec. Follows the same per-vertical isolation pattern as SOC2 / Dev Credential / Fundraising
+(`app/<vertical>/` module + own router prefix + `frontend/src/pages/<vertical>/`). **Phase 1 is
+deliberately dependency-free**: no TEE, no LLM,
+no database — pure Python state machine over in-memory sessions, so the revision-loop product
+concept can be validated before trust infrastructure is added in Phase 2.
+
+**The revision loop is the product** (Tina's bar, per the build spec) — never collapse this to a
+single above/below screener. Candidate and employer alternate accept/counter/walk moves, up to 5
+rounds, and each counter must causally change the other party's next move.
+
+```
+app/offercheck/store.py       Session dataclass — id, tokens, competing_offer, band, history (in-memory dict)
+app/offercheck/verifier.py    check_consistency() — rule-based plausibility screen, NOT a legal verification
+app/offercheck/negotiation.py set_employer_band(), apply_move() — the state machine, pure functions
+app/offercheck/routes.py      /api/offercheck/* — token-derived actor identity, never trusted from client input
+```
+
+**Privacy invariant (non-negotiable, enforced in `routes.py::_view_for`):** a `SessionView` never
+contains the counterparty's raw number. Only `gap_pct`, `state`, `round_number`, and move history
+(accept/counter/walk — no values) cross the party boundary. Each viewer's own current value
+(`my_current_value`) is fine since it's their own submission. `gap_pct` is computed server-side from
+`candidate_ask` vs. `employer_current_offer`; the employer's band (`band_min/mid/max`) is used once,
+at band-submission time, to produce that call's gap preview, then never re-exposed.
+
+**Turn order is derived from `state`, not passed by the client:** `PENDING_EMPLOYER` (employer's
+turn, must set band first) → `EMPLOYER_RESPONDED` (candidate's turn) ⇄ `CANDIDATE_COUNTERED`
+(employer's turn) → `AGREED` | `WALKAWAY` | `EXPIRED`. `round_number` increments once per move
+(band submission itself doesn't count); the 5th unresolved counter auto-transitions to `EXPIRED`
+inside `apply_move()` — there is no separate "check if expired" endpoint or cron.
+
+**`check_minimum_rounds`-style validation is intentionally absent**, same reasoning as the core
+πCreds constraints above: an employer opening at an acceptable band and the candidate accepting
+immediately is a legitimate fast deal, not a protocol violation.
+
+Phase 2 adds: TDX enclave-resident verification (reusing `app/tee/attestation.py`), real PDF
+offer-letter parsing, and a DCAP attestation receipt — see `build_spec_offer_check.md` Phase 2 for
+the target file layout (`enclave/`, `attestation/`, `parsing/`). None of that exists yet; Phase 1
+`verifier.py` is explicitly software-only and must not be confused with a TEE guarantee.
 
 ---
 

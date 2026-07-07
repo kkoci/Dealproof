@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-69 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar) is either mocked or redirected to a temp file.
+133 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar) is either mocked or redirected to a temp file.
 
 ```
 tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests
@@ -257,6 +257,7 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
+tests/test_offercheck.py     17 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, HTTP e2e
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1108,6 +1109,53 @@ Dealproof/
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + `GET /api/ens/agents` | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **Offer Check** | **vertical/hr-offer-check branch** | |
+| OC-1 | Phase 1 POC — revision-loop state machine, software-only consistency check, in-memory sessions (no TEE, no DB) | ✅ Complete |
+| OC-2 | `app/offercheck/` — `POST /sessions`, `POST /sessions/{id}/employer/band`, `POST /sessions/{id}/employer/move`, `POST /sessions/{id}/candidate/move`, `GET /sessions/{id}` | ✅ Complete |
+| OC-3 | Frontend — `/offercheck/new` (candidate), `/offercheck/candidate/:id`, `/offercheck/employer/:id`, App.jsx stripped to Offer Check only | ✅ Complete |
+| OC-4 | Tests — `tests/test_offercheck.py` (17 tests) | ✅ Complete |
+| OC-5 | Phase 2 — TDX enclave verification, real PDF offer-letter parsing, DCAP attestation receipt | 🔜 Pending |
+
+---
+
+## Offer Check — Competing-Offer Verification (`vertical/hr-offer-check`)
+
+Standalone product, sharing this repo for dev speed (see `build_spec_offer_check.md`). A candidate
+verifies a competing offer against an employer's private salary band — neither side ever sees the
+other's raw numbers, only a gap percentage that both can revise against, round by round.
+
+**Phase 1 (current)** is software-only: no TEE, no LLM, no database. Sessions live in-memory for
+the life of the process. `app/offercheck/verifier.py` runs a rule-based plausibility check (not a
+legal verification) on the candidate's reported offer. Phase 2 adds real PDF offer-letter parsing
+and TDX enclave attestation on top of this same state machine.
+
+```
+# 1. Candidate submits their competing offer + ask
+POST /api/offercheck/sessions
+  { "competing_offer": {"company": "Stripe", "role": "Senior Engineer",
+     "base_salary": 165000, "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+    "candidate_ask": 185000 }
+  → session_id, candidate_token, employer_link, consistency
+
+# 2. Employer submits their private band — gets a gap %, never the candidate's numbers
+POST /api/offercheck/sessions/{id}/employer/band
+  { "employer_token": "...", "band_min": 155000, "band_mid": 175000, "band_max": 195000 }
+  → gap_pct
+
+# 3. Either side moves: accept / counter / walk — up to 5 rounds
+POST /api/offercheck/sessions/{id}/employer/move    { "token": "...", "move": "counter", "value": 170000 }
+POST /api/offercheck/sessions/{id}/candidate/move   { "token": "...", "move": "accept" }
+
+# 4. Either side polls status — viewer-scoped, cross-party raw numbers never included
+GET /api/offercheck/sessions/{id}?token=...
+```
+
+State machine: `PENDING_EMPLOYER → EMPLOYER_RESPONDED ⇄ CANDIDATE_COUNTERED → AGREED | WALKAWAY | EXPIRED`
+(`app/offercheck/negotiation.py`). The 5th unresolved counter auto-expires the session.
+
+Frontend: `/offercheck` (landing), `/offercheck/new` (candidate submit), `/offercheck/candidate/:id`,
+`/offercheck/employer/:id` — `frontend/src/App.jsx` is stripped to this vertical only, per the same
+nav-isolation pattern used by SOC2 / Dev Credential / Fundraising.
 
 ---
 
