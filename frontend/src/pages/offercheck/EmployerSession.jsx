@@ -124,6 +124,10 @@ export default function EmployerSession() {
   const isTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
   const myTurn = view && view.turn === 'employer'
 
+  const loadDemoBand = () => {
+    setBand({ band_min: '155000', band_mid: '175000', band_max: '195000' })
+  }
+
   const submitBand = async (e) => {
     e.preventDefault()
     setError('')
@@ -171,6 +175,15 @@ export default function EmployerSession() {
 
         {view && !view.band_set && (
           <form onSubmit={submitBand} className="p-5 rounded-xl bg-gray-900/40 border border-gray-800/40 space-y-4">
+            <div className="flex justify-end -mt-1 -mb-2">
+              <button
+                type="button"
+                onClick={loadDemoBand}
+                className="px-2.5 py-1 rounded-md bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/50 text-gray-400 hover:text-gray-200 text-xs font-medium transition-all"
+              >
+                Load demo data
+              </button>
+            </div>
             <div>
               <label className={labelClass}>Band minimum</label>
               <input className={inputClass} type="number" min="0" value={band.band_min} onChange={(e) => setBand((b) => ({ ...b, band_min: e.target.value }))} placeholder="155000" required />
