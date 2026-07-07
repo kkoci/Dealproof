@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetSession } from '../../api.js'
+import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession } from '../../api.js'
 
 const POLL_MS = 3000
 
@@ -38,6 +38,7 @@ function GapMeter({ gapPct }) {
 
 function AttestationPanel({ sessionId, token, visible }) {
   const [receipt, setReceipt] = useState(null)
+  const [cred, setCred] = useState(null)
   const [err, setErr] = useState('')
 
   useEffect(() => {
@@ -46,6 +47,7 @@ function AttestationPanel({ sessionId, token, visible }) {
     offercheckGetAttestation(sessionId, token)
       .then((data) => { if (!cancelled) setReceipt(data) })
       .catch((e) => { if (!cancelled) setErr(e.message || 'Attestation not available yet') })
+    offercheckGetCredential(sessionId, { token }).then((data) => { if (!cancelled) setCred(data) }).catch(() => {})
     return () => { cancelled = true }
   }, [sessionId, token, visible])
 
@@ -68,7 +70,15 @@ function AttestationPanel({ sessionId, token, visible }) {
           <p className="text-xs text-gray-500 leading-relaxed mb-2">
             This verification ran inside a TDX enclave. Neither party's raw data was observable by the platform.
           </p>
-          <p className="text-[11px] font-mono text-gray-600 break-all">{receipt.attestation}</p>
+          <p className="text-[11px] font-mono text-gray-600 break-all mb-3">{receipt.attestation}</p>
+          {cred && (
+            <div className="pt-3 border-t border-gray-800/60">
+              <span className={`text-xs font-semibold ${cred.genuine_negotiation ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {cred.genuine_negotiation ? 'Genuine negotiation verified' : 'Conduct issues detected'}
+              </span>
+              <p className="text-xs text-gray-500 mt-1">{cred.summary}</p>
+            </div>
+          )}
         </>
       ) : (
         <p className="text-xs text-gray-500 italic">{err || 'Loading attestation receipt…'}</p>

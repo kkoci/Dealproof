@@ -43,6 +43,7 @@ class ConsistencyCheck(BaseModel):
 class CandidateSubmitRequest(BaseModel):
     competing_offer: CompetingOffer
     candidate_ask: float = Field(gt=0)
+    ats_candidate_ref: str | None = None  # Phase 3: candidate/opportunity id in the company's ATS, if known
 
 
 class CandidateSubmitResponse(BaseModel):
@@ -92,6 +93,7 @@ class AttestationReceipt(BaseModel):
     agreed_price: float | None
     competing_offer_hash: str
     employer_band_hash: str | None
+    credential_hash: str | None = None  # Phase 3: OfferVerifiedCredential hash, folded into this same quote
     attestation: str
     tee_attested: bool
     tee_mode: str
@@ -151,3 +153,84 @@ class SessionView(BaseModel):
     agreed_price: float | None = None
     # Only populated for the viewer's own side:
     my_current_value: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — company auth, bulk verify, credential, ATS connection
+# ---------------------------------------------------------------------------
+
+Plan = Literal["individual", "team", "growth", "enterprise"]
+AtsProvider = Literal["greenhouse", "lever", "workday"]
+
+
+class CompanyRegisterRequest(BaseModel):
+    name: str
+    hires_per_year: int = Field(default=0, ge=0, description="Used only to recommend a plan")
+
+
+class CompanyRegisterResponse(BaseModel):
+    company_id: str
+    api_key: str = Field(..., description="Shown exactly once — store it now, it cannot be recovered")
+    recommended_plan: Plan
+    pricing: dict
+
+
+class AtsConnectRequest(BaseModel):
+    provider: AtsProvider
+    api_key: str
+
+
+class AtsConnectResponse(BaseModel):
+    company_id: str
+    provider: AtsProvider
+    connected: bool
+
+
+class CredentialResponse(BaseModel):
+    """πCreds-style conduct credential — see app.offercheck.credential."""
+    session_id: str
+    genuine_negotiation: bool
+    round_count: int
+    outcome: Literal["agreed", "walkaway", "expired"]
+    issues: list[str]
+    summary: str
+    credential_hash: str
+    tee_attested: bool
+
+
+class BulkVerifyItem(BaseModel):
+    competing_offer: CompetingOffer
+    candidate_ask: float = Field(gt=0)
+    ats_candidate_ref: str | None = None
+
+
+class BulkVerifyRequest(BaseModel):
+    verifications: list[BulkVerifyItem] = Field(..., min_length=1, max_length=50)
+
+
+class BulkVerifyResult(BaseModel):
+    session_id: str
+    candidate_token: str
+    employer_token: str
+    employer_link: str
+    consistency: ConsistencyCheck
+
+
+class BulkVerifyResponse(BaseModel):
+    company_id: str
+    results: list[BulkVerifyResult]
+
+
+class CompanySessionSummary(BaseModel):
+    """Employer-side session listing for the TA dashboard. No candidate raw numbers."""
+    session_id: str
+    state: SessionState
+    round_number: int
+    gap_pct: float | None
+    employer_link: str
+    ats_candidate_ref: str | None = None
+
+
+class CompanySessionsResponse(BaseModel):
+    company_id: str
+    sessions: list[CompanySessionSummary]

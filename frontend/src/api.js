@@ -222,3 +222,62 @@ export function offercheckGetAttestation(sessionId, token) {
 export function offercheckGetDcapVerify(sessionId, token) {
   return request(`/api/offercheck/sessions/${sessionId}/dcap-verify?token=${encodeURIComponent(token)}`)
 }
+
+/**
+ * GET /api/offercheck/sessions/:id/credential — either ?token=... or an X-API-Key header
+ * @param {string} sessionId
+ * @param {{ token?: string, apiKey?: string }} auth
+ * @returns {Promise<object>} CredentialResponse
+ */
+export function offercheckGetCredential(sessionId, { token, apiKey } = {}) {
+  if (apiKey) {
+    return request(`/api/offercheck/sessions/${sessionId}/credential`, { headers: { 'X-API-Key': apiKey } })
+  }
+  return request(`/api/offercheck/sessions/${sessionId}/credential?token=${encodeURIComponent(token)}`)
+}
+
+/**
+ * POST /api/offercheck/company/register
+ * @param {{ name: string, hires_per_year?: number }} body
+ * @returns {Promise<object>} CompanyRegisterResponse — api_key is shown exactly once
+ */
+export function offercheckRegisterCompany(body) {
+  return request('/api/offercheck/company/register', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/**
+ * POST /api/offercheck/company/ats-connect
+ * @param {string} apiKey
+ * @param {{ provider: string, api_key: string }} body
+ * @returns {Promise<object>} AtsConnectResponse
+ */
+export function offercheckConnectAts(apiKey, body) {
+  return request('/api/offercheck/company/ats-connect', {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey },
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/offercheck/company/sessions
+ * @param {string} apiKey
+ * @returns {Promise<object>} CompanySessionsResponse
+ */
+export function offercheckListCompanySessions(apiKey) {
+  return request('/api/offercheck/company/sessions', { headers: { 'X-API-Key': apiKey } })
+}
+
+/**
+ * POST /api/offercheck/company/verify/bulk
+ * @param {string} apiKey
+ * @param {{ verifications: object[] }} body
+ * @returns {Promise<object>} BulkVerifyResponse
+ */
+export function offercheckBulkVerify(apiKey, body) {
+  return request('/api/offercheck/company/verify/bulk', {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey },
+    body: JSON.stringify(body),
+  })
+}

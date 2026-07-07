@@ -4,6 +4,8 @@ import Landing from './pages/offercheck/Landing.jsx'
 import CandidateNew from './pages/offercheck/CandidateNew.jsx'
 import CandidateSession from './pages/offercheck/CandidateSession.jsx'
 import EmployerSession from './pages/offercheck/EmployerSession.jsx'
+import CompanyRegister from './pages/offercheck/CompanyRegister.jsx'
+import Dashboard from './pages/offercheck/Dashboard.jsx'
 
 function NavBar() {
   return (
@@ -22,6 +24,12 @@ function NavBar() {
           </Link>
 
           <div className="flex items-center gap-1">
+            <Link
+              to="/offercheck/dashboard"
+              className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 transition-colors"
+            >
+              Dashboard
+            </Link>
             <a
               href={`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/docs`}
               target="_blank"
@@ -67,6 +75,8 @@ export default function App() {
             <Route path="/offercheck/new" element={<CandidateNew />} />
             <Route path="/offercheck/candidate/:sessionId" element={<CandidateSession />} />
             <Route path="/offercheck/employer/:sessionId" element={<EmployerSession />} />
+            <Route path="/offercheck/company/register" element={<CompanyRegister />} />
+            <Route path="/offercheck/dashboard" element={<Dashboard />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>

@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     arc_chain_id: int = 0                # ARC_CHAIN_ID
     arcid_registry_address: str = ""     # ARCID_REGISTRY_ADDRESS
 
+    # Offer Check Phase 3: billing (per-verification / monthly SaaS pricing)
+    stripe_api_key: str = ""       # STRIPE_API_KEY — unset => billing.record_verification_usage() no-ops
+
     # App
     debug: bool = True
     log_level: str = "INFO"

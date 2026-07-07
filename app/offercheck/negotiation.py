@@ -96,7 +96,8 @@ def apply_move(session: Session, actor: str, move: str, value: float | None) -> 
         raise InvalidMove("a positive value is required for a counter")
 
     session.round_number += 1
-    session.history.append(RoundEntry(round_number=session.round_number, actor=actor, move=move))
+    round_value = value if move == "counter" else None
+    session.history.append(RoundEntry(round_number=session.round_number, actor=actor, move=move, value=round_value))
 
     if move == "accept":
         session.agreed_price = session.candidate_ask if actor == "employer" else session.employer_current_offer
@@ -137,7 +138,7 @@ def employer_band_hash(session: Session) -> str | None:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def attested_terms(session: Session) -> dict:
+def attested_terms(session: Session, credential_hash: str | None = None) -> dict:
     """
     The payload whose SHA-256 digest is bound into the TDX quote's report_data.
 
@@ -147,8 +148,13 @@ def attested_terms(session: Session) -> dict:
     confirm the outcome is genuine and, if either party later chooses to
     disclose their raw inputs, confirm those inputs match what was attested —
     without the quote itself ever exposing them.
+
+    credential_hash (Phase 3): the OfferVerifiedCredential's hash, computed by
+    routes.py before signing so the conduct credential is itself covered by
+    the same TDX quote — mirroring core DealProof's Step P (πCreds) landing
+    in report_data before the final Step A re-attest.
     """
-    return {
+    terms = {
         "session_id": session.id,
         "state": session.state,
         "round_number": session.round_number,
@@ -157,3 +163,6 @@ def attested_terms(session: Session) -> dict:
         "competing_offer_hash": competing_offer_hash(session),
         "employer_band_hash": employer_band_hash(session),
     }
+    if credential_hash is not None:
+        terms["credential_hash"] = credential_hash
+    return terms

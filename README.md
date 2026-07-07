@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-145 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar) is either mocked or redirected to a temp file.
+179 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
 
 ```
 tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests
@@ -257,7 +257,8 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
-tests/test_offercheck.py     29 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
+tests/test_offercheck.py       29 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
+tests/test_offercheck_phase3.py 34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1115,7 +1116,9 @@ Dealproof/
 | OC-3 | Frontend — `/offercheck/new` (candidate), `/offercheck/candidate/:id`, `/offercheck/employer/:id`, App.jsx stripped to Offer Check only | ✅ Complete |
 | OC-4 | Tests — `tests/test_offercheck.py` (29 tests) | ✅ Complete |
 | OC-5 | Phase 2 — TDX attestation receipt on session close, DCAP quote parsing, PDF offer-letter upload + Claude extraction | ✅ Complete |
-| OC-6 | Phase 3 — company auth, ATS integrations, πCreds conduct credential, billing | 🔜 Pending |
+| OC-6 | Phase 3 — company auth, bulk verify, TA dashboard, πCreds conduct credential, Greenhouse/Lever/Workday integrations, billing | ✅ Complete |
+| OC-7 | Tests — `tests/test_offercheck_phase3.py` (34 tests) | ✅ Complete |
+| OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
 
 ---
 
@@ -1125,11 +1128,13 @@ Standalone product, sharing this repo for dev speed (see `build_spec_offer_check
 verifies a competing offer against an employer's private salary band — neither side ever sees the
 other's raw numbers, only a gap percentage that both can revise against, round by round.
 
-**Phase 1** was software-only: no TEE, no LLM, no database. **Phase 2 (current)** adds a TDX
-attestation receipt when a session closes, and PDF offer-letter upload with Claude-based field
-extraction — on top of the same in-memory state machine, still no database. `app/offercheck/verifier.py`
-still runs a rule-based plausibility check (not a legal verification); PDF extraction is a separate
-prefill convenience the candidate reviews before ever submitting.
+**Phase 1** was software-only: no TEE, no LLM, no database. **Phase 2** added a TDX attestation
+receipt when a session closes, and PDF offer-letter upload with Claude-based field extraction.
+**Phase 3 (current)** adds company auth, bulk verification, a TA dashboard, a πCreds-style conduct
+credential folded into the same attestation, and Greenhouse/Lever/Workday ATS integrations — still on
+the same in-memory state machine, still no database (see "Known limitations" below).
+`app/offercheck/verifier.py` still runs a rule-based plausibility check (not a legal verification);
+PDF extraction is a separate prefill convenience the candidate reviews before ever submitting.
 
 ```
 # 1. Candidate optionally uploads a PDF offer letter for a draft prefill (reviewed before submit)
@@ -1173,6 +1178,62 @@ Frontend: `/offercheck` (landing), `/offercheck/new` (candidate submit + PDF upl
 `/offercheck/employer/:id` — each session page shows an attestation receipt panel once the session closes.
 `frontend/src/App.jsx` is stripped to this vertical only, per the same nav-isolation pattern used by
 SOC2 / Dev Credential / Fundraising.
+
+### Phase 3 — company auth, credential, ATS integrations, billing
+
+```
+# Company signs up, gets an API key shown exactly once
+POST /api/offercheck/company/register  { "name": "Acme Corp", "hires_per_year": 150 }
+  → company_id, api_key, recommended_plan, pricing
+
+# Bulk-create up to 50 verification sessions in one call (X-API-Key header)
+POST /api/offercheck/company/verify/bulk
+  { "verifications": [{ "competing_offer": {...}, "candidate_ask": 190000 }, ...] }
+  → results: [{ session_id, candidate_token, employer_token, employer_link, consistency }, ...]
+
+# List this company's sessions — no candidate raw numbers, safe for a TA dashboard
+GET /api/offercheck/company/sessions   (X-API-Key)
+
+# Connect Greenhouse / Lever / Workday for outbound outcome notes
+POST /api/offercheck/company/ats-connect  { "provider": "greenhouse", "api_key": "..." }  (X-API-Key)
+
+# πCreds-style conduct credential — either the session token or the company's API key works
+GET /api/offercheck/sessions/{id}/credential
+  → { genuine_negotiation, round_count, outcome, issues, summary, credential_hash, tee_attested }
+
+# Inbound ATS webhook — auth is entirely an HMAC signature, no API key exchange in this direction
+POST /api/offercheck/integrations/{greenhouse|lever|workday}/webhook/{company_id}
+  headers: X-Signature: <hex HMAC-SHA256 of the raw body, using the company's webhook_secret>
+```
+
+`app/offercheck/credential.py` computes `genuine_negotiation` deterministically (capitulation +
+convergence checks over the round history — no LLM), mirroring `app/picreds/constraints.py`'s
+principle that hard conduct checks are code, never an LLM's opinion. The credential's hash is folded
+into the *same* TDX quote as the rest of the session (`negotiation.attested_terms(session,
+credential_hash=...)`), so it inherits the same hardware attestation — mirroring core DealProof's
+Step P (πCreds) landing in `report_data` before the final Step A re-attest.
+
+`app/offercheck/billing.py` implements the spec's pricing tiers (individual $25/verification, team
+$500/mo, growth $2,000/mo, enterprise custom) as pure, tested logic; the actual Stripe call is gated
+behind `STRIPE_API_KEY` (`StripeNotConfigured` otherwise) — same non-fatal pattern as
+`app/contract/escrow.py`'s `EscrowNotConfigured`.
+
+`app/offercheck/integrations/{greenhouse,lever}.py` post a scrubbed one-line outcome note to the
+candidate's ATS profile once a session closes, gated behind the company having connected that
+provider. `workday.py` is a deliberate stub (`WorkdayNotConfigured` always) — Workday has no generic
+public endpoint to write against without tenant-specific setup, matching the build spec's own
+"(stretch)" framing for it.
+
+**Known limitations, stated plainly:**
+- **No real database yet.** Companies and sessions are still in-memory (Phase 1/2 precedent) — a
+  server restart invalidates every issued API key. Fine for a demo, not for a company depending on
+  their key surviving a redeploy.
+- **The Stripe/Greenhouse/Lever HTTP call shapes are plausible but unverified against live accounts**
+  — no test credentials exist in this dev environment. Only the request-construction logic and the
+  `NotConfigured` fallback paths are exercised by tests; confirm against each vendor's current docs
+  before relying on them in production.
+- **Phase 3's own gate in the build spec** ("only start after real candidates/companies have used
+  Phase 1/2") was not met before this phase was built — built on explicit direction to proceed anyway.
 
 ---
 

@@ -146,13 +146,20 @@ memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
 frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
 
 --- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md ---
-app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction
+app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction, Company/Bulk/Credential schemas
 app/offercheck/verifier.py    check_consistency() — software-only plausibility check, no LLM/TEE
 app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash()
-app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens)
+app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens) — company_id/credential/attestation fields
+app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
+app/offercheck/credential.py  OfferVerifiedCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
+app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
-app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, GET /sessions/{id}, /attest, /dcap-verify
-frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload), CandidateSession, EmployerSession (+ attestation receipt panel)
+app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub)
+app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
+                               /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id};
+                               GET /sessions/{id}, /attest, /dcap-verify, /credential, /company/sessions
+frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload), CandidateSession, EmployerSession (+ attestation/credential panel),
+                                 CompanyRegister, Dashboard
 ```
 
 ---
@@ -184,7 +191,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (145 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (179 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -199,6 +206,7 @@ tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
+tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -236,7 +244,8 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | **Offer Check — vertical/hr-offer-check** | | |
 | OC-P1 | Phase 1 POC — revision-loop state machine, in-memory sessions, no TEE/LLM/DB (`app/offercheck/`) | ✅ Complete |
 | OC-P2 | TDX attestation receipt on session close, DCAP quote parsing, PDF offer-letter upload + Claude extraction | ✅ Complete |
-| OC-P3 | Company auth, ATS integrations, πCreds conduct credential, billing | 🔜 Pending |
+| OC-P3 | Company auth, bulk verify, TA dashboard, ATS integrations, πCreds conduct credential, billing | ✅ Complete |
+| OC-P4 | Real database (companies + sessions still in-memory) | 🔜 Pending |
 
 ---
 
@@ -504,6 +513,51 @@ Extraction failures (`OfferLetterParseError` — unreadable PDF, scanned image w
 Claude call failure) return HTTP 422 with a clear detail message; the candidate falls back to manual
 entry in the same form. This mirrors the non-fatal resilience pattern used everywhere else in this
 repo (memory sidecar, πCreds, Auditor, DKIM) — parsing failing never blocks the product.
+
+**Company auth (Phase 3) sits alongside per-session tokens, not in place of them:**
+`app/offercheck/auth.py` is a second, independent in-memory store (`Company`, keyed by a SHA-256'd
+API key — the raw key is returned exactly once at `POST /company/register` and never stored). It
+adds an optional `X-API-Key` header to `POST /sessions` (tags `company_id` for dashboard visibility)
+and drives `POST /company/verify/bulk` + `GET /company/sessions`. It does **not** change how a
+session's negotiation actions are authorized — `POST .../employer/band` and `.../employer/move`
+still require the per-session `employer_token`, exactly as in Phase 1. This was a deliberate scope
+boundary: company auth answers "which sessions belong to us" and "can we act in bulk," not "can we
+bypass the share-a-link model for an individual negotiation."
+
+**The conduct credential (`app/offercheck/credential.py`) needs raw values the privacy layer hides
+from `SessionView` — so `RoundEntry` gained a `value` field that `_view_for()`/`RoundSummary` still
+never read.** Capitulation and convergence are computed from `RoundEntry.value` sequences (per-actor,
+in order — `session.original_candidate_ask` is the immutable baseline candidate value, captured once
+at session creation, needed because `session.candidate_ask` itself mutates round over round).
+`compute_credential()` raises `ValueError` on a non-terminal session — same "don't compute a
+conclusion before there's an outcome" discipline as `negotiation.attested_terms()`. The credential's
+hash is computed *before* signing (`routes.py::_maybe_attest`) and passed into
+`attested_terms(session, credential_hash=...)`, so it lands in the same TDX quote as everything
+else — mirroring core DealProof's Step P (πCreds) → Step A (Auditor) → final re-attest ordering.
+
+**Billing and ATS integrations follow the exact `EscrowNotConfigured` convention already established
+by `app/contract/escrow.py`:** unset credentials raise a `*NotConfigured` exception
+(`billing.StripeNotConfigured`, `integrations._shared.AtsNotConfigured` subclasses per vendor),
+caught non-fatally in `routes.py::_maybe_notify` with a log line — a company without billing or ATS
+configured gets a session that still closes and attests correctly, just without those two side
+effects. `_maybe_notify` is guarded by `session.notified` so it fires at most once per session,
+mirroring the `session.attestation is not None` idempotency guard on `_maybe_attest`.
+
+**Nothing in this environment could be verified against a live Stripe, Greenhouse, or Lever
+account** — there are no test credentials for any of them here. The pricing-tier logic, HMAC
+signature verification, and every `NotConfigured` fallback path are real and tested; the actual
+outbound HTTP request shapes (`billing.py`, `integrations/greenhouse.py`, `integrations/lever.py`)
+are each explicitly caveated in their docstrings as unverified against a live account — confirm
+against current vendor docs before depending on them in production. `workday.py` doesn't even
+attempt a real call: Workday has no generic public endpoint, only tenant-specific WSDL/OAuth setups,
+matching the build spec's own "(stretch)" framing for it.
+
+**Inbound ATS webhooks are authenticated purely by HMAC signature, not by API key:**
+`POST /integrations/{provider}/webhook/{company_id}` — the vendor is calling *us*, so there's no
+`X-API-Key` exchange in this direction. `company_id` in the path selects whose `webhook_secret` to
+verify the `X-Signature` header against; it is not itself a secret (same trust model as `session_id`
++ token in the base flow — the identifier is public, the token/signature is what actually gates
+access).
 
 ---
 

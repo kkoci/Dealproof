@@ -1,11 +1,15 @@
 """
-In-memory session store — Phase 1 POC (no auth, no database; see
-build_spec_offer_check.md Decision 4). Sessions live for the lifetime of the
-process. Phase 3 replaces this with persisted, company-authenticated storage.
+In-memory session store — still no database through Phase 3 (see
+build_spec_offer_check.md Decision 4 and CLAUDE.md "Offer Check Architecture").
+Sessions and companies (app.offercheck.auth) both live for the lifetime of
+the process; a restart loses everything, including issued company API keys.
+Acceptable for the current demo/POC scale — a real persistence migration is
+tracked as a known gap, not silently done here.
 """
 import secrets
 from dataclasses import dataclass, field
 
+from app.offercheck.credential import OfferVerifiedCredential
 from app.offercheck.schemas import CompetingOffer, ConsistencyCheck
 
 MAX_ROUNDS = 5
@@ -16,6 +20,7 @@ class RoundEntry:
     round_number: int
     actor: str
     move: str
+    value: float | None = None  # the actor's own submitted number on a counter — never exposed via SessionView
 
 
 @dataclass
@@ -26,6 +31,7 @@ class Session:
     competing_offer: CompetingOffer
     consistency: ConsistencyCheck
     candidate_ask: float
+    original_candidate_ask: float
     state: str = "PENDING_EMPLOYER"
     round_number: int = 0
     max_rounds: int = MAX_ROUNDS
@@ -37,6 +43,10 @@ class Session:
     agreed_price: float | None = None
     history: list[RoundEntry] = field(default_factory=list)
     attestation: str | None = None
+    credential: OfferVerifiedCredential | None = None
+    company_id: str | None = None  # Phase 3: set when created via company API key or an ATS webhook
+    ats_candidate_ref: str | None = None  # Phase 3: candidate/opportunity id in the company's ATS, for notify_outcome
+    notified: bool = False  # Phase 3: billing/ATS side effects fired at most once per session
 
 
 _SESSIONS: dict[str, Session] = {}
@@ -47,7 +57,13 @@ def reset() -> None:
     _SESSIONS.clear()
 
 
-def create_session(competing_offer: CompetingOffer, candidate_ask: float, consistency: ConsistencyCheck) -> Session:
+def create_session(
+    competing_offer: CompetingOffer,
+    candidate_ask: float,
+    consistency: ConsistencyCheck,
+    company_id: str | None = None,
+    ats_candidate_ref: str | None = None,
+) -> Session:
     session = Session(
         id=secrets.token_urlsafe(12),
         candidate_token=secrets.token_urlsafe(16),
@@ -55,6 +71,9 @@ def create_session(competing_offer: CompetingOffer, candidate_ask: float, consis
         competing_offer=competing_offer,
         consistency=consistency,
         candidate_ask=candidate_ask,
+        original_candidate_ask=candidate_ask,
+        company_id=company_id,
+        ats_candidate_ref=ats_candidate_ref,
     )
     _SESSIONS[session.id] = session
     return session
