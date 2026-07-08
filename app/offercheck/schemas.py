@@ -246,7 +246,10 @@ class CompanySessionsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class AgenticStartRequest(BaseModel):
-    token: str  # either party's token — by this point both sides have already sealed their data privately
+    # A party token (candidate_token/employer_token) OR a valid X-Demo-Token header is required —
+    # see app.offercheck.demo_auth. token is optional here specifically for the demo-token-only path
+    # (a spectator with a magic link but no party token, e.g. POST /auth/demo-link recipients).
+    token: str | None = None
 
 
 class AgenticRoundDetail(BaseModel):
@@ -271,3 +274,24 @@ class AgenticResult(BaseModel):
     attestation: str | None
     tee_attested: bool
     credential: CredentialResponse | None = None
+
+
+# ---------------------------------------------------------------------------
+# Magic-link auth (see app.offercheck.demo_auth) — gates Claude-calling endpoints
+# ---------------------------------------------------------------------------
+
+class DemoLinkRequest(BaseModel):
+    session_id: str
+    expires_hours: float = Field(default=24.0, gt=0, le=168, description="Max 7 days")
+
+
+class DemoLinkResponse(BaseModel):
+    demo_url: str
+    token: str
+    expires_at: str  # ISO-8601 UTC
+
+
+class VerifyTokenResponse(BaseModel):
+    valid: bool
+    session_id: str
+    expires_at: str  # ISO-8601 UTC

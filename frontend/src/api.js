@@ -214,16 +214,30 @@ export function offercheckGetAttestation(sessionId, token) {
 }
 
 /**
- * POST /api/offercheck/sessions/:id/start-agentic — run CandidateAgent vs EmployerAgent to completion
+ * POST /api/offercheck/sessions/:id/start-agentic — run CandidateAgent vs EmployerAgent to completion.
+ * Requires a party token OR a demo token (X-Demo-Token) — see app.offercheck.demo_auth.
  * @param {string} sessionId
- * @param {string} token
+ * @param {{ token?: string, demoToken?: string }} auth
  * @returns {Promise<object>} AgenticResult
  */
-export function offercheckStartAgentic(sessionId, token) {
+export function offercheckStartAgentic(sessionId, { token, demoToken } = {}) {
+  const headers = {}
+  if (demoToken) headers['X-Demo-Token'] = demoToken
   return request(`/api/offercheck/sessions/${sessionId}/start-agentic`, {
     method: 'POST',
-    body: JSON.stringify({ token }),
+    headers,
+    body: JSON.stringify({ token: token || null }),
   })
+}
+
+/**
+ * GET /api/offercheck/auth/verify — check a magic-link demo token's validity
+ * @param {string} token
+ * @param {string} sessionId
+ * @returns {Promise<object>} VerifyTokenResponse
+ */
+export function offercheckVerifyDemoToken(token, sessionId) {
+  return request(`/api/offercheck/auth/verify?token=${encodeURIComponent(token)}&session=${encodeURIComponent(sessionId)}`)
 }
 
 /**

@@ -23,7 +23,7 @@ applies here too. There is no separate enclave process to move this into.
 """
 import logging
 
-from app.offercheck import negotiation
+from app.offercheck import demo_auth, negotiation
 from app.offercheck.agents.candidate_agent import CandidateAgent
 from app.offercheck.agents.employer_agent import EmployerAgent
 from app.offercheck.store import Session
@@ -89,6 +89,10 @@ async def run_agentic_negotiation(session: Session, candidate_agent: CandidateAg
     while session.state not in negotiation.TERMINAL_STATES:
         turn = negotiation.current_turn(session)
         round_number = session.round_number + 1
+
+        # Spend cap is a backstop independent of how the caller authenticated
+        # (see demo_auth.py) — checked before every actual Claude call.
+        demo_auth.record_and_check_spend(session.id)
 
         if turn == "employer":
             decision = await employer_agent.decide(session.candidate_ask, employer_history)

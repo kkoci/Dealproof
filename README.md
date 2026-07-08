@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-192 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
+215 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
 
 > Three pre-existing `tests/test_e2e.py` failures (core DealProof, unrelated to any vertical) reproduce
 > in isolation with zero Offer Check code involved — not introduced by this work, not fixed by it.
@@ -263,6 +263,7 @@ tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/compl
 tests/test_offercheck.py         29 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
 tests/test_offercheck_agentic.py 13 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
+tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1126,6 +1127,8 @@ Dealproof/
 | OC-10 | Tests — `tests/test_offercheck_agentic.py` (13 tests) | ✅ Complete |
 | OC-11 | Phase 2B — full compensation package negotiation (base + equity + signing + bonus + remote + PTO) | 🔜 Pending |
 | OC-12 | Phase 2C — move the agent loop's I/O boundary onto a real Phala Cloud TDX deployment (currently: same simulation-mode reasoning as the rest of this vertical) | 🔜 Pending |
+| OC-13 | Magic-link auth — gates every Claude-calling endpoint (party token OR demo token), single-use tokens, 15-call spend cap, startup fail-fast on missing `OFFERCHECK_SECRET_KEY` | ✅ Complete |
+| OC-14 | Tests — `tests/test_offercheck_demo_auth.py` (23 tests) | ✅ Complete |
 | OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
 
 > **Two build-spec documents, two numbering schemes:** `build_spec_offer_check.md`'s Phase 1/2/3
@@ -1291,6 +1294,55 @@ reveals its sealed-input fields), and a "Let agents negotiate" panel on both ses
 `agentic_ready` flips true — shows a live-ish transcript (round, actor, move, amount; no reasoning)
 once the run completes. The call is synchronous with a loading spinner, not a literal SSE stream —
 a deliberate simplification given 5 rounds finishes in well under the spec's 60-second bar.
+
+### Magic-link auth — gating every Claude-calling endpoint
+
+Added on top of Phase 2A at explicit user request: unauthenticated callers must never be able to
+trigger a paid Claude API call. Currently the only such endpoint is `start-agentic`; any future
+agent-calling endpoint must add the same check (`# TODO: replace with TinyCloud OpenKey delegation
+when available` marks every call site).
+
+```
+# Mint a magic link for someone who isn't a party to the negotiation (X-Internal-Key required)
+POST /api/offercheck/auth/demo-link  { "session_id": "...", "expires_hours": 24 }
+  → { demo_url: "http://.../offercheck/demo?token=...&session=...", token, expires_at }
+
+# Check a link's validity (used by the frontend before showing the negotiate button)
+GET /api/offercheck/auth/verify?token=...&session=...
+  → { valid: true, session_id, expires_at }  or 401
+
+# start-agentic now requires a party token OR a demo token — either is sufficient
+POST /sessions/{id}/start-agentic
+  body: { "token": "<party token>" }              — real candidate/employer flow, unchanged
+  header: X-Demo-Token: <magic link token>          — spectator/demo flow, no party token needed
+```
+
+**Party token OR demo token, not both required:** a party-token holder is already an authenticated
+participant in the session (exactly as for every other session endpoint) — requiring *also* a magic
+link on top would be security theater beyond what "prevent unauthenticated access" actually calls
+for. The magic link exists specifically for the case a party token can't cover: sharing a working demo
+with someone who was never a party to the negotiation (a prospect, e.g. Andrew). Demo tokens are
+single-use (consumed on validation, before the negotiation runs) and stateless — HMAC-SHA256 over
+`session_id:expires_at` signed with `OFFERCHECK_SECRET_KEY`, so validity is checked by recomputing
+the signature, no token database needed.
+
+**Spend cap, independent of auth path:** 15 Claude calls per session (3 full 5-round negotiations) —
+a hard backstop checked before every actual API call, in `mediator.py`, regardless of how the caller
+authenticated. Exceeding it returns HTTP 429.
+
+**Startup fail-fast:** the app refuses to start at all if `OFFERCHECK_SECRET_KEY` is unset — there is
+no default, no silent bypass. A soft warning (not a hard fail) logs if `OFFERCHECK_API_KEY` is set
+and identical to `ANTHROPIC_API_KEY` — Offer Check is meant to use its own key, but sharing one
+degrades gracefully rather than blocking the whole app.
+
+Verified live end to end: unauthenticated call → 401; internal-key-gated link minted; real Claude
+negotiation run using *only* the demo token (no party token in the request at all); reusing the same
+demo token afterward → 401. All four steps confirmed against the running server, not just tests.
+
+**Do NOT build (explicit, from the originating request):** no user accounts, no email flows, no token
+database (stateless HMAC is sufficient), no OAuth. `OFFERCHECK_SECRET_KEY` / `OFFERCHECK_INTERNAL_KEY`
+/ `OFFERCHECK_API_KEY` live in `.env` (gitignored) for local dev — this whole layer is a deliberate
+stopgap pending TinyCloud OpenKey delegation, not a real auth system.
 
 ---
 

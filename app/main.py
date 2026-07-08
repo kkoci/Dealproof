@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.offercheck.routes import router as offercheck_router
+from app.offercheck import demo_auth
 from app.config import settings
 import app.db as db
 
@@ -21,6 +22,8 @@ logging.basicConfig(level=settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    demo_auth.require_secret_key_configured()  # fails fast — see app/offercheck/demo_auth.py
+    demo_auth.warn_if_anthropic_keys_identical()
     await db.init_db()
     await db.create_hedera_messages_table()
     await db.create_arc_anchors_table()

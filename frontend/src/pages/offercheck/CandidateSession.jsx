@@ -98,7 +98,7 @@ function AgenticPanel({ sessionId, token, visible, onComplete }) {
     setRunning(true)
     setErr('')
     try {
-      const data = await offercheckStartAgentic(sessionId, token)
+      const data = await offercheckStartAgentic(sessionId, { token })
       setResult(data)
       onComplete?.()
     } catch (e) {

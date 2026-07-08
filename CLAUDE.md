@@ -157,10 +157,11 @@ app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) 
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
 app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub)
 app/offercheck/agents/        candidate_agent.py, employer_agent.py (mirror app/agents/buyer.py, seller.py), mediator.py (mirrors app/agents/negotiation.py)
+app/offercheck/demo_auth.py   Magic-link auth — stateless HMAC tokens, single-use consumption, per-session spend cap, startup fail-fast
 app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
-                               /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic;
-                               GET /sessions/{id}, /attest, /dcap-verify, /credential, /company/sessions
-frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor), CandidateSession, EmployerSession
+                               /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic,
+                               /auth/demo-link; GET /sessions/{id}, /attest, /dcap-verify, /credential, /company/sessions, /auth/verify
+frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor), CandidateSession, EmployerSession, Demo (magic-link spectator view)
                                  (+ attestation/credential panel + agentic panel), CompanyRegister, Dashboard
 ```
 
@@ -193,7 +194,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (192 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (215 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -210,6 +211,7 @@ tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, ha
 tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
 tests/test_offercheck_agentic.py 13  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
+tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -252,6 +254,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P5 | Agentic negotiation Phase 2A (`offercheck_phase2_spec.md`) — CandidateAgent + EmployerAgent, sealed floor/band, mediator over the real state machine | ✅ Complete |
 | OC-P6 | Agentic Phase 2B — full compensation package negotiation | 🔜 Pending |
 | OC-P7 | Agentic Phase 2C — real Phala Cloud TDX deployment for the agent loop (currently: simulation-mode reasoning, same as the rest of this vertical) | 🔜 Pending |
+| OC-P8 | Magic-link auth — gates every Claude-calling endpoint, single-use tokens, spend cap, startup fail-fast | ✅ Complete |
 
 ---
 
@@ -633,6 +636,62 @@ round), and moving the agent loop's I/O onto a real Phala Cloud TDX deployment s
 inherits the same simulation-mode `sign_result()` reasoning as the rest of this vertical — there is no
 separate "the agent loop is somehow less inside the enclave" gap, just the same not-yet-deployed-to-Phala
 gap that applies to all of Offer Check).
+
+---
+
+## Magic-Link Auth (`app/offercheck/demo_auth.py`)
+
+Added on top of Phase 2A at explicit user request, framed as "a 30-minute security fix, not a full
+auth system" — and built accordingly: no accounts, no email, no token database, no OAuth. The
+non-negotiable rule it exists to enforce: **no endpoint that triggers a Claude API call may run for
+an unauthenticated caller.** Currently that's just `start-agentic`; the rule is written into the
+module docstring as a standing instruction for whoever adds the next agent-calling endpoint, with a
+`# TODO: replace with TinyCloud OpenKey delegation when available` at each call site so it's clear
+this is a stopgap, not the final answer.
+
+**Party token OR demo token — deliberately not AND.** The originating request's literal wording
+("No exceptions") could be read as requiring both a party token *and* a magic link on every call.
+That reading was rejected: a party-token holder (`candidate_token`/`employer_token`) is already
+authenticated exactly as for every other session endpoint — requiring a magic link *on top* of that
+for the real two-party flow would be friction with no security benefit, and would break the
+already-shipped Phase 2A UX (the "Let agents negotiate" button on `CandidateSession`/`EmployerSession`
+never needed a magic link and still doesn't). The magic link solves a different problem: sharing a
+*working* demo with someone who was never a party to the negotiation. `_authorize_agentic_call()` in
+`routes.py` tries the party token first, falls through to the demo token only if that fails, and
+401s only if *neither* is valid — which is exactly "prevent unauthenticated access," the rule as
+actually stated at the top of the request.
+
+**Tokens are stateless.** `token = f"{expires_at}.{HMAC-SHA256(f'{session_id}:{expires_at}', OFFERCHECK_SECRET_KEY)}"`
+— validity is checked by recomputing the signature from the token's own embedded `expires_at`, no
+lookup table needed. Only two things need in-memory state, and both are intentionally ephemeral
+(lost on restart, same as every other in-memory store in this vertical):
+  - **Single-use consumption** (`_CONSUMED_TOKENS`, a `set[str]`) — a demo token is marked consumed
+    the moment it passes validation in `_authorize_agentic_call()`, *before* the negotiation runs,
+    not gated on the negotiation later succeeding. This means a demo token that hits a transient
+    error mid-negotiation cannot be replayed — matches "single-use" strictly, at the cost of not
+    being retry-friendly. That tradeoff was made deliberately for a spectator-demo use case where
+    replay risk matters more than retry convenience.
+  - **Spend cap** (`_CALL_COUNTS`, a `dict[str, int]`) — 15 Claude calls per session (3 full 5-round
+    negotiations), incremented in `mediator.py`'s round loop before every actual agent `.decide()`
+    call, independent of which auth path was used. This is explicitly a *backstop*: the token system
+    is the primary abuse control; the spend cap catches the case a single session accumulates many
+    separate authorized runs (e.g. several different party tokens or several different demo links,
+    each individually legitimate) that together exceed a sane cost ceiling. `SpendCapExceeded` →
+    HTTP 429.
+
+**Startup fail-fast, literally at process startup** (`app/main.py`'s `lifespan`, not lazily on first
+use) — `demo_auth.require_secret_key_configured()` raises `RuntimeError` if `OFFERCHECK_SECRET_KEY`
+is unset, which prevents the *entire* app (core DealProof routes included, since they share this
+process on this branch) from serving any request at all. This was requested explicitly ("fail fast")
+and accepted as-is even though it's broader than "just block offercheck" — this branch only serves
+this vertical anyway, so the blast radius matches intent. `demo_auth.warn_if_anthropic_keys_identical()`
+is the softer companion check (`OFFERCHECK_API_KEY` vs `ANTHROPIC_API_KEY`) — logs, does not block
+startup, because a shared key degrading gracefully is preferable to bricking the app over a
+usage-tracking nicety.
+
+`OFFERCHECK_SECRET_KEY` / `OFFERCHECK_INTERNAL_KEY` / `OFFERCHECK_API_KEY` (optional) /
+`OFFERCHECK_DEMO_BASE_URL` live in `.env` (gitignored). Generate the first two with
+`python -c "import secrets; print(secrets.token_hex(32))"`.
 
 ---
 

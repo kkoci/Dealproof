@@ -286,7 +286,8 @@ def test_start_agentic_invalid_token_rejected(client):
         f"/api/offercheck/sessions/{session_id}/start-agentic",
         json={"token": "not-a-real-token"},
     )
-    assert resp.status_code == 403
+    # Neither a valid party token nor a demo token was supplied — unauthenticated.
+    assert resp.status_code == 401
 
 
 def test_start_agentic_end_to_end(client):

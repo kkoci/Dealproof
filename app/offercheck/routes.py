@@ -23,19 +23,27 @@ Endpoints:
   GET  /company/sessions                  list this company's sessions (X-API-Key)
   POST /integrations/{provider}/webhook/{company_id}   inbound ATS webhook, HMAC-verified
   POST /sessions/{id}/start-agentic       run CandidateAgent vs EmployerAgent to completion (Phase 2A)
+  POST /auth/demo-link                    mint a magic-link demo token for a session (X-Internal-Key)
+  GET  /auth/verify                       check a magic-link token's validity
 
 Token identifies the caller as candidate or employer; it is never trusted to
 also declare which party it is. Cross-party raw numbers never appear in a
 response — only gap_pct, state, round history (moves only), and the
 viewer's own current value. Company auth (Phase 3) sits alongside this, not
 in place of it — see CLAUDE.md "Offer Check Architecture".
+
+Magic-link auth (see app.offercheck.demo_auth): every Claude-calling
+endpoint — currently only start-agentic — requires either a valid party
+token OR a valid X-Demo-Token. No exceptions; any future agent-calling
+endpoint must add the same check.
 """
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, negotiation, parsing, store, verifier
+from app.offercheck import auth, billing, credential, demo_auth, negotiation, parsing, store, verifier
 from app.offercheck.agents import mediator
 from app.offercheck.integrations import greenhouse, lever, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -58,6 +66,8 @@ from app.offercheck.schemas import (
     CompanySessionsResponse,
     CredentialResponse,
     DcapVerification,
+    DemoLinkRequest,
+    DemoLinkResponse,
     EmployerBandRequest,
     EmployerBandResponse,
     ExtractedOfferFields,
@@ -65,6 +75,7 @@ from app.offercheck.schemas import (
     OfferLetterExtraction,
     RoundSummary,
     SessionView,
+    VerifyTokenResponse,
 )
 from app.offercheck.store import Session
 from app.tee.attestation import sign_result
@@ -464,18 +475,61 @@ async def ats_webhook_route(
     return {"received": True, "provider": provider}
 
 
+def _authorize_agentic_call(session: Session, party_token: str | None, demo_token: str | None) -> None:
+    """
+    SECURITY RULE: start-agentic calls Claude — it must never run for an
+    unauthenticated caller. Either proof is sufficient (not both required):
+      (a) a valid party token — you're already an authenticated participant
+          in this session, exactly as for every other session endpoint.
+      (b) a valid, unexpired, unconsumed magic-link token (X-Demo-Token
+          header or ?token= query param) — minted via POST /auth/demo-link
+          for sharing with someone who isn't a party to the negotiation.
+    (b) is single-use: consumed here, on successful validation, before the
+    negotiation runs — not gated on the negotiation later succeeding.
+
+    # TODO: replace with TinyCloud OpenKey delegation when available.
+    """
+    if party_token:
+        try:
+            _resolve_viewer(session, party_token)
+            return
+        except HTTPException:
+            pass  # fall through to the demo-token check
+
+    if demo_token:
+        try:
+            demo_auth.verify_token(session.id, demo_token)
+        except demo_auth.InvalidToken as exc:
+            raise HTTPException(status_code=401, detail=f"invalid demo token: {exc}")
+        if demo_auth.is_consumed(demo_token):
+            raise HTTPException(status_code=401, detail="demo token already used")
+        demo_auth.consume(demo_token)
+        return
+
+    raise HTTPException(status_code=401, detail="a valid party token or demo token is required")
+
+
 @router.post("/sessions/{session_id}/start-agentic", response_model=AgenticResult)
-async def start_agentic_route(session_id: str, body: AgenticStartRequest) -> AgenticResult:
+async def start_agentic_route(
+    session_id: str,
+    body: AgenticStartRequest,
+    x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
+    token: str | None = None,
+) -> AgenticResult:
     """
     Phase 2A (offercheck_phase2_spec.md): runs CandidateAgent vs EmployerAgent
     to completion over the same state machine a human would drive. Requires
     both sides to have already sealed their private inputs — candidate_floor
     at POST /sessions time, employer_authority_limit at POST .../employer/band
-    time. Either party's token may trigger it once both are sealed; by then
-    there's nothing left for either party to unilaterally control.
+    time.
+
+    Auth: see _authorize_agentic_call — a party token (body.token) OR a
+    magic-link demo token (X-Demo-Token header, or ?token= query param for
+    shareable URLs) is required. This call also counts against the
+    per-session Claude-call spend cap (demo_auth.SPEND_CAP_PER_SESSION).
     """
     session = _get_session_or_404(session_id)
-    _resolve_viewer(session, body.token)
+    _authorize_agentic_call(session, body.token, x_demo_token or token)
 
     try:
         candidate_agent, employer_agent = mediator.build_agents(session)
@@ -486,6 +540,8 @@ async def start_agentic_route(session_id: str, body: AgenticStartRequest) -> Age
         transcript = await mediator.run_agentic_negotiation(session, candidate_agent, employer_agent)
     except negotiation.OfferCheckError as exc:
         _handle_negotiation_error(exc)
+    except demo_auth.SpendCapExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
 
     await _maybe_attest(session)
     await _maybe_notify(session)
@@ -500,3 +556,39 @@ async def start_agentic_route(session_id: str, body: AgenticStartRequest) -> Age
         tee_attested=settings.tee_mode == "production",
         credential=_credential_response(session),
     )
+
+
+@router.post("/auth/demo-link", response_model=DemoLinkResponse)
+async def create_demo_link_route(
+    body: DemoLinkRequest,
+    x_internal_key: str | None = Header(default=None, alias="X-Internal-Key"),
+) -> DemoLinkResponse:
+    """
+    Mints a magic-link token for sharing a session with someone who isn't a
+    party to the negotiation (a spectator/prospect watching a demo). Gated
+    by OFFERCHECK_INTERNAL_KEY — only the operator can mint these.
+    """
+    if not settings.offercheck_internal_key or x_internal_key != settings.offercheck_internal_key:
+        raise HTTPException(status_code=401, detail="X-Internal-Key required")
+
+    session = _get_session_or_404(body.session_id)
+    token, expires_at = demo_auth.generate_token(session.id, body.expires_hours)
+    expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+
+    demo_url = f"{settings.offercheck_demo_base_url}/offercheck/demo?token={token}&session={session.id}"
+    return DemoLinkResponse(demo_url=demo_url, token=token, expires_at=expires_at_iso)
+
+
+@router.get("/auth/verify", response_model=VerifyTokenResponse)
+async def verify_demo_token_route(token: str, session: str) -> VerifyTokenResponse:
+    """Lets the frontend check a magic link's validity before showing the negotiate button."""
+    _get_session_or_404(session)  # 404 if the session itself doesn't exist
+    try:
+        expires_at = demo_auth.verify_token(session, token)
+    except demo_auth.InvalidToken as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    if demo_auth.is_consumed(token):
+        raise HTTPException(status_code=401, detail="token already used")
+
+    expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+    return VerifyTokenResponse(valid=True, session_id=session, expires_at=expires_at_iso)

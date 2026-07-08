@@ -6,6 +6,7 @@ import CandidateSession from './pages/offercheck/CandidateSession.jsx'
 import EmployerSession from './pages/offercheck/EmployerSession.jsx'
 import CompanyRegister from './pages/offercheck/CompanyRegister.jsx'
 import Dashboard from './pages/offercheck/Dashboard.jsx'
+import Demo from './pages/offercheck/Demo.jsx'
 
 function NavBar() {
   return (
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="/offercheck/employer/:sessionId" element={<EmployerSession />} />
             <Route path="/offercheck/company/register" element={<CompanyRegister />} />
             <Route path="/offercheck/dashboard" element={<Dashboard />} />
+            <Route path="/offercheck/demo" element={<Demo />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>
