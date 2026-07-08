@@ -42,7 +42,7 @@ class CandidateAgent:
     def __init__(self, opening_ask: float, floor: float, priorities: str = "", competing_offer_summary: str = ""):
         self.opening_ask = opening_ask
         self.floor = floor
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self.client = anthropic.AsyncAnthropic(api_key=settings.offercheck_api_key or settings.anthropic_api_key)
         self.system_prompt = CANDIDATE_SYSTEM_PROMPT.format(
             opening_ask=opening_ask,
             floor=floor,

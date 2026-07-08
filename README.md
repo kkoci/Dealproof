@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-215 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
+246 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
 
 > Three pre-existing `tests/test_e2e.py` failures (core DealProof, unrelated to any vertical) reproduce
 > in isolation with zero Offer Check code involved — not introduced by this work, not fixed by it.
@@ -264,6 +264,7 @@ tests/test_offercheck.py         29 tests  — vertical/hr-offer-check: consiste
 tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
 tests/test_offercheck_agentic.py 13 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
+tests/test_offercheck_package.py 34 tests — vertical/hr-offer-check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, HTTP e2e
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1125,10 +1126,11 @@ Dealproof/
 | OC-7 | Tests — `tests/test_offercheck_phase3.py` (34 tests) | ✅ Complete |
 | OC-9 | Agentic negotiation (Phase 2A, `offercheck_phase2_spec.md`) — CandidateAgent + EmployerAgent, sealed floor/band, mediator over the real state machine | ✅ Complete |
 | OC-10 | Tests — `tests/test_offercheck_agentic.py` (13 tests) | ✅ Complete |
-| OC-11 | Phase 2B — full compensation package negotiation (base + equity + signing + bonus + remote + PTO) | 🔜 Pending |
+| OC-11 | Phase 2B — full compensation package negotiation (base + equity + signing + bonus + remote + PTO) | ✅ Complete |
 | OC-12 | Phase 2C — move the agent loop's I/O boundary onto a real Phala Cloud TDX deployment (currently: same simulation-mode reasoning as the rest of this vertical) | 🔜 Pending |
 | OC-13 | Magic-link auth — gates every Claude-calling endpoint (party token OR demo token), single-use tokens, 15-call spend cap, startup fail-fast on missing `OFFERCHECK_SECRET_KEY` | ✅ Complete |
 | OC-14 | Tests — `tests/test_offercheck_demo_auth.py` (23 tests) | ✅ Complete |
+| OC-15 | Tests — `tests/test_offercheck_package.py` (34 tests) | ✅ Complete |
 | OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
 
 > **Two build-spec documents, two numbering schemes:** `build_spec_offer_check.md`'s Phase 1/2/3
@@ -1343,6 +1345,63 @@ demo token afterward → 401. All four steps confirmed against the running serve
 database (stateless HMAC is sufficient), no OAuth. `OFFERCHECK_SECRET_KEY` / `OFFERCHECK_INTERNAL_KEY`
 / `OFFERCHECK_API_KEY` live in `.env` (gitignored) for local dev — this whole layer is a deliberate
 stopgap pending TinyCloud OpenKey delegation, not a real auth system.
+
+### Full compensation package negotiation (`offercheck_phase2_spec.md` Phase 2B)
+
+Phase 2A negotiates a single number (base salary). Phase 2B negotiates a full package — base, equity
+grant, vesting years, cliff months, signing bonus, annual bonus %, remote policy, start date, and PTO
+days — as one structured object exchanged each round, so agents can trade terms against each other
+(accept a lower base for more equity, stretch signing bonus while holding base firm) instead of
+haggling over one number at a time.
+
+```
+# Candidate seals a full opening package + total-comp floor at submission time
+POST /api/offercheck/sessions
+  { ..., "candidate_package_ask": {"base": 190000, "equity_grant": 150000, "vesting_years": 4,
+     "cliff_months": 12, "signing_bonus": 20000, "annual_bonus_pct": 10, "remote": "hybrid",
+     "start_date_days": 30, "pto_days": 15},
+    "candidate_total_comp_floor": 250000 }
+
+# Employer seals a total-comp budget at band time (band still doubles as the base-salary bounds)
+POST /api/offercheck/sessions/{id}/employer/band
+  { ..., "employer_total_comp_budget": 320000 }
+
+# Once package_agentic_ready is true, run the full negotiation — same auth gate as /start-agentic
+POST /api/offercheck/sessions/{id}/start-agentic-package
+  → { state, agreed_package, transcript: [{round, actor, move, package, total_comp}, ...],
+      attestation, credential }
+```
+
+**A package can't flow through the Phase 1 human state machine's scalar `value`,** so this is a
+*parallel* mirror of it (`app/offercheck/package.py`'s `apply_package_move()` /
+`package_current_turn()`), not a retrofit — same turn-alternation, same max-5-rounds-then-expire
+shape, own `package_state`/`package_round_number`/`package_history` fields on `Session`. Agentic-only;
+the Phase 1 human click-through flow is untouched.
+
+**`total_comp_value(package)`** is the single deterministic number both agents reason about and that
+hard constraints are checked against: `base + annual_bonus_pct/100*base + equity_grant/vesting_years +
+signing_bonus`. Documented as an approximation, not a real comp-modeling formula — PTO, remote policy,
+start date, and cliff length are negotiated but don't move this number.
+
+**Convergence detection is computed in code, not left to the LLM to notice** — a real gap found during
+live testing: `is_converged()` (total comp within 2%) was defined but never actually wired into the
+agents at first, and a live run walked away from a position that was already within 2% converged.
+Fixed by computing `_currently_converged()` in `package_mediator.py` before each round and injecting an
+explicit "you're within 2%, consider accepting" note into that round's prompt when true — verified live
+afterward: a second run with the same close-gap shape converged in round 1, and a separate
+tight-budget run correctly did *not* get the hint (genuinely 17.8% apart) and negotiated for real
+across all 5 rounds before expiring, `genuine_negotiation: true` either way.
+
+**Hard clamps mirror Phase 2A's discipline, applied to two terms instead of one:** candidate's `base`
+and `total_comp` never fall below their sealed floors (shortfall added to `signing_bonus` — the most
+flexible term); employer's `base` is clamped into `[band_min, band_max]` and `total_comp` is trimmed
+back toward budget by reducing `signing_bonus` first. The budget trim is a best-effort heuristic, not a
+mathematical guarantee if base+equity alone exceed the budget — documented as a known limitation.
+
+Frontend: the same "Enable AI negotiation" checkbox on both the candidate form and the employer band
+form gets a nested "Negotiate the full package" sub-option revealing the package term inputs; the
+result renders as a table (term × round) with changed cells highlighted, plus a running total-comp row
+— satisfying the spec's "show per-term changes round-over-round" requirement directly.
 
 ---
 

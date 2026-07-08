@@ -9,7 +9,7 @@ tracked as a known gap, not silently done here.
 import secrets
 from dataclasses import dataclass, field
 
-from app.offercheck.credential import OfferVerifiedCredential
+from app.offercheck.credential import OfferVerifiedCredential, PackageCredential
 from app.offercheck.schemas import CompetingOffer, ConsistencyCheck
 
 MAX_ROUNDS = 5
@@ -53,6 +53,21 @@ class Session:
     employer_authority_limit: float | None = None
     employer_priorities: str | None = None
     agentic_mode: bool = False
+    # Phase 2B full compensation package negotiation — sealed, never exposed via any response schema.
+    # Parallel state, not reused scalar fields — see app.offercheck.package's module docstring for why.
+    candidate_package_ask: dict | None = None
+    candidate_total_comp_floor: float | None = None
+    candidate_package_priorities: str | None = None
+    employer_total_comp_budget: float | None = None
+    package_state: str = "PENDING_EMPLOYER"
+    package_round_number: int = 0
+    candidate_current_package: dict | None = None
+    employer_current_package: dict | None = None
+    package_history: list[dict] = field(default_factory=list)
+    package_agreed: dict | None = None
+    package_attestation: str | None = None
+    package_credential: PackageCredential | None = None
+    package_notified: bool = False
 
 
 _SESSIONS: dict[str, Session] = {}
@@ -71,6 +86,9 @@ def create_session(
     ats_candidate_ref: str | None = None,
     candidate_floor: float | None = None,
     candidate_priorities: str | None = None,
+    candidate_package_ask: dict | None = None,
+    candidate_total_comp_floor: float | None = None,
+    candidate_package_priorities: str | None = None,
 ) -> Session:
     session = Session(
         id=secrets.token_urlsafe(12),
@@ -84,6 +102,10 @@ def create_session(
         ats_candidate_ref=ats_candidate_ref,
         candidate_floor=candidate_floor,
         candidate_priorities=candidate_priorities,
+        candidate_package_ask=candidate_package_ask,
+        candidate_total_comp_floor=candidate_total_comp_floor,
+        candidate_package_priorities=candidate_package_priorities,
+        candidate_current_package=candidate_package_ask,
     )
     _SESSIONS[session.id] = session
     return session

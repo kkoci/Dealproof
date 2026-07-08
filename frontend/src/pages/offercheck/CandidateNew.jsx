@@ -20,6 +20,13 @@ export default function CandidateNew() {
   const [aiEnabled, setAiEnabled] = useState(false)
   const [candidateFloor, setCandidateFloor] = useState('')
   const [candidatePriorities, setCandidatePriorities] = useState('')
+  const [packageEnabled, setPackageEnabled] = useState(false)
+  const [totalCompFloor, setTotalCompFloor] = useState('')
+  const [packagePriorities, setPackagePriorities] = useState('')
+  const [pkg, setPkg] = useState({
+    equity_grant: '', vesting_years: '4', cliff_months: '12', signing_bonus: '',
+    annual_bonus_pct: '', remote: 'hybrid', start_date_days: '30', pto_days: '15',
+  })
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [parsing, setParsing] = useState(false)
@@ -41,6 +48,12 @@ export default function CandidateNew() {
     })
     setCandidateFloor('175000')
     setCandidatePriorities('base matters more than equity')
+    setTotalCompFloor('250000')
+    setPackagePriorities('equity matters more than base')
+    setPkg({
+      equity_grant: '150000', vesting_years: '4', cliff_months: '12', signing_bonus: '20000',
+      annual_bonus_pct: '10', remote: 'hybrid', start_date_days: '30', pto_days: '15',
+    })
     setParseNotice(null)
     setError('')
   }
@@ -91,6 +104,21 @@ export default function CandidateNew() {
       if (aiEnabled && candidateFloor) {
         body.candidate_floor = Number(candidateFloor)
         body.candidate_priorities = candidatePriorities.trim() || undefined
+      }
+      if (aiEnabled && packageEnabled && totalCompFloor) {
+        body.candidate_total_comp_floor = Number(totalCompFloor)
+        body.candidate_package_priorities = packagePriorities.trim() || undefined
+        body.candidate_package_ask = {
+          base: Number(form.candidate_ask),
+          equity_grant: Number(pkg.equity_grant || 0),
+          vesting_years: Number(pkg.vesting_years || 4),
+          cliff_months: Number(pkg.cliff_months || 12),
+          signing_bonus: Number(pkg.signing_bonus || 0),
+          annual_bonus_pct: Number(pkg.annual_bonus_pct || 0),
+          remote: pkg.remote,
+          start_date_days: Number(pkg.start_date_days || 30),
+          pto_days: Number(pkg.pto_days || 15),
+        }
       }
       const result = await offercheckSubmit(body)
       navigate(`/offercheck/candidate/${result.session_id}?token=${result.candidate_token}`, {
@@ -207,6 +235,63 @@ export default function CandidateNew() {
                 <div>
                   <label className={labelClass}>Priorities (optional)</label>
                   <input className={inputClass} value={candidatePriorities} onChange={(e) => setCandidatePriorities(e.target.value)} placeholder="base matters more than equity" />
+                </div>
+
+                <div className="pt-2 border-t border-gray-800/60">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={packageEnabled} onChange={(e) => setPackageEnabled(e.target.checked)} className="accent-emerald-500" />
+                    <span className="text-xs font-medium text-gray-200">Negotiate the full package (equity, signing bonus, PTO…) instead of just base</span>
+                  </label>
+                  {packageEnabled && (
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className={labelClass}>Minimum acceptable total comp (never revealed)</label>
+                        <input className={inputClass} type="number" min="0" value={totalCompFloor} onChange={(e) => setTotalCompFloor(e.target.value)} placeholder="250000" />
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className={labelClass}>Equity grant</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.equity_grant} onChange={(e) => setPkg((p) => ({ ...p, equity_grant: e.target.value }))} placeholder="150000" />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Vesting (yrs)</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.vesting_years} onChange={(e) => setPkg((p) => ({ ...p, vesting_years: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Cliff (mo)</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.cliff_months} onChange={(e) => setPkg((p) => ({ ...p, cliff_months: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Signing bonus</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.signing_bonus} onChange={(e) => setPkg((p) => ({ ...p, signing_bonus: e.target.value }))} placeholder="20000" />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Annual bonus %</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.annual_bonus_pct} onChange={(e) => setPkg((p) => ({ ...p, annual_bonus_pct: e.target.value }))} placeholder="10" />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Remote policy</label>
+                          <select className={inputClass} value={pkg.remote} onChange={(e) => setPkg((p) => ({ ...p, remote: e.target.value }))}>
+                            <option value="remote">Remote</option>
+                            <option value="hybrid">Hybrid</option>
+                            <option value="onsite">Onsite</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className={labelClass}>Start in (days)</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.start_date_days} onChange={(e) => setPkg((p) => ({ ...p, start_date_days: e.target.value }))} />
+                        </div>
+                        <div>
+                          <label className={labelClass}>PTO days</label>
+                          <input className={inputClass} type="number" min="0" value={pkg.pto_days} onChange={(e) => setPkg((p) => ({ ...p, pto_days: e.target.value }))} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Package priorities (optional)</label>
+                        <input className={inputClass} value={packagePriorities} onChange={(e) => setPackagePriorities(e.target.value)} placeholder="equity matters more than base" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

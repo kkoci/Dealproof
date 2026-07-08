@@ -23,6 +23,7 @@ Endpoints:
   GET  /company/sessions                  list this company's sessions (X-API-Key)
   POST /integrations/{provider}/webhook/{company_id}   inbound ATS webhook, HMAC-verified
   POST /sessions/{id}/start-agentic       run CandidateAgent vs EmployerAgent to completion (Phase 2A)
+  POST /sessions/{id}/start-agentic-package  run full compensation package negotiation (Phase 2B)
   POST /auth/demo-link                    mint a magic-link demo token for a session (X-Internal-Key)
   GET  /auth/verify                       check a magic-link token's validity
 
@@ -43,8 +44,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, demo_auth, negotiation, parsing, store, verifier
-from app.offercheck.agents import mediator
+from app.offercheck import auth, billing, credential, demo_auth, negotiation, package, parsing, store, verifier
+from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
 from app.offercheck.schemas import (
@@ -73,6 +74,10 @@ from app.offercheck.schemas import (
     ExtractedOfferFields,
     MoveRequest,
     OfferLetterExtraction,
+    OfferPackage,
+    PackageAgenticResult,
+    PackageCredentialResponse,
+    PackageRoundDetail,
     RoundSummary,
     SessionView,
     VerifyTokenResponse,
@@ -127,6 +132,12 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         agreed_price=session.agreed_price,
         my_current_value=my_value,
         agentic_ready=session.candidate_floor is not None and session.employer_authority_limit is not None,
+        package_agentic_ready=(
+            session.candidate_package_ask is not None
+            and session.candidate_total_comp_floor is not None
+            and session.band_set
+            and session.employer_total_comp_budget is not None
+        ),
     )
 
 
@@ -200,6 +211,59 @@ async def _maybe_notify(session: Session) -> None:
             logger.warning(f"session {session.id}: {company.ats_provider} notify failed — {exc}")
 
 
+def _package_credential_response(session: Session) -> PackageCredentialResponse | None:
+    if session.package_credential is None:
+        return None
+    c = session.package_credential
+    return PackageCredentialResponse(
+        session_id=c.session_id,
+        genuine_negotiation=c.genuine_negotiation,
+        round_count=c.round_count,
+        outcome=c.outcome,
+        issues=c.issues,
+        summary=c.summary,
+        credential_hash=c.credential_hash,
+        tee_attested=settings.tee_mode == "production",
+    )
+
+
+async def _maybe_attest_package(session: Session) -> None:
+    """Phase 2B counterpart to _maybe_attest() — same idempotency guard, same
+    credential-hash-folded-into-the-quote pattern, over package_state instead of state."""
+    if session.package_state not in package.PACKAGE_TERMINAL_STATES or session.package_attestation is not None:
+        return
+    session.package_credential = credential.compute_package_credential(session)
+    terms = package.attested_package_terms(session, credential_hash=session.package_credential.credential_hash)
+    session.package_attestation = await sign_result(terms)
+
+
+async def _maybe_notify_package(session: Session) -> None:
+    """Phase 3B counterpart to _maybe_notify() — same non-fatal billing/ATS side effects."""
+    if session.package_attestation is None or session.package_notified or session.company_id is None:
+        return
+    session.package_notified = True
+
+    company = auth.get_company(session.company_id)
+    if company is None:
+        return
+
+    try:
+        await billing.record_verification_usage(company.id, company.plan)
+    except billing.StripeNotConfigured:
+        logger.info(f"session {session.id}: billing not configured, skipping package usage record")
+    except Exception as exc:
+        logger.warning(f"session {session.id}: package billing usage record failed — {exc}")
+
+    if company.ats_provider and session.ats_candidate_ref and session.package_credential:
+        integration = _ATS_INTEGRATIONS.get(company.ats_provider)
+        try:
+            await integration.notify_outcome(company.ats_api_key, session.ats_candidate_ref, session.package_credential.summary)
+        except AtsNotConfigured:
+            logger.info(f"session {session.id}: {company.ats_provider} not connected, skipping package ATS notify")
+        except Exception as exc:
+            logger.warning(f"session {session.id}: {company.ats_provider} package notify failed — {exc}")
+
+
 @router.post("/sessions", response_model=CandidateSubmitResponse)
 async def submit_session(
     body: CandidateSubmitRequest,
@@ -218,6 +282,9 @@ async def submit_session(
         ats_candidate_ref=body.ats_candidate_ref,
         candidate_floor=body.candidate_floor,
         candidate_priorities=body.candidate_priorities,
+        candidate_package_ask=body.candidate_package_ask.model_dump() if body.candidate_package_ask else None,
+        candidate_total_comp_floor=body.candidate_total_comp_floor,
+        candidate_package_priorities=body.candidate_package_priorities,
     )
     if company is not None:
         auth.record_session(company, session.id)
@@ -270,6 +337,7 @@ async def submit_employer_band(session_id: str, body: EmployerBandRequest) -> Em
         _handle_negotiation_error(exc)
     session.employer_authority_limit = body.employer_authority_limit
     session.employer_priorities = body.employer_priorities
+    session.employer_total_comp_budget = body.employer_total_comp_budget
     return EmployerBandResponse(session_id=session.id, state=session.state, band_set=session.band_set, gap_pct=gap)
 
 
@@ -592,3 +660,59 @@ async def verify_demo_token_route(token: str, session: str) -> VerifyTokenRespon
 
     expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
     return VerifyTokenResponse(valid=True, session_id=session, expires_at=expires_at_iso)
+
+
+@router.post("/sessions/{session_id}/start-agentic-package", response_model=PackageAgenticResult)
+async def start_agentic_package_route(
+    session_id: str,
+    body: AgenticStartRequest,
+    x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
+    token: str | None = None,
+) -> PackageAgenticResult:
+    """
+    Phase 2B (offercheck_phase2_spec.md): runs PackageCandidateAgent vs
+    PackageEmployerAgent to completion over the full compensation package —
+    base, equity, signing bonus, annual bonus %, remote policy, start date,
+    PTO — negotiated simultaneously each round, not just base salary.
+
+    Separate from /start-agentic (Phase 2A) rather than a mode flag on it:
+    a package can't flow through the scalar state machine's float `value`,
+    so this drives a parallel package state machine (app.offercheck.package)
+    instead — same turn-alternation and max-rounds-then-expire shape, just
+    package-typed. Requires both sides to have sealed package inputs —
+    candidate_package_ask + candidate_total_comp_floor at POST /sessions
+    time, employer_total_comp_budget at POST .../employer/band time (on top
+    of the band, which doubles as the base-salary bounds for package mode).
+
+    Auth: same magic-link gate as /start-agentic — a party token OR a demo
+    token, either is sufficient (see _authorize_agentic_call). Also counts
+    against the same per-session Claude-call spend cap.
+    """
+    session = _get_session_or_404(session_id)
+    _authorize_agentic_call(session, body.token, x_demo_token or token)
+
+    try:
+        candidate_agent, employer_agent = package_mediator.build_package_agents(session)
+    except package.PackageNotReady as exc:
+        raise HTTPException(status_code=412, detail=str(exc))
+
+    try:
+        transcript = await package_mediator.run_package_negotiation(session, candidate_agent, employer_agent)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except demo_auth.SpendCapExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+
+    await _maybe_attest_package(session)
+    await _maybe_notify_package(session)
+
+    return PackageAgenticResult(
+        session_id=session.id,
+        state=session.package_state,
+        agreed_package=OfferPackage(**session.package_agreed) if session.package_agreed else None,
+        round_number=session.package_round_number,
+        transcript=[PackageRoundDetail(**r) for r in transcript],
+        attestation=session.package_attestation,
+        tee_attested=settings.tee_mode == "production",
+        credential=_package_credential_response(session),
+    )

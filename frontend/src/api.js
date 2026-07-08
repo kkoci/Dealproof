@@ -231,6 +231,22 @@ export function offercheckStartAgentic(sessionId, { token, demoToken } = {}) {
 }
 
 /**
+ * POST /api/offercheck/sessions/:id/start-agentic-package — full compensation package negotiation (Phase 2B)
+ * @param {string} sessionId
+ * @param {{ token?: string, demoToken?: string }} auth
+ * @returns {Promise<object>} PackageAgenticResult
+ */
+export function offercheckStartAgenticPackage(sessionId, { token, demoToken } = {}) {
+  const headers = {}
+  if (demoToken) headers['X-Demo-Token'] = demoToken
+  return request(`/api/offercheck/sessions/${sessionId}/start-agentic-package`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ token: token || null }),
+  })
+}
+
+/**
  * GET /api/offercheck/auth/verify — check a magic-link demo token's validity
  * @param {string} token
  * @param {string} sessionId

@@ -1,6 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic } from '../../api.js'
+import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+
+const PACKAGE_TERM_LABELS = {
+  base: 'Base', equity_grant: 'Equity', vesting_years: 'Vesting (yrs)', cliff_months: 'Cliff (mo)',
+  signing_bonus: 'Signing bonus', annual_bonus_pct: 'Bonus %', remote: 'Remote', start_date_days: 'Start (days)', pto_days: 'PTO days',
+}
+
+function formatPackageValue(field, value) {
+  if (value == null) return '—'
+  if (field === 'remote') return value
+  if (['vesting_years', 'cliff_months', 'start_date_days', 'pto_days', 'annual_bonus_pct'].includes(field)) return value
+  return `$${Number(value).toLocaleString()}`
+}
 
 const POLL_MS = 3000
 
@@ -146,6 +158,109 @@ function AgenticPanel({ sessionId, token, visible, onComplete }) {
               </div>
             ))}
           </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function PackageAgenticPanel({ sessionId, token, visible, onComplete }) {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [err, setErr] = useState('')
+
+  if (!visible && !result) return null
+
+  const run = async () => {
+    setRunning(true)
+    setErr('')
+    try {
+      const data = await offercheckStartAgenticPackage(sessionId, { token })
+      setResult(data)
+      onComplete?.()
+    } catch (e) {
+      setErr(e.message || 'Package negotiation failed')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 p-4 rounded-xl bg-gray-900/40 border border-emerald-800/30">
+      {!result && (
+        <>
+          <p className="text-sm font-medium text-gray-200 mb-1">Let AI agents negotiate the full package</p>
+          <p className="text-xs text-gray-500 mb-3">
+            Base, equity, signing bonus, annual bonus, remote policy, start date, and PTO — negotiated
+            simultaneously. Floors and budgets never cross, only the package on the table each round.
+          </p>
+          <button
+            onClick={run}
+            disabled={running}
+            className="w-full px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+          >
+            {running ? 'Agents negotiating…' : 'Let agents negotiate (full package)'}
+          </button>
+          {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+        </>
+      )}
+      {result && (
+        <>
+          <p className="text-sm font-semibold text-gray-200 mb-3">
+            {result.state === 'AGREED'
+              ? 'Agreed package'
+              : result.state === 'WALKAWAY'
+                ? 'Agents walked away'
+                : 'Agents ran out of rounds'}
+          </p>
+          <div className="overflow-x-auto -mx-1 mb-3">
+            <table className="w-full text-xs min-w-[420px]">
+              <thead>
+                <tr className="text-gray-500 border-b border-gray-800/60">
+                  <th className="text-left font-medium py-1 px-1">Term</th>
+                  {result.transcript.map((r) => (
+                    <th key={r.round} className="text-right font-medium py-1 px-1">
+                      R{r.round} {r.actor === 'employer' ? '🏢' : '🧑'}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Object.keys(PACKAGE_TERM_LABELS).map((field, fi) => {
+                  const values = result.transcript.map((r) => r.package?.[field])
+                  return (
+                    <tr key={field} className={fi % 2 === 0 ? '' : 'bg-gray-800/20'}>
+                      <td className="py-1 px-1 text-gray-400">{PACKAGE_TERM_LABELS[field]}</td>
+                      {values.map((v, i) => {
+                        const changed = i > 0 && values[i - 1] != null && v !== values[i - 1]
+                        return (
+                          <td key={i} className={`text-right py-1 px-1 font-mono ${changed ? 'text-emerald-400' : 'text-gray-300'}`}>
+                            {formatPackageValue(field, v)}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+                <tr className="border-t border-gray-800/60">
+                  <td className="py-1 px-1 text-gray-400 font-medium">Total comp</td>
+                  {result.transcript.map((r) => (
+                    <td key={r.round} className="text-right py-1 px-1 font-mono text-gray-200">
+                      {r.total_comp != null ? `$${Math.round(r.total_comp).toLocaleString()}` : '—'}
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {result.credential && (
+            <div className="pt-3 border-t border-gray-800/60">
+              <span className={`text-xs font-semibold ${result.credential.genuine_negotiation ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {result.credential.genuine_negotiation ? 'Genuine negotiation verified' : 'Conduct issues detected'}
+              </span>
+              <p className="text-xs text-gray-500 mt-1">{result.credential.summary}</p>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -316,6 +431,13 @@ export default function CandidateSession() {
           sessionId={sessionId}
           token={token}
           visible={Boolean(view?.agentic_ready && !isTerminal)}
+          onComplete={refresh}
+        />
+
+        <PackageAgenticPanel
+          sessionId={sessionId}
+          token={token}
+          visible={Boolean(view?.package_agentic_ready && !isTerminal)}
           onComplete={refresh}
         />
 

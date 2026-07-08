@@ -40,12 +40,29 @@ class ConsistencyCheck(BaseModel):
     issues: list[str]
 
 
+class OfferPackage(BaseModel):
+    """Phase 2B (offercheck_phase2_spec.md) — a full compensation package, exchanged whole each round."""
+    base: float = Field(gt=0)
+    equity_grant: float = Field(default=0.0, ge=0)
+    vesting_years: float = Field(default=4.0, gt=0)
+    cliff_months: float = Field(default=12.0, ge=0)
+    signing_bonus: float = Field(default=0.0, ge=0)
+    annual_bonus_pct: float = Field(default=0.0, ge=0)
+    remote: Literal["remote", "hybrid", "onsite"] = "hybrid"
+    start_date_days: float = Field(default=30.0, ge=0)
+    pto_days: float = Field(default=15.0, ge=0)
+
+
 class CandidateSubmitRequest(BaseModel):
     competing_offer: CompetingOffer
     candidate_ask: float = Field(gt=0)
     ats_candidate_ref: str | None = None  # Phase 3: candidate/opportunity id in the company's ATS, if known
     candidate_floor: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
     candidate_priorities: str | None = None  # Phase 2A: sealed, free text (e.g. "base matters more than equity")
+    # Phase 2B: full compensation package negotiation — all optional, sealed, never returned
+    candidate_package_ask: OfferPackage | None = None
+    candidate_total_comp_floor: float | None = Field(default=None, gt=0)
+    candidate_package_priorities: str | None = None
 
 
 class CandidateSubmitResponse(BaseModel):
@@ -64,6 +81,7 @@ class EmployerBandRequest(BaseModel):
     band_max: float = Field(gt=0)
     employer_authority_limit: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
     employer_priorities: str | None = None  # Phase 2A: sealed, free text (e.g. "equity is more flexible than base")
+    employer_total_comp_budget: float | None = Field(default=None, gt=0, description="Phase 2B: sealed total-comp ceiling; never returned")
 
 
 class EmployerBandResponse(BaseModel):
@@ -158,6 +176,7 @@ class SessionView(BaseModel):
     # Only populated for the viewer's own side:
     my_current_value: float | None = None
     agentic_ready: bool = False  # Phase 2A: True once both sides have sealed floor/authority_limit — booleans only, never the values
+    package_agentic_ready: bool = False  # Phase 2B: True once both sides have sealed package_ask/total_comp_floor + budget
 
 
 # ---------------------------------------------------------------------------
@@ -295,3 +314,42 @@ class VerifyTokenResponse(BaseModel):
     valid: bool
     session_id: str
     expires_at: str  # ISO-8601 UTC
+
+
+# ---------------------------------------------------------------------------
+# Phase 2B — full compensation package negotiation (offercheck_phase2_spec.md)
+# ---------------------------------------------------------------------------
+
+class PackageCredentialResponse(BaseModel):
+    session_id: str
+    genuine_negotiation: bool
+    round_count: int
+    outcome: Literal["agreed", "walkaway", "expired"]
+    issues: list[str]
+    summary: str
+    credential_hash: str
+    tee_attested: bool
+
+
+class PackageRoundDetail(BaseModel):
+    """
+    One round of package-vs-package negotiation. Includes the full package —
+    that IS this mode's contract, same reasoning as AgenticRoundDetail.value.
+    Never included: either side's sealed floor/budget, or agent reasoning.
+    """
+    round: int
+    actor: Actor
+    move: Move
+    package: OfferPackage | None
+    total_comp: float | None  # total_comp_value(package) — convenience for the frontend table
+
+
+class PackageAgenticResult(BaseModel):
+    session_id: str
+    state: SessionState
+    agreed_package: OfferPackage | None
+    round_number: int
+    transcript: list[PackageRoundDetail]
+    attestation: str | None
+    tee_attested: bool
+    credential: PackageCredentialResponse | None = None

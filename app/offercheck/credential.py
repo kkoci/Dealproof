@@ -19,6 +19,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from app.offercheck.package import total_comp_value
+
 if TYPE_CHECKING:
     from app.offercheck.store import Session
 
@@ -27,6 +29,19 @@ CAPITULATION_THRESHOLD = 0.40
 
 @dataclass
 class OfferVerifiedCredential:
+    session_id: str
+    genuine_negotiation: bool
+    round_count: int
+    outcome: str  # "agreed" | "walkaway" | "expired"
+    issues: list[str]
+    summary: str
+    credential_hash: str
+
+
+@dataclass
+class PackageCredential:
+    """Phase 2B counterpart to OfferVerifiedCredential — same shape, computed
+    over each side's total_comp_value() trajectory instead of a raw scalar."""
     session_id: str
     genuine_negotiation: bool
     round_count: int
@@ -103,6 +118,64 @@ def compute_credential(session: "Session") -> OfferVerifiedCredential:
 
 
 def _hash_credential(credential: OfferVerifiedCredential) -> str:
+    payload = {
+        "session_id": credential.session_id,
+        "genuine_negotiation": credential.genuine_negotiation,
+        "round_count": credential.round_count,
+        "outcome": credential.outcome,
+        "issues": sorted(credential.issues),
+        "summary": credential.summary,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+_PACKAGE_OUTCOME_BY_STATE = {"AGREED": "agreed", "WALKAWAY": "walkaway", "EXPIRED": "expired"}
+
+
+def compute_package_credential(session: "Session") -> PackageCredential:
+    """Phase 2B: same capitulation/convergence discipline as compute_credential(),
+    applied to total_comp_value() of each side's package history instead of a raw price."""
+    if session.package_state not in ("AGREED", "WALKAWAY", "EXPIRED"):
+        raise ValueError(f"cannot compute a credential for a non-terminal package session (state={session.package_state})")
+
+    candidate_totals = [total_comp_value(session.candidate_package_ask)] + [
+        total_comp_value(h["package"]) for h in session.package_history
+        if h["actor"] == "candidate" and h["move"] == "counter" and h["package"] is not None
+    ]
+    employer_totals = [
+        total_comp_value(h["package"]) for h in session.package_history
+        if h["actor"] == "employer" and h["move"] == "counter" and h["package"] is not None
+    ]
+
+    issues = (
+        _capitulation_issues(candidate_totals, "candidate")
+        + _capitulation_issues(employer_totals, "employer")
+        + _convergence_issues(candidate_totals, employer_totals)
+    )
+
+    genuine_negotiation = len(issues) == 0
+    outcome = _PACKAGE_OUTCOME_BY_STATE[session.package_state]
+    round_count = session.package_round_number
+
+    if genuine_negotiation:
+        summary = f"{round_count}-round package negotiation, {outcome}, no conduct issues detected."
+    else:
+        summary = f"{round_count}-round package negotiation, {outcome}, issues detected: {'; '.join(issues)}"
+
+    credential = PackageCredential(
+        session_id=session.id,
+        genuine_negotiation=genuine_negotiation,
+        round_count=round_count,
+        outcome=outcome,
+        issues=issues,
+        summary=summary,
+        credential_hash="",
+    )
+    credential.credential_hash = _hash_package_credential(credential)
+    return credential
+
+
+def _hash_package_credential(credential: PackageCredential) -> str:
     payload = {
         "session_id": credential.session_id,
         "genuine_negotiation": credential.genuine_negotiation,

@@ -152,17 +152,21 @@ app/offercheck/verifier.py    check_consistency() — software-only plausibility
 app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash()
 app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens) — company_id/credential/attestation/candidate_floor/employer_authority_limit fields
 app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
-app/offercheck/credential.py  OfferVerifiedCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
+app/offercheck/credential.py  OfferVerifiedCredential + PackageCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
 app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
 app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub)
-app/offercheck/agents/        candidate_agent.py, employer_agent.py (mirror app/agents/buyer.py, seller.py), mediator.py (mirrors app/agents/negotiation.py)
+app/offercheck/package.py     Phase 2B: OfferPackage math (total_comp_value, hard clamps, is_converged) + a parallel package state machine (apply_package_move, package_current_turn) — can't share app/offercheck/negotiation.py's scalar apply_move()
+app/offercheck/agents/        candidate_agent.py, employer_agent.py (mirror app/agents/buyer.py, seller.py) + mediator.py (mirrors app/agents/negotiation.py);
+                               package_candidate_agent.py, package_employer_agent.py, package_mediator.py (Phase 2B counterparts, package-shaped I/O)
 app/offercheck/demo_auth.py   Magic-link auth — stateless HMAC tokens, single-use consumption, per-session spend cap, startup fail-fast
 app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
                                /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic,
-                               /auth/demo-link; GET /sessions/{id}, /attest, /dcap-verify, /credential, /company/sessions, /auth/verify
-frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor), CandidateSession, EmployerSession, Demo (magic-link spectator view)
-                                 (+ attestation/credential panel + agentic panel), CompanyRegister, Dashboard
+                               /sessions/{id}/start-agentic-package, /auth/demo-link; GET /sessions/{id}, /attest, /dcap-verify, /credential,
+                               /company/sessions, /auth/verify
+frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor + package terms), CandidateSession, EmployerSession
+                                 (+ attestation/credential panel + agentic panel + package results table), Demo (magic-link spectator view),
+                                 CompanyRegister, Dashboard
 ```
 
 ---
@@ -194,7 +198,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (215 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (246 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -212,6 +216,7 @@ tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
 tests/test_offercheck_agentic.py 13  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
+tests/test_offercheck_package.py 34  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -252,9 +257,10 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P3 | Company auth, bulk verify, TA dashboard, ATS integrations, πCreds conduct credential, billing | ✅ Complete |
 | OC-P4 | Real database (companies + sessions still in-memory) | 🔜 Pending |
 | OC-P5 | Agentic negotiation Phase 2A (`offercheck_phase2_spec.md`) — CandidateAgent + EmployerAgent, sealed floor/band, mediator over the real state machine | ✅ Complete |
-| OC-P6 | Agentic Phase 2B — full compensation package negotiation | 🔜 Pending |
+| OC-P6 | Agentic Phase 2B — full compensation package negotiation | ✅ Complete |
 | OC-P7 | Agentic Phase 2C — real Phala Cloud TDX deployment for the agent loop (currently: simulation-mode reasoning, same as the rest of this vertical) | 🔜 Pending |
 | OC-P8 | Magic-link auth — gates every Claude-calling endpoint, single-use tokens, spend cap, startup fail-fast | ✅ Complete |
+| OC-P9 | Tests — `tests/test_offercheck_package.py` (34 tests) | ✅ Complete |
 
 ---
 
@@ -692,6 +698,64 @@ usage-tracking nicety.
 `OFFERCHECK_SECRET_KEY` / `OFFERCHECK_INTERNAL_KEY` / `OFFERCHECK_API_KEY` (optional) /
 `OFFERCHECK_DEMO_BASE_URL` live in `.env` (gitignored). Generate the first two with
 `python -c "import secrets; print(secrets.token_hex(32))"`.
+
+---
+
+## Full Compensation Package Negotiation (`offercheck_phase2_spec.md` Phase 2B)
+
+Extends Phase 2A from a single scalar (base salary) to a full package — base, equity_grant,
+vesting_years, cliff_months, signing_bonus, annual_bonus_pct, remote, start_date_days, pto_days —
+negotiated as one structured object per round.
+
+**Why this is a parallel state machine, not an extension of the scalar one:** `negotiation.apply_move()`
+and everything built on it (`RoundEntry.value: float`, `SessionView.gap_pct`, `credential.compute_credential()`)
+is scalar by construction. Retrofitting it to carry `float | dict` would touch nearly every file in this
+vertical and risk the already-shipped Phase 1 human flow for a feature that's agentic-only. Instead
+`app/offercheck/package.py` mirrors the scalar machine's *shape* exactly — `PACKAGE_TERMINAL_STATES`,
+`_PACKAGE_TURN_BY_STATE`, `apply_package_move()` — over new `package_*` fields on `Session`
+(`package_state`, `package_round_number`, `candidate_current_package`, `employer_current_package`,
+`package_history`, `package_agreed`). The Phase 1 human flow is completely untouched by this.
+
+**`total_comp_value(package)`** — `base + annual_bonus_pct/100*base + equity_grant/vesting_years +
+signing_bonus` — is the one deterministic number used for (a) hard-clamping candidate/employer packages
+to their sealed floor/budget (`clamp_candidate_package()`, `clamp_employer_package()` — same
+"prompt asks nicely, code guarantees it" discipline as `CandidateAgent.floor`/`EmployerAgent`'s band
+clamp), and (b) convergence detection. Documented explicitly as an approximation, not a real
+compensation model — PTO/remote/start-date/cliff are negotiated but don't move this number.
+
+**Convergence detection is a real gap that live testing caught, not a hypothetical:** `is_converged()`
+(total comp within 2%) was written and unit-tested but never actually called from anywhere — a live
+run walked away from a position that, by the numbers, had already converged (round 4→5: candidate
+$261.5K vs employer $256.5K total comp, ~2% apart), because nothing told the employer agent that gap
+was small enough to accept. Fixed by adding `package_mediator._currently_converged(session)`, computed
+before every round from `session.candidate_current_package`/`employer_current_package`, and threading
+a `converged_hint: bool` through `CandidateAgent.decide()`/`EmployerAgent.decide()` (Phase 2B agents
+specifically — Phase 2A's scalar agents don't need this since gap_pct is already directly visible)
+into `_build_messages()`, which appends an explicit "you're within 2%, consider accepting" system note
+to that round's prompt only when true. Re-verified live afterward: a close-gap scenario now converges
+in round 1; a genuinely-far-apart scenario (17.8% gap) correctly does *not* get the hint and negotiates
+for real across all 5 rounds. If you add more convergence-driving logic to this vertical, verify it's
+actually wired into a prompt somewhere, not just defined — a passing unit test for the pure function
+does not mean the mediator calls it.
+
+**`PackageCredential` (`credential.compute_package_credential()`)** reuses the exact same
+`_capitulation_issues()`/`_convergence_issues()` helpers `compute_credential()` uses, just fed
+`total_comp_value()` sequences instead of raw scalar values — same threshold constant
+(`CAPITULATION_THRESHOLD = 0.40`), same "hard invariants in code, no LLM" principle.
+`package.attested_package_terms()` mirrors `negotiation.attested_terms()`: hashes the private opening
+package, discloses the agreed package (once terminal) in the clear, folds the credential hash in before
+signing — same Step-P-before-final-re-attest ordering as everywhere else in this vertical.
+
+**Reuses the Phase 2A/magic-link auth infrastructure verbatim:** `POST /start-agentic-package` calls
+the same `_authorize_agentic_call()` (party token OR demo token) and the same
+`demo_auth.record_and_check_spend()` per round — no new auth surface was added for this endpoint,
+confirming the "any future agent-calling endpoint must add the same check" rule from `demo_auth.py`'s
+docstring actually generalizes cleanly to a second endpoint.
+
+**Hard clamp is a best-effort heuristic for the employer's budget overage, not a guarantee:**
+`clamp_employer_package()` trims `signing_bonus` first to fit `total_comp_budget` — if base+equity
+alone exceed budget, the clamped package can still be over. Documented in the function's own docstring
+as a known limitation, not silently glossed over.
 
 ---
 

@@ -40,7 +40,7 @@ class EmployerAgent:
         self.band_min = band_min
         self.band_mid = band_mid
         self.band_max = band_max
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self.client = anthropic.AsyncAnthropic(api_key=settings.offercheck_api_key or settings.anthropic_api_key)
         self.system_prompt = EMPLOYER_SYSTEM_PROMPT.format(
             band_min=band_min,
             band_mid=band_mid,
