@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { offercheckEmployerMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand } from '../../api.js'
+import { offercheckEmployerMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic } from '../../api.js'
 
 const POLL_MS = 3000
 
@@ -91,6 +91,71 @@ function AttestationPanel({ sessionId, token, visible }) {
   )
 }
 
+function AgenticPanel({ sessionId, token, visible, onComplete }) {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [err, setErr] = useState('')
+
+  if (!visible && !result) return null
+
+  const run = async () => {
+    setRunning(true)
+    setErr('')
+    try {
+      const data = await offercheckStartAgentic(sessionId, token)
+      setResult(data)
+      onComplete?.()
+    } catch (e) {
+      setErr(e.message || 'Agentic negotiation failed')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 p-4 rounded-xl bg-gray-900/40 border border-emerald-800/30">
+      {!result && (
+        <>
+          <p className="text-sm font-medium text-gray-200 mb-1">Let AI agents negotiate</p>
+          <p className="text-xs text-gray-500 mb-3">
+            Both sides have sealed their private numbers. Two Claude agents will negotiate from here —
+            your band never crosses to the candidate's agent, only offer amounts and moves do.
+          </p>
+          <button
+            onClick={run}
+            disabled={running}
+            className="w-full px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+          >
+            {running ? 'Agents negotiating…' : 'Let agents negotiate'}
+          </button>
+          {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+        </>
+      )}
+      {result && (
+        <>
+          <p className="text-sm font-semibold text-gray-200 mb-2">
+            {result.state === 'AGREED'
+              ? `Agents agreed at $${result.agreed_price?.toLocaleString()}`
+              : result.state === 'WALKAWAY'
+                ? 'Agents walked away'
+                : 'Agents ran out of rounds'}
+          </p>
+          <div className="space-y-1.5">
+            {result.transcript.map((r) => (
+              <div key={r.round} className="flex items-center justify-between text-xs text-gray-500">
+                <span>Round {r.round} — {r.actor}</span>
+                <span className="font-mono text-gray-400">
+                  {r.move.toUpperCase()}{r.value != null ? ` $${r.value.toLocaleString()}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function EmployerSession() {
   const { sessionId } = useParams()
   const [searchParams] = useSearchParams()
@@ -99,6 +164,9 @@ export default function EmployerSession() {
   const [view, setView] = useState(null)
   const [error, setError] = useState('')
   const [band, setBand] = useState({ band_min: '', band_mid: '', band_max: '' })
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [authorityLimit, setAuthorityLimit] = useState('')
+  const [employerPriorities, setEmployerPriorities] = useState('')
   const [bandGap, setBandGap] = useState(null)
   const [counterValue, setCounterValue] = useState('')
   const [acting, setActing] = useState(false)
@@ -126,6 +194,8 @@ export default function EmployerSession() {
 
   const loadDemoBand = () => {
     setBand({ band_min: '155000', band_mid: '175000', band_max: '195000' })
+    setAuthorityLimit('195000')
+    setEmployerPriorities('equity is more flexible than base')
   }
 
   const submitBand = async (e) => {
@@ -133,12 +203,17 @@ export default function EmployerSession() {
     setError('')
     setActing(true)
     try {
-      const result = await offercheckSetEmployerBand(sessionId, {
+      const body = {
         employer_token: token,
         band_min: Number(band.band_min),
         band_mid: Number(band.band_mid),
         band_max: Number(band.band_max),
-      })
+      }
+      if (aiEnabled && authorityLimit) {
+        body.employer_authority_limit = Number(authorityLimit)
+        body.employer_priorities = employerPriorities.trim() || undefined
+      }
+      const result = await offercheckSetEmployerBand(sessionId, body)
       setBandGap(result.gap_pct)
       await refresh()
     } catch (err) {
@@ -196,6 +271,29 @@ export default function EmployerSession() {
               <label className={labelClass}>Band maximum</label>
               <input className={inputClass} type="number" min="0" value={band.band_max} onChange={(e) => setBand((b) => ({ ...b, band_max: e.target.value }))} placeholder="195000" required />
             </div>
+
+            <div className="pt-2 border-t border-gray-800/60">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)} className="accent-emerald-500" />
+                <span className="text-sm font-medium text-gray-200">Enable AI negotiation (optional)</span>
+              </label>
+              <p className="text-xs text-gray-500 mt-1 mb-3">
+                Let a Claude agent negotiate on your behalf once the candidate is ready too. Your authority limit is sealed — never shown to the candidate.
+              </p>
+              {aiEnabled && (
+                <div className="space-y-3">
+                  <div>
+                    <label className={labelClass}>Your signing authority limit (never revealed)</label>
+                    <input className={inputClass} type="number" min="0" value={authorityLimit} onChange={(e) => setAuthorityLimit(e.target.value)} placeholder="195000" />
+                  </div>
+                  <div>
+                    <label className={labelClass}>Priorities (optional)</label>
+                    <input className={inputClass} value={employerPriorities} onChange={(e) => setEmployerPriorities(e.target.value)} placeholder="equity is more flexible than base" />
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               type="submit"
               disabled={acting}
@@ -281,6 +379,13 @@ export default function EmployerSession() {
             )}
           </div>
         )}
+
+        <AgenticPanel
+          sessionId={sessionId}
+          token={token}
+          visible={Boolean(view?.agentic_ready && !isTerminal)}
+          onComplete={refresh}
+        />
 
         <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
       </div>

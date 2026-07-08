@@ -22,6 +22,7 @@ Endpoints:
   POST /company/verify/bulk               create up to 50 sessions in one call (X-API-Key)
   GET  /company/sessions                  list this company's sessions (X-API-Key)
   POST /integrations/{provider}/webhook/{company_id}   inbound ATS webhook, HMAC-verified
+  POST /sessions/{id}/start-agentic       run CandidateAgent vs EmployerAgent to completion (Phase 2A)
 
 Token identifies the caller as candidate or employer; it is never trusted to
 also declare which party it is. Cross-party raw numbers never appear in a
@@ -35,9 +36,13 @@ from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 
 from app.config import settings
 from app.offercheck import auth, billing, credential, negotiation, parsing, store, verifier
+from app.offercheck.agents import mediator
 from app.offercheck.integrations import greenhouse, lever, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
 from app.offercheck.schemas import (
+    AgenticResult,
+    AgenticRoundDetail,
+    AgenticStartRequest,
     AtsConnectRequest,
     AtsConnectResponse,
     AtsProvider,
@@ -110,6 +115,23 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         consistency=session.consistency,
         agreed_price=session.agreed_price,
         my_current_value=my_value,
+        agentic_ready=session.candidate_floor is not None and session.employer_authority_limit is not None,
+    )
+
+
+def _credential_response(session: Session) -> CredentialResponse | None:
+    if session.credential is None:
+        return None
+    c = session.credential
+    return CredentialResponse(
+        session_id=c.session_id,
+        genuine_negotiation=c.genuine_negotiation,
+        round_count=c.round_count,
+        outcome=c.outcome,
+        issues=c.issues,
+        summary=c.summary,
+        credential_hash=c.credential_hash,
+        tee_attested=settings.tee_mode == "production",
     )
 
 
@@ -183,6 +205,8 @@ async def submit_session(
         consistency,
         company_id=company.id if company else None,
         ats_candidate_ref=body.ats_candidate_ref,
+        candidate_floor=body.candidate_floor,
+        candidate_priorities=body.candidate_priorities,
     )
     if company is not None:
         auth.record_session(company, session.id)
@@ -233,6 +257,8 @@ async def submit_employer_band(session_id: str, body: EmployerBandRequest) -> Em
         gap = negotiation.set_employer_band(session, body.band_min, body.band_mid, body.band_max)
     except negotiation.OfferCheckError as exc:
         _handle_negotiation_error(exc)
+    session.employer_authority_limit = body.employer_authority_limit
+    session.employer_priorities = body.employer_priorities
     return EmployerBandResponse(session_id=session.id, state=session.state, band_set=session.band_set, gap_pct=gap)
 
 
@@ -330,20 +356,10 @@ async def get_credential_route(
     else:
         raise HTTPException(status_code=401, detail="token or X-API-Key required")
 
-    if session.credential is None:
+    response = _credential_response(session)
+    if response is None:
         raise HTTPException(status_code=409, detail="credential not available until the session closes")
-
-    c = session.credential
-    return CredentialResponse(
-        session_id=c.session_id,
-        genuine_negotiation=c.genuine_negotiation,
-        round_count=c.round_count,
-        outcome=c.outcome,
-        issues=c.issues,
-        summary=c.summary,
-        credential_hash=c.credential_hash,
-        tee_attested=settings.tee_mode == "production",
-    )
+    return response
 
 
 @router.post("/company/register", response_model=CompanyRegisterResponse, status_code=201)
@@ -446,3 +462,41 @@ async def ats_webhook_route(
         raise HTTPException(status_code=403, detail="invalid webhook signature")
 
     return {"received": True, "provider": provider}
+
+
+@router.post("/sessions/{session_id}/start-agentic", response_model=AgenticResult)
+async def start_agentic_route(session_id: str, body: AgenticStartRequest) -> AgenticResult:
+    """
+    Phase 2A (offercheck_phase2_spec.md): runs CandidateAgent vs EmployerAgent
+    to completion over the same state machine a human would drive. Requires
+    both sides to have already sealed their private inputs — candidate_floor
+    at POST /sessions time, employer_authority_limit at POST .../employer/band
+    time. Either party's token may trigger it once both are sealed; by then
+    there's nothing left for either party to unilaterally control.
+    """
+    session = _get_session_or_404(session_id)
+    _resolve_viewer(session, body.token)
+
+    try:
+        candidate_agent, employer_agent = mediator.build_agents(session)
+    except mediator.AgenticNotReady as exc:
+        raise HTTPException(status_code=412, detail=str(exc))
+
+    try:
+        transcript = await mediator.run_agentic_negotiation(session, candidate_agent, employer_agent)
+    except negotiation.OfferCheckError as exc:
+        _handle_negotiation_error(exc)
+
+    await _maybe_attest(session)
+    await _maybe_notify(session)
+
+    return AgenticResult(
+        session_id=session.id,
+        state=session.state,
+        agreed_price=session.agreed_price,
+        round_number=session.round_number,
+        transcript=[AgenticRoundDetail(**r) for r in transcript],
+        attestation=session.attestation,
+        tee_attested=settings.tee_mode == "production",
+        credential=_credential_response(session),
+    )

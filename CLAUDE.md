@@ -145,21 +145,23 @@ demo.py                    CLI demo — transcript + attestations + memory + πC
 memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
 frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
 
---- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md ---
-app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction, Company/Bulk/Credential schemas
+--- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md
+    and offercheck_phase2_spec.md (agentic layer — different numbering scheme, see README) ---
+app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction, Company/Bulk/Credential/Agentic schemas
 app/offercheck/verifier.py    check_consistency() — software-only plausibility check, no LLM/TEE
 app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash()
-app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens) — company_id/credential/attestation fields
+app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens) — company_id/credential/attestation/candidate_floor/employer_authority_limit fields
 app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
 app/offercheck/credential.py  OfferVerifiedCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
 app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
 app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub)
+app/offercheck/agents/        candidate_agent.py, employer_agent.py (mirror app/agents/buyer.py, seller.py), mediator.py (mirrors app/agents/negotiation.py)
 app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
-                               /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id};
+                               /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic;
                                GET /sessions/{id}, /attest, /dcap-verify, /credential, /company/sessions
-frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload), CandidateSession, EmployerSession (+ attestation/credential panel),
-                                 CompanyRegister, Dashboard
+frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor), CandidateSession, EmployerSession
+                                 (+ attestation/credential panel + agentic panel), CompanyRegister, Dashboard
 ```
 
 ---
@@ -191,7 +193,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (179 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (192 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -207,6 +209,7 @@ tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + inge
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
+tests/test_offercheck_agentic.py 13  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -246,6 +249,9 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P2 | TDX attestation receipt on session close, DCAP quote parsing, PDF offer-letter upload + Claude extraction | ✅ Complete |
 | OC-P3 | Company auth, bulk verify, TA dashboard, ATS integrations, πCreds conduct credential, billing | ✅ Complete |
 | OC-P4 | Real database (companies + sessions still in-memory) | 🔜 Pending |
+| OC-P5 | Agentic negotiation Phase 2A (`offercheck_phase2_spec.md`) — CandidateAgent + EmployerAgent, sealed floor/band, mediator over the real state machine | ✅ Complete |
+| OC-P6 | Agentic Phase 2B — full compensation package negotiation | 🔜 Pending |
+| OC-P7 | Agentic Phase 2C — real Phala Cloud TDX deployment for the agent loop (currently: simulation-mode reasoning, same as the rest of this vertical) | 🔜 Pending |
 
 ---
 
@@ -558,6 +564,75 @@ matching the build spec's own "(stretch)" framing for it.
 verify the `X-Signature` header against; it is not itself a secret (same trust model as `session_id`
 + token in the base flow — the identifier is public, the token/signature is what actually gates
 access).
+
+---
+
+## Agentic Negotiation (`offercheck_phase2_spec.md` Phase 2A)
+
+Added at explicit user request on top of the base build spec — that spec's own Phase 1 says "no LLM"
+outright, and this vertical was human-only through OC-1 → OC-8. The user's framing: "it has to
+resemble DealProof otherwise what's the point" — so `app/offercheck/agents/` is a deliberate mirror of
+`app/agents/{buyer,seller,negotiation}.py`, not a new pattern:
+
+```
+app/offercheck/agents/candidate_agent.py  mirrors app/agents/buyer.py — hard floor clamp in code
+app/offercheck/agents/employer_agent.py   mirrors app/agents/seller.py — hard band clamp in code
+app/offercheck/agents/mediator.py         mirrors app/agents/negotiation.py::run_negotiation()
+```
+
+**The mediator drives the SAME `negotiation.apply_move()` the human endpoints call** — there is no
+separate agentic state machine. This is why an agentic session gets identical turn-order,
+max-rounds-auto-expiry, TDX attestation, and `credential.py` conduct-credential guarantees for free:
+`apply_move()` doesn't know or care whether a human clicked a button or an agent's JSON response drove
+the call.
+
+**Two sealed inputs, added to the existing submission endpoints, not new ones:**
+`CandidateSubmitRequest.candidate_floor` (+ `candidate_priorities`) and
+`EmployerBandRequest.employer_authority_limit` (+ `employer_priorities`) — both optional, both stored
+on `Session`, both absent from every response schema (`SessionView` only exposes the *boolean*
+`agentic_ready = candidate_floor is not None and employer_authority_limit is not None`). `POST
+/sessions/{id}/start-agentic` requires both sealed — `mediator.build_agents()` raises
+`AgenticNotReady` (→ HTTP 412) otherwise.
+
+**Privacy contract, deliberately different from the base human flow's gap-%-only contract:**
+within a round, each agent *is* told the opposing side's current offer amount — that's this mode's own
+contract per `offercheck_phase2_spec.md`: "the offer number per round crosses the boundary, nothing
+else." What never crosses, exactly as everywhere else in this vertical: either side's *sealed*
+parameter, and either agent's reasoning. `mediator.py` maintains two independent per-agent histories
+(`candidate_history`, `employer_history`) — `_own_entry()` keeps an agent's own past turns in full
+(including its own reasoning, so it stays self-consistent across rounds, same as core's
+BuyerAgent/SellerAgent "remembering" via the Claude message thread), `_crossing_entry()` strips the
+*other* agent's turns down to `{action, value}` before they're shown across the boundary. Both agents
+also hard-clamp their own returned value in `_parse_response()` regardless of what the LLM says — same
+"prompt asks nicely, code guarantees it" discipline as `BuyerAgent.budget` / `SellerAgent.floor_price`
+/ `ArbitratorAgent`'s price clamp.
+
+**`build_agents()` is split out from `run_agentic_negotiation()` specifically for testability.**
+Patching `anthropic.AsyncAnthropic` by module path does *not* give `CandidateAgent` and
+`EmployerAgent` independently different mocks — both modules `import anthropic`, which is the same
+singleton module object, so two `patch("...anthropic.AsyncAnthropic", ...)` calls collide on the
+identical attribute (whichever patch is innermost wins for *both* agents, silently breaking
+round-robin tests in confusing ways — this cost real debugging time when first written). The fix,
+matching `tests/test_negotiation.py`'s existing pattern for BuyerAgent/SellerAgent: construct real
+agent instances (no network call happens at construction), then
+`patch.object(agent.client.messages, "create", side_effect=...)` on each *instance* directly. This is
+why `mediator.build_agents(session) -> (CandidateAgent, EmployerAgent)` and
+`mediator.run_agentic_negotiation(session, candidate_agent, employer_agent)` are two functions, not
+one — tests construct via `build_agents()`, patch each instance, then call
+`run_agentic_negotiation()` directly with pre-built, pre-patched agents.
+
+**Verified against the real Anthropic API**, not just mocked tests (a real key was available in this
+environment as of this phase, unlike Phase 2's PDF-parsing verification which could not be):
+employer opened, candidate countered, employer countered, candidate accepted — 4 rounds, ~11 seconds,
+`genuine_negotiation: true`. Confirms the full loop — sealed inputs, turn order, hard clamps, credential
+computation, attestation — end to end with real model behavior, not just scripted mock responses.
+
+**Not built (Phase 2B/2C, per the spec's own phasing and its own "what not to build in Phase 2" list):**
+full compensation-package negotiation (equity/signing/bonus/remote/PTO as one structured object per
+round), and moving the agent loop's I/O onto a real Phala Cloud TDX deployment specifically (it already
+inherits the same simulation-mode `sign_result()` reasoning as the rest of this vertical — there is no
+separate "the agent loop is somehow less inside the enclave" gap, just the same not-yet-deployed-to-Phala
+gap that applies to all of Offer Check).
 
 ---
 

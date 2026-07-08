@@ -1,10 +1,12 @@
 """
-EmployerAgent — autoplay negotiation (see app/agents/seller.py, which this
-mirrors: hard band clamp enforced in code, same client/response contract).
+EmployerAgent — Phase 2A agentic negotiation (see offercheck_phase2_spec.md
+and app/agents/seller.py, which this mirrors).
 
-Privacy: only ever given round number, gap_pct, the candidate's last move,
-and its own current offer. Never handed the candidate's raw ask or
-competing-offer details.
+Sealed parameters: `band_min`/`band_mid`/`band_max` (clamped by the caller's
+authority_limit — see mediator.py). Never appear in any message sent to the
+candidate side — this agent is only ever given the candidate's offer amount.
+Band is clamped in code on every response, not just requested via the
+prompt, same as CandidateAgent's floor.
 """
 import json
 import logging
@@ -15,76 +17,60 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-EMPLOYER_SYSTEM_PROMPT = """You are a talent-acquisition negotiation agent representing the employer, negotiating a salary offer against a candidate inside a Trusted Execution Environment (TEE).
+EMPLOYER_SYSTEM_PROMPT = """You are negotiating a salary offer on behalf of an employer, inside a Trusted Execution Environment (TEE), against a candidate's negotiation agent.
 
-Your goal: land the candidate at a fair price without exceeding your band.
+You know:
+- Your salary band for this role: minimum {band_min}, midpoint {band_mid}, maximum {band_max} — NEVER reveal these numbers, and never exceed the maximum
+- Your priorities: {priorities}
 
-Salary band for this role — minimum {band_min}, midpoint {band_mid}, maximum {band_max} (hard ceiling, never exceed it).
+Each round you are told only the candidate's current ask — never their walk-away floor or reasoning. Respond with your decision:
+- ACCEPT if the ask is within your band and justified
+- COUNTER with a new offer if you want to keep negotiating (never exceed your band maximum)
+- WALK if the candidate stays too far above your band after several rounds with no meaningful movement
+
 Prefer to land at or below the midpoint when the candidate will accept it.
 
-You do NOT see the candidate's raw ask or their competing offer details. Each round you are only told:
-- the round number and how many rounds remain
-- the current gap percentage between the candidate's ask and your position (positive = they're above you)
-- the candidate's last move (accept / counter / walk)
-
-Hard constraints:
-- Never offer above your band maximum.
-- Accept once the candidate's ask is close enough to your band to be worth taking rather than risking more rounds.
-- Walk away if the candidate stays far above your band after several rounds with no meaningful movement.
-
 Always respond with valid JSON only, no extra text:
-{{"action": "accept|counter|walk", "value": <float — your new offer if countering>, "reasoning": "<one sentence>"}}
+{{"action": "accept|counter|walk", "value": <float — your new offer if countering>, "reasoning": "<one sentence, for your own record only — never shown to the candidate>"}}
 """
 
 
 class EmployerAgent:
-    def __init__(self, band_min: float, band_mid: float, band_max: float):
+    def __init__(self, band_min: float, band_mid: float, band_max: float, priorities: str = ""):
         self.band_min = band_min
         self.band_mid = band_mid
         self.band_max = band_max
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        self.system_prompt = EMPLOYER_SYSTEM_PROMPT.format(band_min=band_min, band_mid=band_mid, band_max=band_max)
+        self.system_prompt = EMPLOYER_SYSTEM_PROMPT.format(
+            band_min=band_min,
+            band_mid=band_mid,
+            band_max=band_max,
+            priorities=priorities or "not specified",
+        )
 
-    async def decide(
-        self,
-        round_number: int,
-        max_rounds: int,
-        my_current_value: float | None,
-        gap_pct: float | None,
-        last_candidate_move: str | None,
-        history: list[dict],
-    ) -> dict:
-        prompt = self._build_prompt(round_number, max_rounds, my_current_value, gap_pct, last_candidate_move, history)
+    async def decide(self, candidate_ask: float, history: list[dict]) -> dict:
+        """
+        history: this agent's own private conversation log, built by the
+        mediator — its own past turns in full (including reasoning), the
+        candidate's past turns stripped to {action, value} only.
+        """
+        messages = self._build_messages(history, candidate_ask)
         response = await self.client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=384,
             system=self.system_prompt,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
         raw = response.content[0].text.strip()
-        fallback = my_current_value if my_current_value is not None else self.band_mid
-        return self._parse_response(raw, fallback)
+        return self._parse_response(raw, fallback_value=self.band_mid)
 
-    def _build_prompt(
-        self,
-        round_number: int,
-        max_rounds: int,
-        my_current_value: float | None,
-        gap_pct: float | None,
-        last_candidate_move: str | None,
-        history: list[dict],
-    ) -> str:
-        history_lines = "\n".join(f"Round {h['round']}: {h['actor']} {h['move']}" for h in history) or "No moves yet."
-        gap_line = f"{gap_pct:+.1f}%" if gap_pct is not None else "not yet known (this is your first move)"
-        current_line = f"{my_current_value}" if my_current_value is not None else "not yet made — this is your opening move"
-        return (
-            f"Round {round_number} of {max_rounds} max.\n"
-            f"Your current offer: {current_line}\n"
-            f"Gap to candidate's ask: {gap_line}\n"
-            f"Candidate's last move: {last_candidate_move or 'none yet'}\n"
-            f"History:\n{history_lines}\n\n"
-            "Decide your move."
-        )
+    def _build_messages(self, history: list[dict], candidate_ask: float) -> list[dict]:
+        messages = []
+        for entry in history:
+            role = "assistant" if entry["role"] == "employer" else "user"
+            messages.append({"role": role, "content": json.dumps(entry["content"])})
+        messages.append({"role": "user", "content": f"Candidate's ask: {candidate_ask}"})
+        return messages
 
     def _parse_response(self, raw: str, fallback_value: float) -> dict:
         try:

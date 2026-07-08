@@ -47,6 +47,12 @@ class Session:
     company_id: str | None = None  # Phase 3: set when created via company API key or an ATS webhook
     ats_candidate_ref: str | None = None  # Phase 3: candidate/opportunity id in the company's ATS, for notify_outcome
     notified: bool = False  # Phase 3: billing/ATS side effects fired at most once per session
+    # Phase 2A agentic negotiation (offercheck_phase2_spec.md) — sealed, never exposed via any response schema.
+    candidate_floor: float | None = None
+    candidate_priorities: str | None = None
+    employer_authority_limit: float | None = None
+    employer_priorities: str | None = None
+    agentic_mode: bool = False
 
 
 _SESSIONS: dict[str, Session] = {}
@@ -63,6 +69,8 @@ def create_session(
     consistency: ConsistencyCheck,
     company_id: str | None = None,
     ats_candidate_ref: str | None = None,
+    candidate_floor: float | None = None,
+    candidate_priorities: str | None = None,
 ) -> Session:
     session = Session(
         id=secrets.token_urlsafe(12),
@@ -74,6 +82,8 @@ def create_session(
         original_candidate_ask=candidate_ask,
         company_id=company_id,
         ats_candidate_ref=ats_candidate_ref,
+        candidate_floor=candidate_floor,
+        candidate_priorities=candidate_priorities,
     )
     _SESSIONS[session.id] = session
     return session

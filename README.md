@@ -245,7 +245,10 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-179 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
+192 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
+
+> Three pre-existing `tests/test_e2e.py` failures (core DealProof, unrelated to any vertical) reproduce
+> in isolation with zero Offer Check code involved — not introduced by this work, not fixed by it.
 
 ```
 tests/test_agents.py          3 tests  — BuyerAgent + SellerAgent unit tests
@@ -257,8 +260,9 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
-tests/test_offercheck.py       29 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
-tests/test_offercheck_phase3.py 34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
+tests/test_offercheck.py         29 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
+tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
+tests/test_offercheck_agentic.py 13 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1118,7 +1122,16 @@ Dealproof/
 | OC-5 | Phase 2 — TDX attestation receipt on session close, DCAP quote parsing, PDF offer-letter upload + Claude extraction | ✅ Complete |
 | OC-6 | Phase 3 — company auth, bulk verify, TA dashboard, πCreds conduct credential, Greenhouse/Lever/Workday integrations, billing | ✅ Complete |
 | OC-7 | Tests — `tests/test_offercheck_phase3.py` (34 tests) | ✅ Complete |
+| OC-9 | Agentic negotiation (Phase 2A, `offercheck_phase2_spec.md`) — CandidateAgent + EmployerAgent, sealed floor/band, mediator over the real state machine | ✅ Complete |
+| OC-10 | Tests — `tests/test_offercheck_agentic.py` (13 tests) | ✅ Complete |
+| OC-11 | Phase 2B — full compensation package negotiation (base + equity + signing + bonus + remote + PTO) | 🔜 Pending |
+| OC-12 | Phase 2C — move the agent loop's I/O boundary onto a real Phala Cloud TDX deployment (currently: same simulation-mode reasoning as the rest of this vertical) | 🔜 Pending |
 | OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
+
+> **Two build-spec documents, two numbering schemes:** `build_spec_offer_check.md`'s Phase 1/2/3
+> (OC-1 through OC-8 above) predates `offercheck_phase2_spec.md`, which restarts numbering at its own
+> "Phase 2A/2B/2C" for the agentic layer specifically. OC-9/OC-10 above *are* that spec's Phase 2A.
+> Follow the OC-N numbers here for "what's actually built, in what order" — they're chronological.
 
 ---
 
@@ -1234,6 +1247,50 @@ public endpoint to write against without tenant-specific setup, matching the bui
   before relying on them in production.
 - **Phase 3's own gate in the build spec** ("only start after real candidates/companies have used
   Phase 1/2") was not met before this phase was built — built on explicit direction to proceed anyway.
+
+### Agentic negotiation (`offercheck_phase2_spec.md` Phase 2A)
+
+Two Claude agents — `CandidateAgent` and `EmployerAgent` — negotiate autonomously over the *same*
+state machine a human uses. This isn't a separate, parallel negotiation engine: `mediator.py` calls
+`negotiation.apply_move()` exactly like the human-driven endpoints do, so an agentic session gets
+identical turn-order, max-rounds-auto-expiry, TDX attestation, and conduct-credential guarantees.
+
+```
+# 1. Candidate seals a floor at submission time (optional — only needed for agentic mode)
+POST /api/offercheck/sessions
+  { ..., "candidate_floor": 175000, "candidate_priorities": "base matters more than equity" }
+
+# 2. Employer seals an authority limit at band time (optional)
+POST /api/offercheck/sessions/{id}/employer/band
+  { ..., "employer_authority_limit": 195000, "employer_priorities": "equity is more flexible than base" }
+
+# 3. Once both sides have sealed (GET .../sessions/{id} → "agentic_ready": true),
+#    either party's token can start it — the whole negotiation runs to completion in one call
+POST /api/offercheck/sessions/{id}/start-agentic  { "token": "..." }
+  → { state, agreed_price, transcript: [{round, actor, move, value}, ...], attestation, credential }
+```
+
+**Privacy contract, deliberately different from the human flow's:** within agentic mode, each agent
+*is* told the opposing side's current offer amount every round (that's this mode's own contract, per
+`offercheck_phase2_spec.md` — a negotiating agent needs to know the number on the table, same as a
+human would over email). What never crosses, here exactly as everywhere else in this vertical: either
+side's *sealed* parameter (`candidate_floor` / `band_min/mid/max` / `employer_authority_limit`), and
+either agent's reasoning. `mediator.py` builds two independent conversation histories — each agent's
+own past turns kept in full (including its own reasoning, for self-consistency across rounds), the
+opposing agent's turns stripped down to `{action, value}` before being shown across the boundary.
+Both agents also hard-clamp their own returned value in code (floor / band+authority) regardless of
+what the LLM says — the prompt asks nicely, the code guarantees it, same discipline as core
+DealProof's `BuyerAgent.budget` / `SellerAgent.floor_price`.
+
+Verified live against the real Anthropic API (not just mocked tests): a genuine negotiation —
+employer opens, candidate counters, employer counters, candidate accepts — converged in 4 rounds and
+~11 seconds, `genuine_negotiation: true`, credential hash folded into the same TDX quote.
+
+Frontend: an "Enable AI negotiation" checkbox on the candidate form and the employer band form (each
+reveals its sealed-input fields), and a "Let agents negotiate" panel on both session pages once
+`agentic_ready` flips true — shows a live-ish transcript (round, actor, move, amount; no reasoning)
+once the run completes. The call is synchronous with a loading spinner, not a literal SSE stream —
+a deliberate simplification given 5 rounds finishes in well under the spec's 60-second bar.
 
 ---
 

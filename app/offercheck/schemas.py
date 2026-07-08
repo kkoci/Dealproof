@@ -44,6 +44,8 @@ class CandidateSubmitRequest(BaseModel):
     competing_offer: CompetingOffer
     candidate_ask: float = Field(gt=0)
     ats_candidate_ref: str | None = None  # Phase 3: candidate/opportunity id in the company's ATS, if known
+    candidate_floor: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
+    candidate_priorities: str | None = None  # Phase 2A: sealed, free text (e.g. "base matters more than equity")
 
 
 class CandidateSubmitResponse(BaseModel):
@@ -60,6 +62,8 @@ class EmployerBandRequest(BaseModel):
     band_min: float = Field(gt=0)
     band_mid: float = Field(gt=0)
     band_max: float = Field(gt=0)
+    employer_authority_limit: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
+    employer_priorities: str | None = None  # Phase 2A: sealed, free text (e.g. "equity is more flexible than base")
 
 
 class EmployerBandResponse(BaseModel):
@@ -153,6 +157,7 @@ class SessionView(BaseModel):
     agreed_price: float | None = None
     # Only populated for the viewer's own side:
     my_current_value: float | None = None
+    agentic_ready: bool = False  # Phase 2A: True once both sides have sealed floor/authority_limit — booleans only, never the values
 
 
 # ---------------------------------------------------------------------------
@@ -234,3 +239,35 @@ class CompanySessionSummary(BaseModel):
 class CompanySessionsResponse(BaseModel):
     company_id: str
     sessions: list[CompanySessionSummary]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2A — agentic negotiation (offercheck_phase2_spec.md)
+# ---------------------------------------------------------------------------
+
+class AgenticStartRequest(BaseModel):
+    token: str  # either party's token — by this point both sides have already sealed their data privately
+
+
+class AgenticRoundDetail(BaseModel):
+    """
+    One round of agent-vs-agent negotiation. Includes the offer amount — that
+    IS this mode's contract (agents must know the number on the table to
+    negotiate). What's never included, here or anywhere else: either side's
+    sealed floor / band / authority limit, or either agent's reasoning.
+    """
+    round: int
+    actor: Actor
+    move: Move
+    value: float | None
+
+
+class AgenticResult(BaseModel):
+    session_id: str
+    state: SessionState
+    agreed_price: float | None
+    round_number: int
+    transcript: list[AgenticRoundDetail]
+    attestation: str | None
+    tee_attested: bool
+    credential: CredentialResponse | None = None

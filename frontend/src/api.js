@@ -214,6 +214,19 @@ export function offercheckGetAttestation(sessionId, token) {
 }
 
 /**
+ * POST /api/offercheck/sessions/:id/start-agentic — run CandidateAgent vs EmployerAgent to completion
+ * @param {string} sessionId
+ * @param {string} token
+ * @returns {Promise<object>} AgenticResult
+ */
+export function offercheckStartAgentic(sessionId, token) {
+  return request(`/api/offercheck/sessions/${sessionId}/start-agentic`, {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+}
+
+/**
  * GET /api/offercheck/sessions/:id/dcap-verify?token=... — parsed DCAP quote fields
  * @param {string} sessionId
  * @param {string} token

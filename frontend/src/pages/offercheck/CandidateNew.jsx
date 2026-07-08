@@ -17,6 +17,9 @@ export default function CandidateNew() {
     start_date: '',
     candidate_ask: '',
   })
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [candidateFloor, setCandidateFloor] = useState('')
+  const [candidatePriorities, setCandidatePriorities] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [parsing, setParsing] = useState(false)
@@ -36,6 +39,8 @@ export default function CandidateNew() {
       start_date: startDate,
       candidate_ask: '190000',
     })
+    setCandidateFloor('175000')
+    setCandidatePriorities('base matters more than equity')
     setParseNotice(null)
     setError('')
   }
@@ -82,6 +87,10 @@ export default function CandidateNew() {
           start_date: form.start_date,
         },
         candidate_ask: Number(form.candidate_ask),
+      }
+      if (aiEnabled && candidateFloor) {
+        body.candidate_floor = Number(candidateFloor)
+        body.candidate_priorities = candidatePriorities.trim() || undefined
       }
       const result = await offercheckSubmit(body)
       navigate(`/offercheck/candidate/${result.session_id}?token=${result.candidate_token}`, {
@@ -179,6 +188,28 @@ export default function CandidateNew() {
           <div className="pt-2 border-t border-gray-800/60">
             <label className={labelClass}>Your ask at this employer</label>
             <input className={inputClass} type="number" min="0" value={form.candidate_ask} onChange={update('candidate_ask')} placeholder="185000" required />
+          </div>
+
+          <div className="pt-2 border-t border-gray-800/60">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)} className="accent-emerald-500" />
+              <span className="text-sm font-medium text-gray-200">Enable AI negotiation (optional)</span>
+            </label>
+            <p className="text-xs text-gray-500 mt-1 mb-3">
+              Let a Claude agent negotiate on your behalf once the employer is ready. Your floor is sealed — never shown to the employer, even to their agent.
+            </p>
+            {aiEnabled && (
+              <div className="space-y-3">
+                <div>
+                  <label className={labelClass}>Your walk-away floor (never revealed)</label>
+                  <input className={inputClass} type="number" min="0" value={candidateFloor} onChange={(e) => setCandidateFloor(e.target.value)} placeholder="175000" />
+                </div>
+                <div>
+                  <label className={labelClass}>Priorities (optional)</label>
+                  <input className={inputClass} value={candidatePriorities} onChange={(e) => setCandidatePriorities(e.target.value)} placeholder="base matters more than equity" />
+                </div>
+              </div>
+            )}
           </div>
 
           {error && (

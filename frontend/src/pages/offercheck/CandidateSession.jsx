@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession } from '../../api.js'
+import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic } from '../../api.js'
 
 const POLL_MS = 3000
 
@@ -82,6 +82,71 @@ function AttestationPanel({ sessionId, token, visible }) {
         </>
       ) : (
         <p className="text-xs text-gray-500 italic">{err || 'Loading attestation receipt…'}</p>
+      )}
+    </div>
+  )
+}
+
+function AgenticPanel({ sessionId, token, visible, onComplete }) {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [err, setErr] = useState('')
+
+  if (!visible && !result) return null
+
+  const run = async () => {
+    setRunning(true)
+    setErr('')
+    try {
+      const data = await offercheckStartAgentic(sessionId, token)
+      setResult(data)
+      onComplete?.()
+    } catch (e) {
+      setErr(e.message || 'Agentic negotiation failed')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 p-4 rounded-xl bg-gray-900/40 border border-emerald-800/30">
+      {!result && (
+        <>
+          <p className="text-sm font-medium text-gray-200 mb-1">Let AI agents negotiate</p>
+          <p className="text-xs text-gray-500 mb-3">
+            Both sides have sealed their private numbers. Two Claude agents will negotiate from here —
+            your floor never crosses to the employer's agent, only offer amounts and moves do.
+          </p>
+          <button
+            onClick={run}
+            disabled={running}
+            className="w-full px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50"
+          >
+            {running ? 'Agents negotiating…' : 'Let agents negotiate'}
+          </button>
+          {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+        </>
+      )}
+      {result && (
+        <>
+          <p className="text-sm font-semibold text-gray-200 mb-2">
+            {result.state === 'AGREED'
+              ? `Agents agreed at $${result.agreed_price?.toLocaleString()}`
+              : result.state === 'WALKAWAY'
+                ? 'Agents walked away'
+                : 'Agents ran out of rounds'}
+          </p>
+          <div className="space-y-1.5">
+            {result.transcript.map((r) => (
+              <div key={r.round} className="flex items-center justify-between text-xs text-gray-500">
+                <span>Round {r.round} — {r.actor}</span>
+                <span className="font-mono text-gray-400">
+                  {r.move.toUpperCase()}{r.value != null ? ` $${r.value.toLocaleString()}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
@@ -246,6 +311,13 @@ export default function CandidateSession() {
             )}
           </div>
         )}
+
+        <AgenticPanel
+          sessionId={sessionId}
+          token={token}
+          visible={Boolean(view?.agentic_ready && !isTerminal)}
+          onComplete={refresh}
+        />
 
         <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
       </div>
