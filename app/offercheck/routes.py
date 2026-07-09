@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, demo_auth, negotiation, package, parsing, store, verifier
+from app.offercheck import auth, billing, credential, demo_auth, negotiation, package, parsing, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -267,8 +267,11 @@ async def _maybe_notify_package(session: Session) -> None:
 @router.post("/sessions", response_model=CandidateSubmitResponse)
 async def submit_session(
     body: CandidateSubmitRequest,
+    request: Request,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> CandidateSubmitResponse:
+    rate_limit.check_session_create(request)
+
     company = None
     if x_api_key is not None:
         company = _require_company(x_api_key)
@@ -581,6 +584,7 @@ def _authorize_agentic_call(session: Session, party_token: str | None, demo_toke
 async def start_agentic_route(
     session_id: str,
     body: AgenticStartRequest,
+    request: Request,
     x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
     token: str | None = None,
 ) -> AgenticResult:
@@ -594,8 +598,11 @@ async def start_agentic_route(
     Auth: see _authorize_agentic_call — a party token (body.token) OR a
     magic-link demo token (X-Demo-Token header, or ?token= query param for
     shareable URLs) is required. This call also counts against the
-    per-session Claude-call spend cap (demo_auth.SPEND_CAP_PER_SESSION).
+    per-session Claude-call spend cap (demo_auth.SPEND_CAP_PER_SESSION) and
+    the per-IP rate limit (rate_limit.AGENTIC_CALL_LIMIT) — the spend cap
+    alone isn't enough since it resets on a fresh session (see rate_limit.py).
     """
+    rate_limit.check_agentic_call(request)
     session = _get_session_or_404(session_id)
     _authorize_agentic_call(session, body.token, x_demo_token or token)
 
@@ -666,6 +673,7 @@ async def verify_demo_token_route(token: str, session: str) -> VerifyTokenRespon
 async def start_agentic_package_route(
     session_id: str,
     body: AgenticStartRequest,
+    request: Request,
     x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
     token: str | None = None,
 ) -> PackageAgenticResult:
@@ -686,8 +694,9 @@ async def start_agentic_package_route(
 
     Auth: same magic-link gate as /start-agentic — a party token OR a demo
     token, either is sufficient (see _authorize_agentic_call). Also counts
-    against the same per-session Claude-call spend cap.
+    against the same per-session Claude-call spend cap and per-IP rate limit.
     """
+    rate_limit.check_agentic_call(request)
     session = _get_session_or_404(session_id)
     _authorize_agentic_call(session, body.token, x_demo_token or token)
 

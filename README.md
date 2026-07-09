@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-246 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
+256 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
 
 > Three pre-existing `tests/test_e2e.py` failures (core DealProof, unrelated to any vertical) reproduce
 > in isolation with zero Offer Check code involved — not introduced by this work, not fixed by it.
@@ -265,6 +265,7 @@ tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company 
 tests/test_offercheck_agentic.py 13 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 34 tests — vertical/hr-offer-check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, HTTP e2e
+tests/test_offercheck_rate_limit.py 10 tests — vertical/hr-offer-check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1131,6 +1132,8 @@ Dealproof/
 | OC-13 | Magic-link auth — gates every Claude-calling endpoint (party token OR demo token), single-use tokens, 15-call spend cap, startup fail-fast on missing `OFFERCHECK_SECRET_KEY` | ✅ Complete |
 | OC-14 | Tests — `tests/test_offercheck_demo_auth.py` (23 tests) | ✅ Complete |
 | OC-15 | Tests — `tests/test_offercheck_package.py` (34 tests) | ✅ Complete |
+| OC-16 | Per-IP rate limiting on session creation + both agentic endpoints — closes the "self-issued token" cost-drain gap found during Phase 2C deploy prep | ✅ Complete |
+| OC-17 | Tests — `tests/test_offercheck_rate_limit.py` (10 tests) | ✅ Complete |
 | OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
 
 > **Two build-spec documents, two numbering schemes:** `build_spec_offer_check.md`'s Phase 1/2/3
@@ -1402,6 +1405,32 @@ Frontend: the same "Enable AI negotiation" checkbox on both the candidate form a
 form gets a nested "Negotiate the full package" sub-option revealing the package term inputs; the
 result renders as a table (term × round) with changed cells highlighted, plus a running total-comp row
 — satisfying the spec's "show per-term changes round-over-round" requirement directly.
+
+### Per-IP rate limiting (`app/offercheck/rate_limit.py`)
+
+Found while prepping the Phase 2C Phala deploy, not hypothetical: `POST /sessions` is intentionally
+open, no login, per the original Phase 1 spec — but its response hands back **both**
+`candidate_token` and `employer_token`. A script can, with zero credential: create a session, seal an
+employer band with the token it just received, then call `start-agentic` with the candidate token —
+fully self-authorized. The magic-link gate (`demo_auth.py`) only checks "does this caller hold a
+valid token for *this* session," which a self-issued token trivially satisfies. The 15-call spend cap
+is per-session, so a fresh session resets it every time.
+
+Fix: in-memory, per-IP, fixed-window counters — `SESSION_CREATE_LIMIT = 10`/hour on `POST /sessions`,
+`AGENTIC_CALL_LIMIT = 5`/hour on both `start-agentic` and `start-agentic-package`, checked before
+anything else in the handler runs (before auth, even — a request that will 401 anyway still counts
+against the budget, since the check itself is what's expensive to skip). Client IP prefers
+`X-Forwarded-For`'s first hop (for when Phala's ingress sits in front of the container as a reverse
+proxy) over the direct socket peer — **worth confirming after the first real deploy** that Phala
+actually sets that header, otherwise every request appears to come from the proxy's own IP and the
+limiter becomes effectively global rather than per-client.
+
+Limits are hardcoded, not env-var-driven, so this fix needed a rebuilt image but no new Phala
+dashboard entries. This does not replace setting a hard budget/spend limit on the Anthropic API key
+itself in the Anthropic console — that backstop holds regardless of any bug here and is outside what
+application code can guarantee.
+
+Verified live: 10 rapid `POST /sessions` calls succeed, the 11th returns 429.
 
 ---
 

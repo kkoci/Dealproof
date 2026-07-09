@@ -160,6 +160,7 @@ app/offercheck/package.py     Phase 2B: OfferPackage math (total_comp_value, har
 app/offercheck/agents/        candidate_agent.py, employer_agent.py (mirror app/agents/buyer.py, seller.py) + mediator.py (mirrors app/agents/negotiation.py);
                                package_candidate_agent.py, package_employer_agent.py, package_mediator.py (Phase 2B counterparts, package-shaped I/O)
 app/offercheck/demo_auth.py   Magic-link auth — stateless HMAC tokens, single-use consumption, per-session spend cap, startup fail-fast
+app/offercheck/rate_limit.py  Per-IP hourly rate limits — session creation + both agentic endpoints, hardcoded limits, no new env vars
 app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
                                /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic,
                                /sessions/{id}/start-agentic-package, /auth/demo-link; GET /sessions/{id}, /attest, /dcap-verify, /credential,
@@ -198,7 +199,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (246 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (256 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -217,6 +218,7 @@ tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, bill
 tests/test_offercheck_agentic.py 13  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 34  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, HTTP e2e
+tests/test_offercheck_rate_limit.py 10  Offer Check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 ```
 
 **Resilience guarantees:**
@@ -261,6 +263,8 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P7 | Agentic Phase 2C — real Phala Cloud TDX deployment for the agent loop (currently: simulation-mode reasoning, same as the rest of this vertical) | 🔜 Pending |
 | OC-P8 | Magic-link auth — gates every Claude-calling endpoint, single-use tokens, spend cap, startup fail-fast | ✅ Complete |
 | OC-P9 | Tests — `tests/test_offercheck_package.py` (34 tests) | ✅ Complete |
+| OC-P10 | Per-IP rate limiting on session creation + both agentic endpoints — closes the self-issued-token cost-drain gap found during Phase 2C deploy prep | ✅ Complete |
+| OC-P11 | Tests — `tests/test_offercheck_rate_limit.py` (10 tests) | ✅ Complete |
 
 ---
 
@@ -756,6 +760,44 @@ docstring actually generalizes cleanly to a second endpoint.
 `clamp_employer_package()` trims `signing_bonus` first to fit `total_comp_budget` — if base+equity
 alone exceed budget, the clamped package can still be over. Documented in the function's own docstring
 as a known limitation, not silently glossed over.
+
+---
+
+## Rate Limiting (`app/offercheck/rate_limit.py`)
+
+Found while prepping the Phase 2C Phala deploy, not hypothetical: `POST /sessions` is intentionally
+open, no login, per the original Phase 1 spec — but its response hands back **both**
+`candidate_token` and `employer_token`. A script can, with zero credential: create a session, seal an
+employer band with the token it just received, then call `start-agentic` with the candidate token —
+fully self-authorized. Neither of the two existing gates stops this: `demo_auth._authorize_agentic_call()`
+only checks "does this caller hold a valid token for *this* session," which a self-issued token
+trivially satisfies; `demo_auth.record_and_check_spend()`'s 15-call cap is per-session, so a fresh
+session resets it every time. Unbounded session creation therefore means unbounded real Claude spend.
+
+**Fix:** in-memory, per-IP, fixed-window (1 hour) counters — `SESSION_CREATE_LIMIT = 10` on
+`POST /sessions`, `AGENTIC_CALL_LIMIT = 5` on both `start-agentic` and `start-agentic-package`.
+Both checks run as the first line of their handler, before `_get_session_or_404` and before auth —
+a request that will fail auth anyway should still count against the IP's budget, since a scanner
+probing with garbage tokens is exactly the traffic this is meant to stop.
+
+`client_ip()` prefers `X-Forwarded-For`'s first hop over the direct socket peer, for when Phala's
+ingress sits in front of the container as a reverse proxy. **Worth confirming after the first real
+deploy** that Phala actually sets that header — if it doesn't, every request appears to come from
+the proxy's own IP and the limiter degrades to a global limit rather than a per-client one.
+
+Limits are hardcoded (`SESSION_CREATE_LIMIT`, `AGENTIC_CALL_LIMIT` module constants), not
+env-var-driven — deliberately, so this fix required a rebuilt image but zero new Phala dashboard
+entries. State is in-memory and ephemeral (lost on restart), same precedent as `demo_auth`'s
+consumed-token set and spend-cap counters, and the session store itself.
+
+**This is a code-level backstop, not a replacement for a hard budget limit on the Anthropic API
+key itself in the Anthropic console** — that limit holds regardless of any bug in this file and is
+outside what application code can guarantee. Set both.
+
+Every existing offercheck test file's `autouse=True` state-reset fixture now also calls
+`rate_limit.reset()` — without it, tests within the same pytest process share rate-limit buckets
+(TestClient requests all appear to originate from the same host) and unrelated tests start failing
+with 429s once the shared budget is exhausted.
 
 ---
 
