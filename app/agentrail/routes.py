@@ -1,10 +1,11 @@
 """
-Agent Rail API — Phase 2 deal lifecycle + Phase 3 escrow/credential.
+Agent Rail API — Phase 2 deal lifecycle + Phase 3 escrow/credential/auth.
 
-POST /api/agentrail/deals               create a deal room, kick off negotiation in the background
-GET  /api/agentrail/deals/{id}          poll status — transcript fills in live as rounds complete
-GET  /api/agentrail/deals/{id}/attest   DCAP attestation receipt for an agreed deal
-GET  /api/agentrail/deals/{id}/credential   πCreds conduct credential (Phase 3, agreed deals only)
+POST /api/agentrail/deals               create a deal room, kick off negotiation in the background — GATED (see below)
+GET  /api/agentrail/deals/{id}          poll status — transcript fills in live as rounds complete — not gated, read-only
+GET  /api/agentrail/deals/{id}/attest   DCAP attestation receipt for an agreed deal — not gated, read-only
+GET  /api/agentrail/deals/{id}/credential   πCreds conduct credential (Phase 3, agreed deals only) — not gated, read-only
+POST /api/agentrail/auth/demo-link      mint a magic-link demo token (X-Internal-Key gated)
 
 Negotiation runs as a background asyncio task so the create call returns
 immediately (deal_id, status="negotiating") and the frontend polls GET for
@@ -17,14 +18,31 @@ credential are both computed inside _run_negotiation() — the only place that
 still has buyer.budget_ceiling/supplier.floor_price_* in scope, since the
 store never persists them (see app/agentrail/store.py, app/agentrail/credential.py).
 Both are non-fatal, same resilience pattern as DealProof core's Step 1b/3b.
+
+Auth (Phase 3, added at explicit user request — see app/offercheck/demo_auth.py's
+module docstring for the non-negotiable rule this follows: every endpoint that
+triggers a Claude API call must require a valid token, no exceptions):
+POST /deals is the only endpoint that calls Claude, so it's the only one gated.
+_authorize_deal_creation() is Agent Rail's own thin wrapper around Offer Check's
+demo_auth primitives (verify_token/is_consumed/consume) — it is NOT a copy of
+Offer Check's _authorize_agentic_call() (which lives in app/offercheck/routes.py,
+not demo_auth.py, and is hard-coupled to Offer Check's Session/party-token model).
+Agent Rail has no principal/party-token concept — OAuth3 delegation was explicitly
+deferred in Phase 3 (see the "Still not built" note in CLAUDE.md) — so the only
+valid proof of authorization here is a demo/magic-link token. Unlike Offer Check's
+per-session-scoped token, Agent Rail's token isn't scoped to a specific deal_id:
+POST /deals is what creates the deal the token would be scoped to, so there's
+nothing to scope to yet. It's signed against the fixed AGENTRAIL_DEMO_SUBJECT
+instead — single-use still means "one deal-creation call per link."
 """
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
-from app.agentrail import store
+from app.agentrail import rate_limit, store
 from app.agentrail.api_schemas import (
     AttestResponse,
     ConductCheckOut,
@@ -32,6 +50,8 @@ from app.agentrail.api_schemas import (
     DealCreateRequest,
     DealCreateResponse,
     DealStatusResponse,
+    DemoLinkRequest,
+    DemoLinkResponse,
     ProcurementRoundOut,
 )
 from app.agentrail.buyer_agent import BuyerAgent
@@ -40,14 +60,46 @@ from app.agentrail.escrow import EscrowNotConfigured, deposit_escrow, release_es
 from app.agentrail.mediator import run_procurement_negotiation
 from app.agentrail.supplier_agent import SupplierAgent
 from app.agentrail.verify_quote import verify_quote
+from app.config import settings
+from app.offercheck import demo_auth
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agentrail", tags=["agent-rail"])
 
+AGENTRAIL_DEMO_SUBJECT = "agentrail-demo"  # see module docstring — not deal-scoped
+
+
+def _authorize_deal_creation(demo_token: str | None) -> None:
+    """SECURITY RULE: POST /deals calls Claude — it must never run for an
+    unauthenticated caller. A valid, unexpired, unconsumed magic-link token
+    (X-Demo-Token header or ?token= query param) is the only accepted proof;
+    see module docstring for why there's no party-token fallback here."""
+    if not demo_token:
+        raise HTTPException(status_code=401, detail="a valid demo token is required")
+    try:
+        demo_auth.verify_token(AGENTRAIL_DEMO_SUBJECT, demo_token)
+    except demo_auth.InvalidToken as exc:
+        raise HTTPException(status_code=401, detail=f"invalid demo token: {exc}")
+    if demo_auth.is_consumed(demo_token):
+        raise HTTPException(status_code=401, detail="demo token already used")
+    demo_auth.consume(demo_token)
+
 
 @router.post("/deals", response_model=DealCreateResponse, status_code=201)
-async def create_deal(payload: DealCreateRequest) -> DealCreateResponse:
+async def create_deal(
+    payload: DealCreateRequest,
+    request: Request,
+    x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
+    query_token: str | None = Query(default=None, alias="token"),
+) -> DealCreateResponse:
+    """Auth: see _authorize_deal_creation — a magic-link demo token is
+    required (X-Demo-Token header, or ?token= for shareable URLs). Also
+    counts against the per-IP rate limit (rate_limit.DEAL_CREATE_LIMIT) as a
+    backstop independent of the token check — see app/agentrail/rate_limit.py."""
+    rate_limit.check_deal_create(request)
+    _authorize_deal_creation(x_demo_token or query_token)
+
     deal_id = str(uuid.uuid4())
     store.create(deal_id, max_rounds=payload.max_rounds)
 
@@ -84,6 +136,26 @@ async def create_deal(payload: DealCreateRequest) -> DealCreateResponse:
     asyncio.create_task(_run_negotiation(deal_id, buyer, supplier, payload.max_rounds))
 
     return DealCreateResponse(deal_id=deal_id, status=store.STATUS_NEGOTIATING)
+
+
+@router.post("/auth/demo-link", response_model=DemoLinkResponse)
+async def create_demo_link_route(
+    body: DemoLinkRequest,
+    x_internal_key: str | None = Header(default=None, alias="X-Internal-Key"),
+) -> DemoLinkResponse:
+    """Mints a magic-link token for sharing the Agent Rail demo with someone
+    who isn't otherwise authorized (a prospect/spectator). Gated by the same
+    OFFERCHECK_INTERNAL_KEY Offer Check uses — only the operator can mint
+    these. Reuses demo_auth.generate_token() directly; see module docstring
+    for why the token is scoped to AGENTRAIL_DEMO_SUBJECT, not a deal_id."""
+    if not settings.offercheck_internal_key or x_internal_key != settings.offercheck_internal_key:
+        raise HTTPException(status_code=401, detail="X-Internal-Key required")
+
+    token, expires_at = demo_auth.generate_token(AGENTRAIL_DEMO_SUBJECT, body.expires_hours)
+    expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+
+    demo_url = f"{settings.offercheck_demo_base_url}/agent-rail?token={token}"
+    return DemoLinkResponse(demo_url=demo_url, token=token, expires_at=expires_at_iso)
 
 
 @router.get("/deals/{deal_id}", response_model=DealStatusResponse)
@@ -158,8 +230,13 @@ async def _run_negotiation(deal_id: str, buyer: BuyerAgent, supplier: SupplierAg
         store.append_round(deal_id, round_)
 
     try:
-        result = await run_procurement_negotiation(buyer, supplier, max_rounds=max_rounds, on_round=on_round)
+        result = await run_procurement_negotiation(
+            buyer, supplier, max_rounds=max_rounds, on_round=on_round, deal_id=deal_id,
+        )
     except Exception as exc:
+        # Covers demo_auth.SpendCapExceeded too — it's a plain Exception subclass,
+        # so it lands here and the deal ends up "failed" with a clear message,
+        # same as any other negotiation error (e.g. tappd unreachable).
         logger.exception(f"Deal {deal_id}: negotiation failed")
         store.mark_failed(deal_id, str(exc))
         return

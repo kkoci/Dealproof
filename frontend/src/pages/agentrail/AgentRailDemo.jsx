@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { createAgentRailDeal, getAgentRailAttestation, getAgentRailDeal } from '../../api.js'
 import StatusBadge from '../../components/StatusBadge.jsx'
 
@@ -122,6 +123,11 @@ function AttestationReceipt({ attest }) {
 }
 
 export default function AgentRailDemo() {
+  const [searchParams] = useSearchParams()
+  // Read once from the URL and keep in component memory only — never localStorage,
+  // per the magic-link design: these links are short-lived and single-use.
+  const [demoToken] = useState(() => searchParams.get('token') || '')
+
   const [stage, setStage] = useState('setup') // setup | negotiating | result
   const [buyer, setBuyer] = useState(DEFAULT_BUYER)
   const [supplier, setSupplier] = useState(DEFAULT_SUPPLIER)
@@ -162,7 +168,7 @@ export default function AgentRailDemo() {
         },
         max_rounds: Number(maxRounds),
       }
-      const res = await createAgentRailDeal(body)
+      const res = await createAgentRailDeal(body, demoToken)
       setDealId(res.deal_id)
       setDeal(null)
       setAttest(null)
@@ -240,7 +246,17 @@ export default function AgentRailDemo() {
           </p>
         </div>
 
-        {stage === 'setup' && (
+        {stage === 'setup' && !demoToken && (
+          <div className="px-5 py-5 rounded-xl bg-gray-900/40 border border-gray-800/60">
+            <p className="text-sm font-semibold text-gray-200 mb-1">Demo access required</p>
+            <p className="text-sm text-gray-500">
+              This demo needs a magic link. Request one from the DealProof team, or use the
+              link you were sent — it should end in <code className="text-gray-400">?token=...</code>.
+            </p>
+          </div>
+        )}
+
+        {stage === 'setup' && demoToken && (
           <form onSubmit={handleStart} className="space-y-6">
             <div className="grid md:grid-cols-2 gap-5">
               <SealedPanel title="Buyer" accent={BUYER_ACCENT} icon={LOCK_ICON}>

@@ -2,12 +2,17 @@ const BASE_URL = import.meta.env.VITE_API_URL || ''
 
 async function request(path, options = {}) {
   const url = `${BASE_URL}${path}`
+  // `...options` must come first — if it were spread after `headers`, a
+  // caller-supplied options.headers (e.g. createAgentRailDeal's X-Demo-Token)
+  // would replace this whole headers object outright (object spread: later
+  // keys win), silently dropping Content-Type and making fetch send the JSON
+  // body as text/plain, which the backend can't parse (422).
   const res = await fetch(url, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,
     },
-    ...options,
   })
 
   if (!res.ok) {
@@ -110,13 +115,19 @@ export function getDealVerification(id) {
 // ---------------------------------------------------------------------------
 
 /**
- * POST /api/agentrail/deals — sealed buyer + supplier parameters, starts negotiation
+ * POST /api/agentrail/deals — sealed buyer + supplier parameters, starts negotiation.
+ * Gated (Phase 3): requires a valid magic-link demo token, sent as X-Demo-Token —
+ * this is the only Agent Rail endpoint that calls Claude, so it's the only one gated.
  * @param {{buyer: object, supplier: object, max_rounds?: number}} body
+ * @param {string} demoToken
  * @returns {Promise<{deal_id: string, status: string}>}
  */
-export function createAgentRailDeal(body) {
+export function createAgentRailDeal(body, demoToken) {
+  const headers = {}
+  if (demoToken) headers['X-Demo-Token'] = demoToken
   return request('/api/agentrail/deals', {
     method: 'POST',
+    headers,
     body: JSON.stringify(body),
   })
 }

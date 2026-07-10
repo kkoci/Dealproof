@@ -21,11 +21,21 @@ from typing import Awaitable, Callable
 from app.agentrail.buyer_agent import BuyerAgent
 from app.agentrail.supplier_agent import SupplierAgent
 from app.agentrail.schemas import ProcurementRound, ProcurementResult
+from app.offercheck import demo_auth
 from app.tee.attestation import sign_result
 
 logger = logging.getLogger(__name__)
 
 OnRoundCallback = Callable[[ProcurementRound], Awaitable[None]]
+
+# Max Claude calls per deal — a backstop against runaway spend, independent
+# of how the caller authenticated (see app/offercheck/demo_auth.py's own
+# docstring for the same rationale). Under this mediator's round shape (up to
+# one buyer call + one supplier call per round), 10 covers one full 5-round
+# negotiation, not two — flagged here rather than silently rounding the
+# number to fit a "2 full negotiations" framing that doesn't match this
+# loop's call count.
+AGENTRAIL_SPEND_CAP = 10
 
 
 def _normalise_action(response: dict, valid: set[str], default: str) -> dict:
@@ -54,12 +64,22 @@ async def run_procurement_negotiation(
     supplier: SupplierAgent,
     max_rounds: int = 5,
     on_round: OnRoundCallback | None = None,
+    deal_id: str | None = None,
 ) -> ProcurementResult:
     """
     `on_round`, when provided, is awaited with each ProcurementRound right after
     it's appended to the transcript — Phase 2's API layer uses this to update
     the in-memory deal store live, so GET /api/agentrail/deals/{id} reflects
     rounds as they complete rather than only once the negotiation finishes.
+
+    `deal_id`, when provided, is checked against a per-deal spend cap
+    (demo_auth.record_and_check_spend — reused from Offer Check, given an
+    optional `cap` override here so Agent Rail's own AGENTRAIL_SPEND_CAP
+    applies instead of Offer Check's SPEND_CAP_PER_SESSION, see
+    app/offercheck/demo_auth.py) before every actual Claude call, raising
+    demo_auth.SpendCapExceeded once exceeded. Optional and defaults to None so
+    Phase 1's demo_agentrail.py (no deal_id, no HTTP auth surface to protect)
+    keeps working unchanged and ungated, same as before this endpoint had auth.
     """
     history: list[dict] = []
     transcript: list[ProcurementRound] = []
@@ -67,6 +87,8 @@ async def run_procurement_negotiation(
     supplier_action: dict = {}
 
     for round_num in range(1, max_rounds + 1):
+        if deal_id is not None:
+            demo_auth.record_and_check_spend(deal_id, cap=AGENTRAIL_SPEND_CAP)
         if round_num == 1:
             logger.info("Round 1: buyer opening proposal")
             buyer_action = await buyer.open_negotiation()
@@ -96,6 +118,8 @@ async def run_procurement_negotiation(
             return await _close(supplier_action, transcript)
 
         logger.info(f"Round {round_num}: supplier responding")
+        if deal_id is not None:
+            demo_auth.record_and_check_spend(deal_id, cap=AGENTRAIL_SPEND_CAP)
         supplier_action = await supplier.respond(buyer_action, history)
         supplier_action = _normalise_action(
             supplier_action, valid={"accept", "counter", "reject"}, default="counter"

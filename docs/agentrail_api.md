@@ -7,10 +7,19 @@ covered by a hardware-signed DCAP attestation.
 
 Base URL: `{DEALPROOF_URL}/api/agentrail` (e.g. `http://localhost:8000/api/agentrail` locally).
 
-No authentication is required as of Phase 3 — OAuth3/UCAN principal
-delegation is explicitly deferred (see `build_spec_agent_rail.md` § Decision 3
-and `CLAUDE.md` § Agent Rail). Do not point this at a deployment handling real
-funds without adding auth first.
+`POST /deals` requires a magic-link token — send it as `X-Demo-Token: <token>`
+or `?token=<token>`. Mint one via `POST /auth/demo-link` (operator-only,
+`X-Internal-Key` gated). Tokens are single-use and expire (24h default).
+GET endpoints (poll, attest, credential) are open — they never call Claude.
+This is deliberately not a principal/delegation system — OAuth3/UCAN is still
+deferred (see `build_spec_agent_rail.md` § Decision 3 and `CLAUDE.md` §
+Agent Rail). Do not point this at a deployment handling real funds without
+building that out first.
+
+```
+POST /auth/demo-link   { expires_hours?: number }  (X-Internal-Key required)
+                        → { demo_url, token, expires_at }
+```
 
 ---
 
@@ -212,7 +221,8 @@ pass, not part of the automatic deposit → negotiate → release flow.
 - **OAuth3 / UCAN principal registration and agent delegation.** Deferred
   pending a protocol design that doesn't exist in this repo yet — see
   `build_spec_agent_rail.md` § Decision 3. There is no `POST /principal/register`
-  or `POST /agent/delegate` endpoint. Anyone who can reach this API can create
-  a deal; do not expose this publicly without adding auth first.
+  or `POST /agent/delegate` endpoint. The magic-link token above gates deal
+  *creation*, but there's no notion of a registered principal or a scoped
+  agent capability — anyone holding a valid link can create one deal.
 - Persistent storage — the deal store is in-memory and lost on restart.
 - A deployed escrow contract.

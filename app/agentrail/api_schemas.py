@@ -108,3 +108,19 @@ class CredentialResponse(BaseModel):
     genuine_negotiation: bool
     final_price: float
     picreds_hash: str
+
+
+class DemoLinkRequest(BaseModel):
+    """POST /api/agentrail/auth/demo-link. Unlike Offer Check's equivalent
+    (session_id-scoped — the session already exists when the link is minted),
+    Agent Rail's demo token isn't scoped to a specific deal: a POST /deals
+    call creates the deal the token authorizes, so there's nothing to scope
+    to yet. The token instead authorizes one deal-creation call, full stop —
+    see app/agentrail/routes.py's AGENTRAIL_DEMO_SUBJECT."""
+    expires_hours: float = Field(default=24.0, gt=0, le=168, description="Max 7 days")
+
+
+class DemoLinkResponse(BaseModel):
+    demo_url: str
+    token: str
+    expires_at: str  # ISO-8601 UTC

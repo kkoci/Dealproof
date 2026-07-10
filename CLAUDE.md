@@ -577,10 +577,34 @@ confirmed the warning-log-and-continue path with real Claude calls).
 HTTP endpoint — intentionally cut to keep the wired flow to deposit→negotiate→release/refund.
 Add them only if a real dispute-resolution flow is actually being built, not preemptively.
 
+### Phase 3.5 — magic-link auth (complete)
+
+`POST /api/agentrail/deals` is gated — it's the only endpoint that calls Claude. GET
+endpoints (poll, attest, credential) stay open, read-only, no Claude call. Reuses
+`app/offercheck/demo_auth.py` (ported onto this branch verbatim from `vertical/hr-offer-check`,
+which is otherwise untouched) directly — not a new auth system. `_authorize_deal_creation()`
+in `app/agentrail/routes.py` is Agent Rail's own thin wrapper, not a copy of Offer Check's
+`_authorize_agentic_call()` (which lives in offercheck's `routes.py`, not `demo_auth.py`, and
+is hard-coupled to its `Session`/party-token model that Agent Rail has no equivalent of — no
+principal/delegation system exists, see above). Token is signed against a fixed
+`AGENTRAIL_DEMO_SUBJECT`, not a deal_id, since `POST /deals` is what creates the deal a token
+would otherwise be scoped to. `demo_auth.record_and_check_spend()` gained an optional `cap`
+parameter (backward compatible — Offer Check's own call sites are unaffected) so Agent Rail's
+`AGENTRAIL_SPEND_CAP = 10` applies instead of Offer Check's `SPEND_CAP_PER_SESSION = 15`.
+Rate limiting is `app/agentrail/rate_limit.py` — the same hand-rolled in-memory pattern as
+`app/offercheck/rate_limit.py` (there is no slowapi anywhere in this repo), with its own
+`DEAL_CREATE_LIMIT = 3`/IP/hour rather than importing offercheck's private limiter internals.
+
+Bringing `demo_auth.py` onto this branch means `app/main.py`'s lifespan now calls
+`demo_auth.require_secret_key_configured()` — the whole app refuses to start without
+`OFFERCHECK_SECRET_KEY` set, not just Agent Rail. Already set in this repo's local `.env`
+(left over from prior hr-offer-check work), so this didn't break local dev here — but it's a
+global blast-radius change worth knowing about, not scoped to Agent Rail alone.
+
 ### Still not built (do not pre-build without being asked)
 OAuth3/UCAN principal registration and agent delegation — no protocol design exists anywhere
-in this repo; inventing one contradicts explicit spec guidance to wait for it. No auth of any
-kind currently gates these endpoints — anyone who can reach the API can create a deal.
+in this repo; inventing one contradicts explicit spec guidance to wait for it. The magic-link
+auth above only gates deal *creation*; it is not a principal/delegation system.
 SQLite persistence for the deal store (still in-memory, Phase 2 scope). Live escrow deployment
 to Sepolia or any other network.
 

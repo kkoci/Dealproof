@@ -1112,6 +1112,7 @@ Dealproof/
 | AR-1 | Phase 1 — CLI procurement demo: sealed buyer/supplier agents, mediator loop, DCAP attestation, escrow stub | ✅ Complete |
 | AR-2 | Phase 2 — Shareable web demo: `POST/GET /api/agentrail/deals`, live-polling React page, no login | ✅ Complete |
 | AR-3 | Phase 3 — Full escrow contract (local only) + πCreds conduct credential | 🔄 Partial — OAuth3 principal delegation + live deployment intentionally deferred |
+| AR-3.5 | Magic-link auth on `POST /deals` — reuses Offer Check's `demo_auth.py` + per-IP rate limit + spend cap | ✅ Complete |
 
 ---
 

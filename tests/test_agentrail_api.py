@@ -1,5 +1,7 @@
 """
-Agent Rail — Phase 2 API tests.
+Agent Rail — Phase 2 API tests (+ Phase 3 auth, tests/test_agentrail_auth.py has the
+dedicated auth suite; this file's POST /deals calls just need a valid token to reach
+the behavior under test).
 
 Negotiation runs as a background asyncio.create_task (see app/agentrail/routes.py),
 so these tests use TestClient as a context manager (`with TestClient(app) as client`)
@@ -18,9 +20,31 @@ import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.agentrail import rate_limit
+from app.agentrail.routes import AGENTRAIL_DEMO_SUBJECT
+from app.offercheck import demo_auth
+
 VALID_SIM_QUOTE = "sim_quote:" + hashlib.sha256(b"agentrail-api-test").hexdigest()
+
+
+@pytest.fixture(autouse=True)
+def _clear_auth_state():
+    demo_auth.reset()
+    rate_limit.reset()
+    yield
+    demo_auth.reset()
+    rate_limit.reset()
+
+
+def _auth_headers() -> dict:
+    """Mints a fresh, valid demo token — every test in this file needs one to
+    get past POST /deals' auth gate; the gate itself is tested in
+    tests/test_agentrail_auth.py."""
+    token, _ = demo_auth.generate_token(AGENTRAIL_DEMO_SUBJECT, expires_hours=1)
+    return {"X-Demo-Token": token}
 
 
 def _mock_response(text: str):
@@ -91,7 +115,7 @@ def test_create_deal_returns_negotiating_immediately():
     with _mocked_anthropic(buyer_responses, supplier_responses), \
          patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock):
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD, headers=_auth_headers())
             assert r.status_code == 201
             body = r.json()
             assert body["status"] == "negotiating"
@@ -118,7 +142,7 @@ def test_full_negotiation_reaches_agreement_and_attests():
         mock_sign.return_value = VALID_SIM_QUOTE
 
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD, headers=_auth_headers())
             deal_id = r.json()["deal_id"]
 
             body = _poll_until_done(client, deal_id)
@@ -154,7 +178,7 @@ def test_negotiation_ends_in_no_deal_on_reject():
     with _mocked_anthropic(buyer_responses, supplier_responses), \
          patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock):
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD, headers=_auth_headers())
             deal_id = r.json()["deal_id"]
 
             body = _poll_until_done(client, deal_id)
@@ -196,7 +220,7 @@ def test_credential_endpoint_returns_conduct_credential_after_agreement():
         mock_sign.return_value = VALID_SIM_QUOTE
 
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD, headers=_auth_headers())
             deal_id = r.json()["deal_id"]
             status_body = _poll_until_done(client, deal_id)
             assert status_body["status"] == "agreed"
@@ -237,7 +261,7 @@ def test_credential_endpoint_409_before_agreed():
     with _mocked_anthropic(buyer_responses, supplier_responses), \
          patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock):
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD, headers=_auth_headers())
             deal_id = r.json()["deal_id"]
             _poll_until_done(client, deal_id)
 
@@ -274,7 +298,7 @@ def test_escrow_deposit_and_release_wired_through_deal_lifecycle():
         mock_release.return_value = "0xrelease456"
 
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=payload)
+            r = client.post("/api/agentrail/deals", json=payload, headers=_auth_headers())
             deal_id = r.json()["deal_id"]
             assert mock_deposit.called
 
@@ -305,7 +329,7 @@ def test_escrow_not_configured_is_non_fatal():
         mock_deposit.side_effect = EscrowNotConfigured("AGENTRAIL_CONTRACT_ADDRESS not set")
 
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=payload)
+            r = client.post("/api/agentrail/deals", json=payload, headers=_auth_headers())
             assert r.status_code == 201
             deal_id = r.json()["deal_id"]
 
@@ -330,7 +354,7 @@ def test_negotiation_failure_marks_deal_failed_not_500():
         mock_sign.side_effect = RuntimeError("tappd unreachable")
 
         with TestClient(app) as client:
-            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD, headers=_auth_headers())
             assert r.status_code == 201
             deal_id = r.json()["deal_id"]
 
