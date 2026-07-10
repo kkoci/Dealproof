@@ -81,6 +81,14 @@ async def run_agentic_negotiation(session: Session, candidate_agent: CandidateAg
     — amounts included (this mode's contract), reasoning is not.
     """
     session.agentic_mode = True
+    if session.agentic_mode_started_round is None:
+        # A session can pick up agentic mode after some human-driven rounds already happened
+        # (see routes.py's enable-agentic PATCH endpoints — sealed inputs can be added any time
+        # before terminal, not just at creation). Only rounds from here forward are safe to
+        # expose a value for in SessionView — a round decided by a human before this point was
+        # made under the human-flow's gap%-only privacy contract and must stay that way even
+        # after agentic mode later starts. round_number + 1 is the first round this call will add.
+        session.agentic_mode_started_round = session.round_number + 1
 
     candidate_history: list[dict] = []
     employer_history: list[dict] = []

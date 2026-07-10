@@ -53,6 +53,7 @@ class Session:
     employer_authority_limit: float | None = None
     employer_priorities: str | None = None
     agentic_mode: bool = False
+    agentic_mode_started_round: int | None = None  # first round_number decided by an agent — see mediator.py
     # Phase 2B full compensation package negotiation — sealed, never exposed via any response schema.
     # Parallel state, not reused scalar fields — see app.offercheck.package's module docstring for why.
     candidate_package_ask: dict | None = None

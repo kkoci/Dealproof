@@ -164,7 +164,7 @@ app/offercheck/rate_limit.py  Per-IP hourly rate limits — session creation + b
 app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
                                /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic,
                                /sessions/{id}/start-agentic-package, /auth/demo-link; GET /sessions/{id}, /attest, /dcap-verify, /credential,
-                               /company/sessions, /auth/verify
+                               /company/sessions, /auth/verify; PATCH /sessions/{id}/candidate/enable-agentic, /sessions/{id}/employer/enable-agentic
 frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor + package terms), CandidateSession, EmployerSession
                                  (+ attestation/credential panel + agentic panel + package results table), Demo (magic-link spectator view),
                                  CompanyRegister, Dashboard
@@ -199,7 +199,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (256 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (268 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -215,9 +215,9 @@ tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + inge
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
-tests/test_offercheck_agentic.py 13  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, HTTP e2e
+tests/test_offercheck_agentic.py 24  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
-tests/test_offercheck_package.py 34  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, HTTP e2e
+tests/test_offercheck_package.py 35  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, HTTP e2e
 tests/test_offercheck_rate_limit.py 10  Offer Check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 ```
 
@@ -265,6 +265,8 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P9 | Tests — `tests/test_offercheck_package.py` (34 tests) | ✅ Complete |
 | OC-P10 | Per-IP rate limiting on session creation + both agentic endpoints — closes the self-issued-token cost-drain gap found during Phase 2C deploy prep | ✅ Complete |
 | OC-P11 | Tests — `tests/test_offercheck_rate_limit.py` (10 tests) | ✅ Complete |
+| OC-P12 | Live negotiation transcript (agentic-mode round values exposed to both parties); post-creation "enable AI negotiation" opt-in (PATCH endpoints); package-mode `SessionView` sync bug fix | ✅ Complete |
+| OC-P13 | Tests — 11 new cases in `tests/test_offercheck_agentic.py`, 1 new case in `tests/test_offercheck_package.py` | ✅ Complete |
 
 ---
 
@@ -798,6 +800,65 @@ Every existing offercheck test file's `autouse=True` state-reset fixture now als
 `rate_limit.reset()` — without it, tests within the same pytest process share rate-limit buckets
 (TestClient requests all appear to originate from the same host) and unrelated tests start failing
 with 429s once the shared budget is exhausted.
+
+---
+
+## Live Transcript, Post-Creation Opt-In, and Package-Mode Sync Fix
+
+Three fixes to the agentic negotiation flow, requested together after live testing on the deployed
+app surfaced real UX/correctness gaps — none were "wrong output" bugs, but all three left a party
+watching a live negotiation with a confusing or stuck-looking screen.
+
+**Round-value exposure boundary (`Session.agentic_mode_started_round`).** `SessionView.history`
+(`RoundSummary`) used to strip `value` unconditionally, even for agentic-mode sessions, so a party
+polling never saw the actual offer amounts the AI agents exchanged — even though those amounts already
+legitimately cross the agent boundary per `offercheck_phase2_spec.md`'s own contract. Fixed by adding
+`RoundSummary.value: float | None`. The exposure condition is deliberately more precise than just
+`session.agentic_mode`: since a session can now pick up agentic mode *after* some human-driven rounds
+already happened (via the opt-in fix below), a round a human made under the base flow's non-negotiable
+gap%-only privacy contract must not retroactively become visible just because the session later
+switches to AI. `Session.agentic_mode_started_round` (set once in `mediator.py`, at the top of
+`run_agentic_negotiation()`, to `session.round_number + 1` — i.e. the first round number this call
+will actually add) is that boundary; `_view_for()` only exposes `value` for rounds at or after it.
+Package-mode rounds don't need this boundary at all — package negotiation is agentic-only by
+construction (no human package-move endpoint exists anywhere in this vertical), so `PackageRoundDetail`
+/ `SessionView.package_history` expose `package`/`total_comp` unconditionally.
+
+**Post-creation agentic opt-in (`PATCH .../candidate/enable-agentic`, `PATCH .../employer/enable-agentic`).**
+The original design only allowed sealing `candidate_floor`/`employer_authority_limit` at the one-shot
+`POST /sessions` / `POST .../employer/band` moment — no way to opt in afterward. Fixed with two new
+endpoints, callable any time before the session is terminal: single-set (409 if already sealed, same
+"sealed" contract as the original creation-time fields), employer's variant additionally 412s if the
+band isn't set yet (`employer_authority_limit` is meaningless without `band_max` to clamp against —
+same precondition `mediator.build_agents()` already enforces at `start-agentic` time). A new
+`SessionView.my_agentic_sealed: bool` field (viewer-scoped: `candidate_floor is not None` for the
+candidate, `employer_authority_limit is not None` for the employer) lets the frontend show/hide its own
+"Enable AI negotiation" button correctly, including across page reloads. The creation-time checkboxes
+were removed from `CandidateNew.jsx` and `EmployerSession.jsx`'s band form; both session-view pages now
+render an inline opt-in form gated on `!my_agentic_sealed`. **Scope note:** this covers the base scalar
+floor/authority-limit opt-in only — full-package mode (Phase 2B) previously had its own opt-in nested
+inside the same now-removed checkboxes and currently has no UI entry point at all. It's still fully
+functional via the API and covered by tests (`test_offercheck_package.py`), just unreachable from
+either session-view page until a package-mode opt-in modal is built — flagged, not silently dropped.
+
+**Package-mode `SessionView` sync bug — the actual root cause of "employer shows waiting while
+candidate has active buttons."** `apply_package_move()` (`app/offercheck/package.py`) only ever
+mutates `session.package_state`/`package_round_number`, never the scalar `session.state` — by design,
+package negotiation is a parallel state machine (see that module's docstring). But `SessionView` had
+zero package-mode fields before this fix, so a party polling during/after a package AI negotiation saw
+no progress at all: the scalar `state`/`turn`/`round_number` the frontend reads stayed frozen at
+whatever they were before the package run started, even once package negotiation had already reached
+`AGREED`. Fixed by adding `package_state`, `package_round_number`, `package_turn`, `package_history`,
+and `package_agreed_package` to `SessionView` (`routes.py::_view_for`), and updating both
+`CandidateSession.jsx` and `EmployerSession.jsx` to derive `isTerminal`/`myTurn` from the package
+channel instead of the scalar one whenever `package_round_number > 0` — once package mode has actually
+been used, it's the negotiation actually in progress for that session, and the scalar channel should be
+treated as frozen/irrelevant from that point on.
+
+Verified live against a running server (not just mocked `TestClient` tests): submitted a session
+without sealing anything, PATCHed both `enable-agentic` endpoints, confirmed `agentic_ready` flipped
+true with no sealed value ever appearing in any response body; confirmed a human-driven round's `value`
+stays `null` to the other party even after that same session later runs agentic mode.
 
 ---
 

@@ -13,6 +13,8 @@ Endpoints:
   POST /sessions/{id}/employer/band       employer's one-time private band -> gap preview
   POST /sessions/{id}/employer/move       employer accepts / counters / walks
   POST /sessions/{id}/candidate/move      candidate accepts / counters / walks
+  PATCH /sessions/{id}/candidate/enable-agentic  seal candidate_floor any time pre-terminal (not just at creation)
+  PATCH /sessions/{id}/employer/enable-agentic   seal employer_authority_limit any time pre-terminal (after band is set)
   GET  /sessions/{id}                     viewer-scoped status poll (?token=...)
   GET  /sessions/{id}/attest              TDX attestation receipt (terminal states only)
   GET  /sessions/{id}/dcap-verify         parsed DCAP quote fields for the receipt above
@@ -59,6 +61,7 @@ from app.offercheck.schemas import (
     BulkVerifyRequest,
     BulkVerifyResponse,
     BulkVerifyResult,
+    CandidateEnableAgenticRequest,
     CandidateSubmitRequest,
     CandidateSubmitResponse,
     CompanyRegisterRequest,
@@ -71,6 +74,7 @@ from app.offercheck.schemas import (
     DemoLinkResponse,
     EmployerBandRequest,
     EmployerBandResponse,
+    EmployerEnableAgenticRequest,
     ExtractedOfferFields,
     MoveRequest,
     OfferLetterExtraction,
@@ -127,17 +131,53 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         turn=negotiation.current_turn(session),
         band_set=session.band_set,
         gap_pct=negotiation.live_gap_pct(session),
-        history=[RoundSummary(round_number=r.round_number, actor=r.actor, move=r.move) for r in session.history],
+        history=[
+            RoundSummary(
+                round_number=r.round_number,
+                actor=r.actor,
+                move=r.move,
+                # Only exposed for rounds actually decided by an agent (round_number >=
+                # agentic_mode_started_round) — that's the moment the offer amount legitimately
+                # crosses the agent boundary (see mediator.py). A round decided by a human, even
+                # in a session that later switches to agentic mode, was made under the
+                # non-negotiable gap%-only privacy contract and must stay that way — it doesn't
+                # retroactively become visible just because agentic mode starts later.
+                value=(
+                    r.value
+                    if session.agentic_mode and session.agentic_mode_started_round is not None
+                    and r.round_number >= session.agentic_mode_started_round
+                    else None
+                ),
+            )
+            for r in session.history
+        ],
         consistency=session.consistency,
         agreed_price=session.agreed_price,
         my_current_value=my_value,
         agentic_ready=session.candidate_floor is not None and session.employer_authority_limit is not None,
+        my_agentic_sealed=(
+            session.candidate_floor is not None if viewer == "candidate" else session.employer_authority_limit is not None
+        ),
         package_agentic_ready=(
             session.candidate_package_ask is not None
             and session.candidate_total_comp_floor is not None
             and session.band_set
             and session.employer_total_comp_budget is not None
         ),
+        package_state=session.package_state,
+        package_round_number=session.package_round_number,
+        package_turn=package.package_current_turn(session),
+        package_history=[
+            PackageRoundDetail(
+                round=r["round"],
+                actor=r["actor"],
+                move=r["move"],
+                package=OfferPackage(**r["package"]) if r.get("package") else None,
+                total_comp=package.total_comp_value(r["package"]) if r.get("package") else None,
+            )
+            for r in session.package_history
+        ],
+        package_agreed_package=OfferPackage(**session.package_agreed) if session.package_agreed else None,
     )
 
 
@@ -370,6 +410,48 @@ async def candidate_move(session_id: str, body: MoveRequest) -> SessionView:
     await _maybe_attest(session)
     await _maybe_notify(session)
     return _view_for(session, "candidate")
+
+
+@router.patch("/sessions/{session_id}/candidate/enable-agentic", response_model=SessionView)
+async def enable_candidate_agentic(session_id: str, body: CandidateEnableAgenticRequest) -> SessionView:
+    """
+    Seals candidate_floor any time before the session is terminal — not just
+    at the one-shot POST /sessions moment. Added because the original
+    creation-time-only checkbox meant a candidate who forgot to opt in (or
+    decided partway through a human negotiation that they want AI to take
+    over) had no way to enable it after the fact. Single-set, same as the
+    original creation-time field: once sealed it can't be silently changed,
+    matching CandidateSubmitRequest.candidate_floor's "sealed" contract.
+    """
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+    if session.state in negotiation.TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail="session is already terminal")
+    if session.candidate_floor is not None:
+        raise HTTPException(status_code=409, detail="candidate has already sealed a floor for this session")
+    session.candidate_floor = body.candidate_floor
+    session.candidate_priorities = body.candidate_priorities
+    return _view_for(session, "candidate")
+
+
+@router.patch("/sessions/{session_id}/employer/enable-agentic", response_model=SessionView)
+async def enable_employer_agentic(session_id: str, body: EmployerEnableAgenticRequest) -> SessionView:
+    """Employer counterpart to enable_candidate_agentic — see that docstring. Requires the band
+    to already be set (employer_authority_limit is meaningless without band_max to clamp against,
+    same precondition mediator.build_agents() already enforces at start-agentic time)."""
+    session = _get_session_or_404(session_id)
+    if body.token != session.employer_token:
+        raise HTTPException(status_code=403, detail="invalid employer token")
+    if session.state in negotiation.TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail="session is already terminal")
+    if not session.band_set:
+        raise HTTPException(status_code=412, detail="employer must submit their salary band first")
+    if session.employer_authority_limit is not None:
+        raise HTTPException(status_code=409, detail="employer has already sealed an authority limit for this session")
+    session.employer_authority_limit = body.employer_authority_limit
+    session.employer_priorities = body.employer_priorities
+    return _view_for(session, "employer")
 
 
 @router.get("/sessions/{session_id}", response_model=SessionView)

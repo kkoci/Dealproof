@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { offercheckEmployerMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+import { offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
 
 const PACKAGE_TERM_LABELS = {
   base: 'Base', equity_grant: 'Equity', vesting_years: 'Vesting (yrs)', cliff_months: 'Cliff (mo)',
@@ -100,6 +100,72 @@ function AttestationPanel({ sessionId, token, visible }) {
         <p className="text-xs text-gray-500 italic">{err || 'Loading attestation receipt…'}</p>
       )}
     </div>
+  )
+}
+
+function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
+  const [open, setOpen] = useState(false)
+  const [authorityLimit, setAuthorityLimit] = useState('')
+  const [priorities, setPriorities] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState('')
+
+  if (!visible) return null
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setErr('')
+    setSubmitting(true)
+    try {
+      await offercheckEnableEmployerAgentic(sessionId, {
+        token,
+        employer_authority_limit: Number(authorityLimit),
+        employer_priorities: priorities.trim() || undefined,
+      })
+      setOpen(false)
+      onEnabled?.()
+    } catch (e) {
+      setErr(e.message || 'Could not enable AI negotiation')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-4 w-full px-4 py-2.5 rounded-lg bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/50 text-gray-200 text-sm font-medium transition-all"
+      >
+        Enable AI negotiation
+      </button>
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-4 p-4 rounded-xl bg-gray-900/40 border border-gray-800/40 space-y-3">
+      <p className="text-sm font-medium text-gray-200">Enable AI negotiation</p>
+      <p className="text-xs text-gray-500">
+        A Claude agent will negotiate on your behalf once the candidate is ready too. Your authority limit is sealed — never shown to the candidate.
+      </p>
+      <div>
+        <label className={labelClass}>Your signing authority limit (never revealed)</label>
+        <input className={inputClass} type="number" min="0" value={authorityLimit} onChange={(e) => setAuthorityLimit(e.target.value)} placeholder="195000" required />
+      </div>
+      <div>
+        <label className={labelClass}>Priorities (optional)</label>
+        <input className={inputClass} value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="equity is more flexible than base" />
+      </div>
+      {err && <p className="text-xs text-red-400">{err}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={submitting || !authorityLimit} className="flex-1 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">
+          {submitting ? 'Sealing…' : 'Seal & enable'}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-gray-800/60 hover:bg-gray-700/60 text-gray-300 text-sm">
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -279,11 +345,6 @@ export default function EmployerSession() {
   const [view, setView] = useState(null)
   const [error, setError] = useState('')
   const [band, setBand] = useState({ band_min: '', band_mid: '', band_max: '' })
-  const [aiEnabled, setAiEnabled] = useState(false)
-  const [authorityLimit, setAuthorityLimit] = useState('')
-  const [employerPriorities, setEmployerPriorities] = useState('')
-  const [packageEnabled, setPackageEnabled] = useState(false)
-  const [totalCompBudget, setTotalCompBudget] = useState('')
   const [bandGap, setBandGap] = useState(null)
   const [counterValue, setCounterValue] = useState('')
   const [acting, setActing] = useState(false)
@@ -306,14 +367,21 @@ export default function EmployerSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token])
 
-  const isTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
-  const myTurn = view && view.turn === 'employer'
+  // Package mode is a parallel state machine (see app.offercheck.package's module docstring) —
+  // its progress lives in package_state/package_turn, never in the scalar state/turn fields.
+  // Once it's actually been used (package_round_number > 0) it's the negotiation in progress,
+  // so terminal/turn must defer to it — otherwise this side gets stuck showing "waiting" forever
+  // after a package AI negotiation agrees, because the scalar state never advances on its own.
+  const packageActive = view && view.package_round_number > 0
+  const isTerminal = view && (
+    packageActive
+      ? ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.package_state)
+      : ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
+  )
+  const myTurn = view && (packageActive ? view.package_turn === 'employer' : view.turn === 'employer')
 
   const loadDemoBand = () => {
     setBand({ band_min: '155000', band_mid: '175000', band_max: '195000' })
-    setAuthorityLimit('195000')
-    setEmployerPriorities('equity is more flexible than base')
-    setTotalCompBudget('300000')
   }
 
   const submitBand = async (e) => {
@@ -326,13 +394,6 @@ export default function EmployerSession() {
         band_min: Number(band.band_min),
         band_mid: Number(band.band_mid),
         band_max: Number(band.band_max),
-      }
-      if (aiEnabled && authorityLimit) {
-        body.employer_authority_limit = Number(authorityLimit)
-        body.employer_priorities = employerPriorities.trim() || undefined
-      }
-      if (aiEnabled && packageEnabled && totalCompBudget) {
-        body.employer_total_comp_budget = Number(totalCompBudget)
       }
       const result = await offercheckSetEmployerBand(sessionId, body)
       setBandGap(result.gap_pct)
@@ -393,40 +454,9 @@ export default function EmployerSession() {
               <input className={inputClass} type="number" min="0" value={band.band_max} onChange={(e) => setBand((b) => ({ ...b, band_max: e.target.value }))} placeholder="195000" required />
             </div>
 
-            <div className="pt-2 border-t border-gray-800/60">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)} className="accent-emerald-500" />
-                <span className="text-sm font-medium text-gray-200">Enable AI negotiation (optional)</span>
-              </label>
-              <p className="text-xs text-gray-500 mt-1 mb-3">
-                Let a Claude agent negotiate on your behalf once the candidate is ready too. Your authority limit is sealed — never shown to the candidate.
-              </p>
-              {aiEnabled && (
-                <div className="space-y-3">
-                  <div>
-                    <label className={labelClass}>Your signing authority limit (never revealed)</label>
-                    <input className={inputClass} type="number" min="0" value={authorityLimit} onChange={(e) => setAuthorityLimit(e.target.value)} placeholder="195000" />
-                  </div>
-                  <div>
-                    <label className={labelClass}>Priorities (optional)</label>
-                    <input className={inputClass} value={employerPriorities} onChange={(e) => setEmployerPriorities(e.target.value)} placeholder="equity is more flexible than base" />
-                  </div>
-
-                  <div className="pt-2 border-t border-gray-800/60">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={packageEnabled} onChange={(e) => setPackageEnabled(e.target.checked)} className="accent-emerald-500" />
-                      <span className="text-xs font-medium text-gray-200">Negotiate the full package (equity, signing bonus, PTO…) instead of just base</span>
-                    </label>
-                    {packageEnabled && (
-                      <div className="mt-3">
-                        <label className={labelClass}>Total comp budget across all terms (never revealed)</label>
-                        <input className={inputClass} type="number" min="0" value={totalCompBudget} onChange={(e) => setTotalCompBudget(e.target.value)} placeholder="300000" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <p className="text-xs text-gray-500 pt-2 border-t border-gray-800/60">
+              You can enable AI negotiation from this page after submitting your band.
+            </p>
 
             <button
               type="submit"
@@ -463,8 +493,24 @@ export default function EmployerSession() {
               <div className="mb-4 space-y-1.5">
                 {view.history.map((h) => (
                   <div key={h.round_number} className="flex items-center justify-between text-xs text-gray-500">
-                    <span>Round {h.round_number} — {h.actor}</span>
-                    <span className="font-mono uppercase text-gray-400">{h.move}</span>
+                    <span>Round {h.round_number} — {h.actor === 'employer' ? 'Employer' : 'Candidate'}</span>
+                    <span className="font-mono uppercase text-gray-400">
+                      {h.move}{h.value != null ? ` $${h.value.toLocaleString()}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {view.package_history.length > 0 && (
+              <div className="mb-4 space-y-1.5 pt-3 border-t border-gray-800/60">
+                <p className="text-xs text-gray-500 mb-1">Package negotiation</p>
+                {view.package_history.map((h) => (
+                  <div key={`pkg-${h.round}`} className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Round {h.round} — {h.actor === 'employer' ? 'Employer' : 'Candidate'}</span>
+                    <span className="font-mono uppercase text-gray-400">
+                      {h.move}{h.total_comp != null ? ` $${Math.round(h.total_comp).toLocaleString()} total comp` : ''}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -513,6 +559,13 @@ export default function EmployerSession() {
             )}
           </div>
         )}
+
+        <EnableAgenticButton
+          sessionId={sessionId}
+          token={token}
+          visible={Boolean(view?.band_set && !view?.my_agentic_sealed && !isTerminal)}
+          onEnabled={refresh}
+        />
 
         <AgenticPanel
           sessionId={sessionId}

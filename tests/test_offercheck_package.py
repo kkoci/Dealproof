@@ -472,3 +472,55 @@ def test_start_agentic_package_end_to_end(client):
     assert result["attestation"].startswith("sim_quote:")
     assert "155000" not in resp.text  # band never leaks
     assert "reasoning" not in resp.text
+
+
+def test_session_view_reflects_package_progress_after_agentic_run(client):
+    """
+    Regression test for a real bug found during live Phala deploy testing: SessionView
+    used to expose only the scalar state/turn/round_number fields, which apply_package_move()
+    never touches (it mutates package_state/package_round_number instead — see package.py's
+    module docstring). A party polling GET /sessions/{id} during/after a package AI negotiation
+    saw no progress at all — stuck on whatever the scalar state was before the package run,
+    even once the package negotiation had already reached AGREED. package_state/package_turn/
+    package_history/package_agreed_package on SessionView fix that; this test locks it in.
+    """
+    session_id, candidate_token, employer_token = _submit_package_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 200000,
+              "employer_total_comp_budget": 300000},
+    )
+
+    pre = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
+    assert pre["package_state"] == "PENDING_EMPLOYER"
+    assert pre["package_round_number"] == 0
+    assert pre["package_history"] == []
+    assert pre["package_agreed_package"] is None
+
+    session = store.get_session(session_id)
+    candidate_agent, employer_agent = package_mediator.build_package_agents(session)
+    emp_effect = _scripted([{"action": "accept", "package": None, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "package": _package(base=190000), "reasoning": "x"}])
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.package_mediator.build_package_agents", return_value=(candidate_agent, employer_agent)):
+        client.post(f"/api/offercheck/sessions/{session_id}/start-agentic-package", json={"token": candidate_token})
+
+    # The scalar (base-salary-only) channel never ran, so it must stay untouched at PENDING_EMPLOYER —
+    # a UI naively reading view.state/view.turn alone would still see no progress, which is exactly
+    # why the frontend now checks package_round_number > 0 to decide which channel is authoritative.
+    post_employer = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
+    assert post_employer["state"] == "PENDING_EMPLOYER"
+    assert post_employer["package_state"] == "AGREED"
+    assert post_employer["package_turn"] is None  # terminal
+    assert post_employer["package_round_number"] >= 1
+    assert len(post_employer["package_history"]) == post_employer["package_round_number"]
+    assert post_employer["package_agreed_package"]["base"] == 190000
+    # Package rounds are agentic-only by construction (see PackageRoundDetail's docstring) —
+    # every round's package + total_comp is safe to expose to both parties unconditionally.
+    assert all(r["package"] is not None and r["total_comp"] is not None for r in post_employer["package_history"])
+
+    # Both parties see the identical package_state/package_history — same shared server-side truth.
+    post_candidate = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert post_candidate["package_state"] == post_employer["package_state"]
+    assert post_candidate["package_history"] == post_employer["package_history"]

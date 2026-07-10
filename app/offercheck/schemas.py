@@ -91,6 +91,24 @@ class EmployerBandResponse(BaseModel):
     gap_pct: float  # (candidate_ask - band_mid) / band_mid * 100 — the only number the employer sees
 
 
+class CandidateEnableAgenticRequest(BaseModel):
+    """
+    Seals candidate_floor after session creation — see PATCH .../candidate/enable-agentic.
+    Same field, same "sealed, never returned" contract as CandidateSubmitRequest.candidate_floor;
+    this just lets it be set later instead of only at the one-shot POST /sessions moment.
+    """
+    token: str
+    candidate_floor: float = Field(gt=0)
+    candidate_priorities: str | None = None
+
+
+class EmployerEnableAgenticRequest(BaseModel):
+    """Seals employer_authority_limit after the band has already been set — see PATCH .../employer/enable-agentic."""
+    token: str
+    employer_authority_limit: float = Field(gt=0)
+    employer_priorities: str | None = None
+
+
 class MoveRequest(BaseModel):
     token: str
     move: Move
@@ -101,6 +119,7 @@ class RoundSummary(BaseModel):
     round_number: int
     actor: Actor
     move: Move
+    value: float | None = None  # populated only when session.agentic_mode — see routes._view_for
 
 
 class AttestationReceipt(BaseModel):
@@ -161,6 +180,23 @@ class OfferLetterExtraction(BaseModel):
     notes: list[str]
 
 
+class PackageRoundDetail(BaseModel):
+    """
+    One round of package-vs-package negotiation. Includes the full package —
+    that IS this mode's contract, same reasoning as AgenticRoundDetail.value.
+    Never included: either side's sealed floor/budget, or agent reasoning.
+    Safe to expose cross-party unconditionally (unlike RoundSummary.value):
+    package negotiation is agentic-only (see app.offercheck.package's module
+    docstring), so every package_history entry already crossed the agent
+    boundary by construction — there's no human-only package mode to protect.
+    """
+    round: int
+    actor: Actor
+    move: Move
+    package: OfferPackage | None
+    total_comp: float | None  # total_comp_value(package) — convenience for the frontend table
+
+
 class SessionView(BaseModel):
     """Viewer-scoped snapshot. Never includes the other party's raw numbers."""
     session_id: str
@@ -176,7 +212,18 @@ class SessionView(BaseModel):
     # Only populated for the viewer's own side:
     my_current_value: float | None = None
     agentic_ready: bool = False  # Phase 2A: True once both sides have sealed floor/authority_limit — booleans only, never the values
+    my_agentic_sealed: bool = False  # True once the viewer's own side has sealed their floor/authority_limit — lets the UI hide its own "enable AI negotiation" prompt without exposing the other side's status
     package_agentic_ready: bool = False  # Phase 2B: True once both sides have sealed package_ask/total_comp_floor + budget
+    # Package-mode progress (Phase 2B) — a parallel channel to state/round_number/turn/history
+    # above (see app.offercheck.package's module docstring for why it's parallel, not merged).
+    # Exposed here so polling clients can render live package-negotiation progress; before this,
+    # SessionView had no package-mode fields at all, so a party watching a package AI negotiation
+    # via GET /sessions/{id} never saw it advance past whatever the scalar state was.
+    package_state: SessionState = "PENDING_EMPLOYER"
+    package_round_number: int = 0
+    package_turn: Actor | None = None  # None when package_state is terminal
+    package_history: list[PackageRoundDetail] = Field(default_factory=list)
+    package_agreed_package: OfferPackage | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -329,19 +376,6 @@ class PackageCredentialResponse(BaseModel):
     summary: str
     credential_hash: str
     tee_attested: bool
-
-
-class PackageRoundDetail(BaseModel):
-    """
-    One round of package-vs-package negotiation. Includes the full package —
-    that IS this mode's contract, same reasoning as AgenticRoundDetail.value.
-    Never included: either side's sealed floor/budget, or agent reasoning.
-    """
-    round: int
-    actor: Actor
-    move: Move
-    package: OfferPackage | None
-    total_comp: float | None  # total_comp_value(package) — convenience for the frontend table
 
 
 class PackageAgenticResult(BaseModel):

@@ -193,6 +193,32 @@ export function offercheckGetSession(sessionId, token) {
 }
 
 /**
+ * PATCH /api/offercheck/sessions/:id/candidate/enable-agentic — seal candidate_floor any time before terminal
+ * @param {string} sessionId
+ * @param {{ token: string, candidate_floor: number, candidate_priorities?: string }} body
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckEnableCandidateAgentic(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/enable-agentic`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * PATCH /api/offercheck/sessions/:id/employer/enable-agentic — seal employer_authority_limit any time before terminal
+ * @param {string} sessionId
+ * @param {{ token: string, employer_authority_limit: number, employer_priorities?: string }} body
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckEnableEmployerAgentic(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/enable-agentic`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
  * POST /api/offercheck/parse-offer-letter — upload a PDF, get draft fields to review
  * @param {File} file
  * @returns {Promise<object>} OfferLetterExtraction { competing_offer, confidence, notes }

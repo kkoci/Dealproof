@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateMove, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+import { offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
 
 const PACKAGE_TERM_LABELS = {
   base: 'Base', equity_grant: 'Equity', vesting_years: 'Vesting (yrs)', cliff_months: 'Cliff (mo)',
@@ -15,6 +15,10 @@ function formatPackageValue(field, value) {
 }
 
 const POLL_MS = 3000
+
+const inputClass =
+  'w-full px-3 py-2.5 rounded-lg bg-gray-900/60 border border-gray-700/60 text-gray-200 placeholder-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all'
+const labelClass = 'block text-xs font-medium text-gray-400 mb-1.5'
 
 const STATE_LABEL = {
   PENDING_EMPLOYER: 'Waiting for the employer',
@@ -96,6 +100,72 @@ function AttestationPanel({ sessionId, token, visible }) {
         <p className="text-xs text-gray-500 italic">{err || 'Loading attestation receipt…'}</p>
       )}
     </div>
+  )
+}
+
+function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
+  const [open, setOpen] = useState(false)
+  const [floor, setFloor] = useState('')
+  const [priorities, setPriorities] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState('')
+
+  if (!visible) return null
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setErr('')
+    setSubmitting(true)
+    try {
+      await offercheckEnableCandidateAgentic(sessionId, {
+        token,
+        candidate_floor: Number(floor),
+        candidate_priorities: priorities.trim() || undefined,
+      })
+      setOpen(false)
+      onEnabled?.()
+    } catch (e) {
+      setErr(e.message || 'Could not enable AI negotiation')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-4 w-full px-4 py-2.5 rounded-lg bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/50 text-gray-200 text-sm font-medium transition-all"
+      >
+        Enable AI negotiation
+      </button>
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-4 p-4 rounded-xl bg-gray-900/40 border border-gray-800/40 space-y-3">
+      <p className="text-sm font-medium text-gray-200">Enable AI negotiation</p>
+      <p className="text-xs text-gray-500">
+        A Claude agent will negotiate on your behalf once the employer is ready too. Your floor is sealed — never shown to the employer, even to their agent.
+      </p>
+      <div>
+        <label className={labelClass}>Your walk-away floor (never revealed)</label>
+        <input className={inputClass} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="175000" required />
+      </div>
+      <div>
+        <label className={labelClass}>Priorities (optional)</label>
+        <input className={inputClass} value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
+      </div>
+      {err && <p className="text-xs text-red-400">{err}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={submitting || !floor} className="flex-1 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold disabled:opacity-50">
+          {submitting ? 'Sealing…' : 'Seal & enable'}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-gray-800/60 hover:bg-gray-700/60 text-gray-300 text-sm">
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -298,8 +368,18 @@ export default function CandidateSession() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token])
 
-  const isTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
-  const myTurn = view && view.turn === 'candidate'
+  // Package mode is a parallel state machine (see app.offercheck.package's module docstring) —
+  // its progress lives in package_state/package_turn, never in the scalar state/turn fields.
+  // Once it's actually been used (package_round_number > 0) it's the negotiation in progress,
+  // so terminal/turn must defer to it — otherwise this side gets stuck showing "waiting" forever
+  // after a package AI negotiation agrees, because the scalar state never advances on its own.
+  const packageActive = view && view.package_round_number > 0
+  const isTerminal = view && (
+    packageActive
+      ? ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.package_state)
+      : ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
+  )
+  const myTurn = view && (packageActive ? view.package_turn === 'candidate' : view.turn === 'candidate')
 
   const act = async (move, value) => {
     setActing(true)
@@ -376,8 +456,24 @@ export default function CandidateSession() {
               <div className="mb-4 space-y-1.5">
                 {view.history.map((h) => (
                   <div key={h.round_number} className="flex items-center justify-between text-xs text-gray-500">
-                    <span>Round {h.round_number} — {h.actor}</span>
-                    <span className="font-mono uppercase text-gray-400">{h.move}</span>
+                    <span>Round {h.round_number} — {h.actor === 'employer' ? 'Employer' : 'Candidate'}</span>
+                    <span className="font-mono uppercase text-gray-400">
+                      {h.move}{h.value != null ? ` $${h.value.toLocaleString()}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {view.package_history.length > 0 && (
+              <div className="mb-4 space-y-1.5 pt-3 border-t border-gray-800/60">
+                <p className="text-xs text-gray-500 mb-1">Package negotiation</p>
+                {view.package_history.map((h) => (
+                  <div key={`pkg-${h.round}`} className="flex items-center justify-between text-xs text-gray-500">
+                    <span>Round {h.round} — {h.actor === 'employer' ? 'Employer' : 'Candidate'}</span>
+                    <span className="font-mono uppercase text-gray-400">
+                      {h.move}{h.total_comp != null ? ` $${Math.round(h.total_comp).toLocaleString()} total comp` : ''}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -426,6 +522,13 @@ export default function CandidateSession() {
             )}
           </div>
         )}
+
+        <EnableAgenticButton
+          sessionId={sessionId}
+          token={token}
+          visible={Boolean(view && !view.my_agentic_sealed && !isTerminal)}
+          onEnabled={refresh}
+        />
 
         <AgenticPanel
           sessionId={sessionId}

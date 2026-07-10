@@ -333,3 +333,228 @@ def test_start_agentic_end_to_end(client):
     assert result["credential"]["genuine_negotiation"] is True
     assert "155000" not in resp.text  # employer band never leaks
     assert "reasoning" not in resp.text  # never leaks to the API response either
+
+
+def test_round_summary_value_hidden_for_human_moves_exposed_after_agentic(client):
+    """RoundSummary.value must stay None for human-driven rounds (non-negotiable gap%-only
+    privacy invariant) and only appear once session.agentic_mode has actually run."""
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+            "candidate_floor": 175000,
+        },
+    )
+    body = submit.json()
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 195000,
+              "employer_authority_limit": 195000},
+    )
+    # A human move first — its value must never appear in SessionView.
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/move",
+        json={"token": employer_token, "move": "counter", "value": 170000},
+    )
+    view_before = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert view_before["history"][0]["value"] is None
+    assert "170000" not in json.dumps(view_before)
+
+    from app.offercheck import store as offercheck_store
+    from app.offercheck.agents import mediator as mediator_module
+    session = offercheck_store.get_session(session_id)
+    candidate_agent, employer_agent = mediator_module.build_agents(session)
+    emp_effect = _scripted([{"action": "accept", "value": 185000, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "value": 185000, "reasoning": "x"}])
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.mediator.build_agents", return_value=(candidate_agent, employer_agent)):
+        client.post(f"/api/offercheck/sessions/{session_id}/start-agentic", json={"token": candidate_token})
+
+    view_after = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    # The pre-agentic human round still has no value (it never crossed the agent boundary)...
+    assert view_after["history"][0]["value"] is None
+    # ...but the agentic rounds now do, since session.agentic_mode flips true for the whole session.
+    agentic_rounds = view_after["history"][1:]
+    assert len(agentic_rounds) > 0
+    assert any(r["value"] is not None for r in agentic_rounds)
+
+
+def test_my_agentic_sealed_flag_is_per_viewer(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+            "candidate_floor": 175000,
+        },
+    )
+    body = submit.json()
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    cand_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    emp_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
+    assert cand_view["my_agentic_sealed"] is True   # candidate sealed at creation
+    assert emp_view["my_agentic_sealed"] is False   # employer hasn't sealed anything yet
+
+
+# ---------------------------------------------------------------------------
+# PATCH .../candidate/enable-agentic and .../employer/enable-agentic
+# ---------------------------------------------------------------------------
+
+def _unsealed_session_via_http(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+        },
+    )
+    return submit.json()
+
+
+def test_enable_candidate_agentic_succeeds(client):
+    body = _unsealed_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/candidate/enable-agentic",
+        json={"token": body["candidate_token"], "candidate_floor": 175000, "candidate_priorities": "base matters"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["my_agentic_sealed"] is True
+    assert "175000" not in resp.text
+
+
+def test_enable_candidate_agentic_wrong_token_403(client):
+    body = _unsealed_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/candidate/enable-agentic",
+        json={"token": "wrong-token", "candidate_floor": 175000},
+    )
+    assert resp.status_code == 403
+
+
+def test_enable_candidate_agentic_already_sealed_409(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+            "candidate_floor": 175000,
+        },
+    )
+    body = submit.json()
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/candidate/enable-agentic",
+        json={"token": body["candidate_token"], "candidate_floor": 180000},
+    )
+    assert resp.status_code == 409
+
+
+def test_enable_candidate_agentic_terminal_session_409(client):
+    body = _unsealed_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/band",
+        json={"employer_token": body["employer_token"], "band_min": 155000, "band_mid": 175000, "band_max": 195000},
+    )
+    client.post(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/move",
+        json={"token": body["employer_token"], "move": "walk"},
+    )
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/candidate/enable-agentic",
+        json={"token": body["candidate_token"], "candidate_floor": 175000},
+    )
+    assert resp.status_code == 409
+
+
+def test_enable_employer_agentic_succeeds(client):
+    body = _unsealed_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/band",
+        json={"employer_token": body["employer_token"], "band_min": 155000, "band_mid": 175000, "band_max": 195000},
+    )
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/enable-agentic",
+        json={"token": body["employer_token"], "employer_authority_limit": 195000},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["my_agentic_sealed"] is True
+    assert "195000" not in resp.text
+
+
+def test_enable_employer_agentic_before_band_set_412(client):
+    body = _unsealed_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/enable-agentic",
+        json={"token": body["employer_token"], "employer_authority_limit": 195000},
+    )
+    assert resp.status_code == 412
+
+
+def test_enable_employer_agentic_wrong_token_403(client):
+    body = _unsealed_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/enable-agentic",
+        json={"token": "wrong-token", "employer_authority_limit": 195000},
+    )
+    assert resp.status_code == 403
+
+
+def test_enable_employer_agentic_already_sealed_409(client):
+    body = _unsealed_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/band",
+        json={"employer_token": body["employer_token"], "band_min": 155000, "band_mid": 175000, "band_max": 195000,
+              "employer_authority_limit": 195000},
+    )
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/enable-agentic",
+        json={"token": body["employer_token"], "employer_authority_limit": 200000},
+    )
+    assert resp.status_code == 409
+
+
+def test_post_creation_opt_in_reaches_agentic_ready_and_runs(client):
+    """Full FIX 2 flow: neither side seals anything at creation/band time — both opt in later
+    via PATCH, agentic_ready flips true, and start-agentic runs exactly as if sealed up front."""
+    body = _unsealed_session_via_http(client)
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 195000},
+    )
+    pre = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert pre["agentic_ready"] is False
+
+    client.patch(
+        f"/api/offercheck/sessions/{session_id}/candidate/enable-agentic",
+        json={"token": candidate_token, "candidate_floor": 175000},
+    )
+    client.patch(
+        f"/api/offercheck/sessions/{session_id}/employer/enable-agentic",
+        json={"token": employer_token, "employer_authority_limit": 195000},
+    )
+    post = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert post["agentic_ready"] is True
+
+    from app.offercheck import store as offercheck_store
+    from app.offercheck.agents import mediator as mediator_module
+    session = offercheck_store.get_session(session_id)
+    candidate_agent, employer_agent = mediator_module.build_agents(session)
+    emp_effect = _scripted([{"action": "accept", "value": 190000, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "value": 190000, "reasoning": "x"}])
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.mediator.build_agents", return_value=(candidate_agent, employer_agent)):
+        resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic", json={"token": candidate_token})
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "AGREED"
