@@ -1108,6 +1108,39 @@ Dealproof/
 | M7 | Hedera HCS autonomous deal outcome publishing — hiero_sdk_python | ✅ Complete |
 | M8 | ENS agent identity — reverse resolution + `GET /api/ens/agents` | ✅ Complete |
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
+| **Agent Rail** | **B2B Agent × Agent Deal Room** (`build_spec_agent_rail.md`) | |
+| AR-1 | Phase 1 — CLI procurement demo: sealed buyer/supplier agents, mediator loop, DCAP attestation, escrow stub | ✅ Complete |
+| AR-2 | Phase 2 — Shareable web demo (API + frontend, deployed to Phala Cloud) | 🔜 Pending |
+| AR-3 | Phase 3 — Production: OAuth3 principal delegation, full escrow, πCreds conduct credential | 🔜 Pending |
+
+---
+
+## Agent Rail — B2B Procurement Deal Room
+
+When a company's AI procurement agent negotiates with a supplier's AI agent, the platform operator can normally see everything, and neither principal can verify what instructions the opposing agent was given. Agent Rail runs both agents inside the same TDX enclave as DealProof core — each with sealed instructions the other side and the operator never see — and produces a hardware-signed attestation over the agreed terms. Only the outcome exits the enclave; the buyer's budget ceiling and the supplier's price floor never do.
+
+**Phase 1 (current)** is a CLI-only proof of the trust primitive — no frontend, no API, no persistence:
+
+```
+app/agentrail/
+├── buyer_agent.py      BuyerAgent — sealed budget ceiling, min spec, urgency
+├── supplier_agent.py   SupplierAgent — sealed price floors, inventory, lead time
+├── mediator.py          run_procurement_negotiation() — buyer-opens negotiation loop
+├── schemas.py           BuyerParameters, SupplierParameters, ProcurementRound/Result
+└── verify_quote.py      DCAP quote structural verification (reuses TD Report Body parsing)
+
+demo_agentrail.py         CLI demo — industrial sensor procurement scenario
+contracts/AgentDealEscrow.sol   Stub only — full escrow is Phase 3
+```
+
+Run it:
+```bash
+python demo_agentrail.py
+```
+
+The demo negotiates 500 industrial sensors between a buyer (budget ceiling $45/unit, IP67 + 12-month warranty) and a supplier (floor $38/unit for bulk orders, 800-unit inventory), prints every round, and closes with a DCAP attestation receipt plus an explicit leak check confirming neither sealed value appeared anywhere in the transcript. Reuses `app.tee.attestation.sign_result` from DealProof core — no separate attestation stack.
+
+See `build_spec_agent_rail.md` for the full phased spec (Phase 2: shareable web demo; Phase 3: production auth + escrow + πCreds).
 
 ---
 

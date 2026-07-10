@@ -64,6 +64,7 @@ app/api/TRANSCRIPT_INGEST_PROPOSAL.md
 tinycloud-sidecar/
 
 # Project-specific docs (internal planning)
+build_spec_agent_rail.md
 offercheck_colour_system_v3.md
 offercheck_phase2_spec.md
 offercheck_phase3_spec.md

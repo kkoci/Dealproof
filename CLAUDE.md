@@ -175,7 +175,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (69 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -189,7 +189,12 @@ tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
+tests/test_agentrail.py       8   Agent Rail Phase 1: sealed-value isolation (prompt + transcript), negotiation outcomes, verify_quote
 ```
+
+Note: as of this branch, `pytest tests/` reports 3 pre-existing failures in `tests/test_e2e.py`
+(sign_result mock returns a real sim_quote instead of the patched value) unrelated to Agent Rail —
+present before `app/agentrail/` was added. `tests/test_agentrail.py` passes 8/8 in isolation.
 
 **Resilience guarantees:**
 - Memory sidecar down → deal proceeds, `memory_attested: false`
@@ -427,6 +432,64 @@ POST /api/deals/{id}/credential
 Fix: copy `key.json` → `session.json.jwk` (see `TinyCloud/TINYCLOUD_WORKFLOW.md` § Step 3).
 
 **Prize targets:** ENS ($4k) + Arc ($2k) + Hedera ($3k) + Unlink ($1k) + World ($2.5k) = $12.5k
+
+---
+
+## Agent Rail — B2B Procurement Deal Room
+
+Separate B2B product shell built on top of the DealProof core trust primitive, per
+`build_spec_agent_rail.md`. Core statement: when a buyer's procurement agent negotiates
+with a supplier's agent, DealProof runs both inside the same TDX enclave with sealed,
+mutually-invisible instructions, so neither principal (nor the platform operator) can see
+the other side's private parameters — only the attested outcome exits.
+
+### Phase 1 (current) — CLI-only, no API, no frontend, no persistence
+
+```
+app/agentrail/buyer_agent.py      BuyerAgent — sealed budget_ceiling, min_spec, urgency; opens negotiation
+app/agentrail/supplier_agent.py   SupplierAgent — sealed floor_price_bulk/standard, inventory, lead_time_days
+app/agentrail/mediator.py         run_procurement_negotiation() — buyer-opens loop, mirrors app/agents/negotiation.py shape
+app/agentrail/schemas.py          BuyerParameters, SupplierParameters, ProcurementRound, ProcurementResult
+app/agentrail/verify_quote.py     verify_quote() — structural DCAP check, reuses TD Report Body offsets from app/tee/attestation.py
+demo_agentrail.py                 CLI demo — industrial sensor scenario (500 units, $45 buyer ceiling, $38 supplier floor)
+contracts/AgentDealEscrow.sol     Stub only — do not implement deposit/release/refund until Phase 3
+tests/test_agentrail.py           Sealed-value isolation (system prompt + transcript), negotiation outcomes, verify_quote
+```
+
+Run: `python demo_agentrail.py` (requires `ANTHROPIC_API_KEY` in `.env`; no server needed — calls agents in-process).
+
+**Negotiation direction differs from DealProof core on purpose:** the buyer opens
+(`BuyerAgent.open_negotiation()`) and the supplier responds, matching procurement
+convention (buyer issues the proposal, supplier reacts) — the opposite of
+`app/agents/negotiation.py` where the seller opens. Do not "fix" this to match core.
+
+**Sealed-parameter isolation is structural, not a runtime filter:** each agent's system
+prompt is built only from its own principal's parameters; the mediator only ever passes
+the JSON action fields (`action`, `price`, `quantity`, `terms`, `reasoning`) between agents
+and into the logged transcript. There is no redaction step because the sealed values are
+never constructed into a message the other agent or the transcript can see. `demo_agentrail.py`
+still runs a runtime leak check over the transcript as a sanity net against LLM-authored
+`reasoning` text accidentally repeating a sealed number.
+
+**Reuses DealProof core directly — does not fork the attestation stack:**
+`app.tee.attestation.sign_result()` is called unmodified from `mediator.py`. Do not build a
+separate TEE client for Agent Rail.
+
+Attestation payload for Agent Rail deals: `{final_price, final_quantity, terms}` — no
+`data_hash`/`memory_hash` fields (Props and Contexto memory are DealProof-core-only
+concepts and out of scope for Phase 1 procurement deals).
+
+### What NOT to build yet (Phase 1)
+No frontend, no auth, no persistent storage, no API endpoints, no multi-tenant support.
+`contracts/AgentDealEscrow.sol` is a stub — do not wire it to the negotiation flow.
+OAuth3/UCAN delegation and πCreds conduct credentials are explicitly Phase 3 — do not
+pre-build them (see `build_spec_agent_rail.md` § Architectural Decisions).
+
+### Next phases
+Phase 2 (after Phase 1 validation): FastAPI endpoints (`POST /deal/create`, `GET /deal/:id`,
+`GET /deal/:id/attest`) + a minimal single-page frontend, deployed to Phala Cloud, no login.
+Phase 3 (after ≥2 external "I want to use this" signals): OAuth3 principal registration,
+full `AgentDealEscrow.sol` implementation, πCreds conduct credential on deal completion.
 
 ---
 
