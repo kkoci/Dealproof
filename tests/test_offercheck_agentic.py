@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import negotiation, rate_limit, store, verifier
+from app.offercheck import demo_auth, negotiation, rate_limit, store, verifier
 from app.offercheck.agents import mediator
 from app.offercheck.agents.candidate_agent import CandidateAgent
 from app.offercheck.agents.employer_agent import EmployerAgent
@@ -35,9 +35,11 @@ from app.offercheck.schemas import CompetingOffer
 def _clear_store():
     store.reset()
     rate_limit.reset()
+    demo_auth.reset()
     yield
     store.reset()
     rate_limit.reset()
+    demo_auth.reset()
 
 
 def _plausible_offer(**overrides):
@@ -555,6 +557,108 @@ def test_post_creation_opt_in_reaches_agentic_ready_and_runs(client):
          patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
          patch("app.offercheck.agents.mediator.build_agents", return_value=(candidate_agent, employer_agent)):
         resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic", json={"token": candidate_token})
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "AGREED"
+
+
+def test_start_agentic_via_query_token_still_works_after_param_rename(client):
+    """
+    Regression test: start_agentic_route's bare `token: str | None = None` query parameter
+    shared a name with AgenticStartRequest.token (the body field) — an ambiguous FastAPI/Pydantic
+    body-vs-query resolution that's the leading suspect for a live 422
+    ("Input should be a valid dictionary or object to extract fields from") seen in production,
+    where the body was received as a raw JSON string instead of a parsed object. Renamed to
+    query_token (still bound to the public `?token=` query string via Query(alias="token")) to
+    remove the ambiguity outright — this test locks in that the query-param demo-link path
+    (used for shareable magic-link URLs, see routes.py's module docstring) still works under the
+    new parameter name.
+    """
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+            "candidate_floor": 175000,
+        },
+    )
+    body = submit.json()
+    session_id = body["session_id"]
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": body["employer_token"], "band_min": 155000, "band_mid": 175000, "band_max": 195000,
+              "employer_authority_limit": 195000},
+    )
+
+    demo_token, _ = demo_auth.generate_token(session_id, expires_hours=1)
+
+    from app.offercheck import store as offercheck_store
+    from app.offercheck.agents import mediator as mediator_module
+    session = offercheck_store.get_session(session_id)
+    candidate_agent, employer_agent = mediator_module.build_agents(session)
+    emp_effect = _scripted([{"action": "accept", "value": 190000, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "value": 190000, "reasoning": "x"}])
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.mediator.build_agents", return_value=(candidate_agent, employer_agent)):
+        resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic?token={demo_token}", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "AGREED"
+
+
+def test_start_agentic_tolerates_a_double_json_encoded_body(client):
+    """
+    Regression test for a live 422 ("Input should be a valid dictionary or object to extract
+    fields from") reported repeatedly against the deployed app on both start-agentic and
+    start-agentic-package. The Pydantic error's `input` field showed the body arriving as a
+    JSON *string* (e.g. '{"token":"..."}') rather than a parsed object — but this never
+    reproduced against this codebase via pytest, TestClient with a normal json= body, or
+    direct curl, only in the real browser-to-Phala round trip (which goes through a CORS
+    preflight and a dstack reverse proxy neither of those tools exercise). Rather than keep
+    chasing which hop re-wraps the body, _parse_agentic_start_body() now tolerates either
+    shape. This test sends the exact double-encoded shape from the bug reports directly —
+    a raw string body that itself is `{"token": "..."}` JSON-encoded again — and confirms the
+    endpoint still works instead of 422ing.
+    """
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+            "candidate_floor": 175000,
+        },
+    )
+    body = submit.json()
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 195000,
+              "employer_authority_limit": 195000},
+    )
+
+    from app.offercheck import store as offercheck_store
+    from app.offercheck.agents import mediator as mediator_module
+    session = offercheck_store.get_session(session_id)
+    candidate_agent, employer_agent = mediator_module.build_agents(session)
+    emp_effect = _scripted([{"action": "accept", "value": 190000, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "value": 190000, "reasoning": "x"}])
+
+    # A properly single-encoded body would be b'{"token": "..."}'. Here we encode it AGAIN,
+    # producing a raw body of b'"{\\"token\\": \\"...\\"}"' — a JSON string, not a JSON object —
+    # matching exactly what the production error's `input` field showed.
+    double_encoded = json.dumps(json.dumps({"token": candidate_token})).encode()
+
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.mediator.build_agents", return_value=(candidate_agent, employer_agent)):
+        resp = client.post(
+            f"/api/offercheck/sessions/{session_id}/start-agentic",
+            content=double_encoded,
+            headers={"Content-Type": "application/json"},
+        )
 
     assert resp.status_code == 200
     assert resp.json()["state"] == "AGREED"

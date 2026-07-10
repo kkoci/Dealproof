@@ -1,3 +1,4 @@
+@import './styles/tokens.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,8 +6,8 @@
 @layer base {
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    background-color: #0a0a0f;
-    color: #f3f4f6;
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
   }
 
   * {
@@ -30,7 +31,7 @@
 
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: #374151 transparent;
+    scrollbar-color: var(--color-border-strong) transparent;
   }
 
   .scrollbar-thin::-webkit-scrollbar {
@@ -42,7 +43,7 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #374151;
+    background-color: var(--color-border-strong);
     border-radius: 3px;
   }
 }

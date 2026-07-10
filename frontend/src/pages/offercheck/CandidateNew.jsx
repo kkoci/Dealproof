@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { offercheckParseOfferLetter, offercheckSubmit } from '../../api.js'
 
 const inputClass =
-  'w-full px-3 py-2.5 rounded-lg bg-gray-900/60 border border-gray-700/60 text-gray-200 placeholder-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all'
-const labelClass = 'block text-xs font-medium text-gray-400 mb-1.5'
+  'w-full px-3 py-2.5 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12] transition-all'
+const labelClass = 'block text-xs font-medium text-ink-secondary mb-1.5'
 
 export default function CandidateNew() {
   const navigate = useNavigate()
@@ -21,11 +21,13 @@ export default function CandidateNew() {
   const [submitting, setSubmitting] = useState(false)
   const [parsing, setParsing] = useState(false)
   const [parseNotice, setParseNotice] = useState(null)
+  const [isDemo, setIsDemo] = useState(false)
   const fileInputRef = useRef(null)
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
   const loadDemoData = () => {
+    setIsDemo(true)
     const startDate = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     setForm({
       company: 'Stripe',
@@ -84,8 +86,9 @@ export default function CandidateNew() {
         candidate_ask: Number(form.candidate_ask),
       }
       const result = await offercheckSubmit(body)
+      const employerLink = isDemo ? `${result.employer_link}&demo=1` : result.employer_link
       navigate(`/offercheck/candidate/${result.session_id}?token=${result.candidate_token}`, {
-        state: { justCreated: true, employerLink: result.employer_link, consistency: result.consistency },
+        state: { justCreated: true, employerLink, consistency: result.consistency },
       })
     } catch (err) {
       setError(err.message || 'Something went wrong')
@@ -98,26 +101,26 @@ export default function CandidateNew() {
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg mx-auto">
         <div className="flex items-start justify-between gap-3 mb-2">
-          <h1 className="text-2xl sm:text-3xl font-bold text-white">Your competing offer</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary">Your competing offer</h1>
           <button
             type="button"
             onClick={loadDemoData}
-            className="shrink-0 mt-1 px-2.5 py-1 rounded-md bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/50 text-gray-400 hover:text-gray-200 text-xs font-medium transition-all"
+            className="shrink-0 mt-1 px-2.5 py-1 rounded-md bg-bg-elevated hover:bg-border text-ink-secondary hover:text-ink-primary text-xs font-medium transition-all"
           >
             Load demo data
           </button>
         </div>
-        <p className="text-sm text-gray-500 mb-6">
+        <p className="text-sm text-ink-muted mb-6">
           These details stay private. The employer only ever sees a gap percentage.
         </p>
 
-        <div className="mb-6 p-4 rounded-xl bg-gray-900/40 border border-gray-800/40 border-dashed">
+        <div className="mb-6 p-4 rounded-xl bg-bg-surface border border-dashed border-border-strong">
           <label className="flex items-center justify-between gap-3 cursor-pointer">
             <div>
-              <p className="text-sm font-medium text-gray-200">Upload your offer letter (PDF)</p>
-              <p className="text-xs text-gray-500 mt-0.5">Optional — we'll prefill the fields below for you to review</p>
+              <p className="text-sm font-medium text-ink-primary">Upload your offer letter (PDF)</p>
+              <p className="text-xs text-ink-muted mt-0.5">Optional — we'll prefill the fields below for you to review</p>
             </div>
-            <span className="shrink-0 px-3 py-2 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 text-xs font-medium transition-all">
+            <span className="shrink-0 px-3 py-2 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-xs font-medium transition-all hover:bg-teal-subtle/70">
               {parsing ? 'Reading…' : 'Choose file'}
             </span>
             <input
@@ -130,13 +133,13 @@ export default function CandidateNew() {
             />
           </label>
           {parseNotice && (
-            <div className="mt-3 pt-3 border-t border-gray-800/60 text-xs">
-              <span className={`font-medium ${parseNotice.confidence === 'high' ? 'text-emerald-400' : parseNotice.confidence === 'medium' ? 'text-amber-400' : 'text-red-400'}`}>
+            <div className="mt-3 pt-3 border-t border-border text-xs">
+              <span className={`font-medium ${parseNotice.confidence === 'high' ? 'text-success' : parseNotice.confidence === 'medium' ? 'text-sealed' : 'text-danger'}`}>
                 {parseNotice.confidence} confidence extraction
               </span>
-              <span className="text-gray-500"> — double-check the fields below</span>
+              <span className="text-ink-muted"> — double-check the fields below</span>
               {parseNotice.notes?.length > 0 && (
-                <ul className="mt-1 list-disc list-inside text-gray-500 space-y-0.5">
+                <ul className="mt-1 list-disc list-inside text-ink-muted space-y-0.5">
                   {parseNotice.notes.map((n, i) => <li key={i}>{n}</li>)}
                 </ul>
               )}
@@ -176,17 +179,17 @@ export default function CandidateNew() {
             <input className={inputClass} type="date" value={form.start_date} onChange={update('start_date')} required />
           </div>
 
-          <div className="pt-2 border-t border-gray-800/60">
+          <div className="pt-2 border-t border-border">
             <label className={labelClass}>Your ask at this employer</label>
             <input className={inputClass} type="number" min="0" value={form.candidate_ask} onChange={update('candidate_ask')} placeholder="185000" required />
           </div>
 
-          <p className="text-xs text-gray-500 pt-2 border-t border-gray-800/60">
+          <p className="text-xs text-ink-muted pt-2 border-t border-border">
             You can enable AI negotiation from your session page after submitting.
           </p>
 
           {error && (
-            <div className="px-3 py-2 rounded-lg bg-red-950/40 border border-red-800/50 text-red-400 text-sm">
+            <div className="px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">
               {error}
             </div>
           )}
@@ -194,7 +197,7 @@ export default function CandidateNew() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all shadow-lg shadow-emerald-900/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full px-6 py-3 rounded-xl bg-teal hover:bg-teal-hover text-white font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? 'Submitting…' : 'Get my verification link'}
           </button>

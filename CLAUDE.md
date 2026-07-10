@@ -199,7 +199,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (268 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (276 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -215,9 +215,9 @@ tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + inge
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
-tests/test_offercheck_agentic.py 24  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, HTTP e2e
+tests/test_offercheck_agentic.py 25  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, query-token param rename regression, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
-tests/test_offercheck_package.py 35  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, HTTP e2e
+tests/test_offercheck_package.py 43  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, PATCH enable-agentic-package endpoints, converged_hint field, HTTP e2e
 tests/test_offercheck_rate_limit.py 10  Offer Check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 ```
 
@@ -267,6 +267,8 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P11 | Tests — `tests/test_offercheck_rate_limit.py` (10 tests) | ✅ Complete |
 | OC-P12 | Live negotiation transcript (agentic-mode round values exposed to both parties); post-creation "enable AI negotiation" opt-in (PATCH endpoints); package-mode `SessionView` sync bug fix | ✅ Complete |
 | OC-P13 | Tests — 11 new cases in `tests/test_offercheck_agentic.py`, 1 new case in `tests/test_offercheck_package.py` | ✅ Complete |
+| OC-P14 | Live 422 fix (query-param/body-field name collision in start-agentic routes); package-mode "enable AI negotiation" opt-in parity (2 new PATCH endpoints); full transcript UI pass (chat-bubble round history, live round counter + spinner, convergence hint); demo-link auto-prefill sync fix | ✅ Complete |
+| OC-P15 | Tests — 9 new cases across `tests/test_offercheck_package.py` and `tests/test_offercheck_agentic.py` | ✅ Complete |
 
 ---
 
@@ -862,6 +864,69 @@ stays `null` to the other party even after that same session later runs agentic 
 
 ---
 
+## Live 422 Fix, Package-Mode Opt-In Parity, Transcript UI Pass
+
+**The 422 bug** (found from a real production screenshot): `start_agentic_route`/
+`start_agentic_package_route` each had `body: AgenticStartRequest` (its own `token` field) *and* a
+bare `token: str | None = None` function parameter — a same-name collision between a body field and
+a query parameter. Production's error (`model_attributes_type`, "Input should be a valid dictionary
+or object to extract fields from", `input` = the raw JSON-string body) is the textbook symptom of a
+body resolving to a string instead of a parsed dict. Could not 100%-confirm root cause via
+exact-version reproduction (this dev machine runs Python 3.14; `requirements.txt` pins
+`pydantic==2.10.5`/`fastapi==0.115.6`, which has no prebuilt wheel for 3.14 — would need Python
+3.11–3.13 to match production exactly). Fixed regardless by renaming to
+`query_token: str | None = Query(default=None, alias="token")` — same external `?token=` contract,
+zero internal ambiguity with `body.token`. Confirmed via grep that nothing in the frontend ever
+actually sends `?token=` to either endpoint in practice (only the JSON body or `X-Demo-Token` header
+are used) — the bare parameter was dead weight creating an unforced collision, so this was a safe fix
+independent of whether it's the sole cause.
+
+**That rename alone did not fix it** — the identical 422 reproduced again on the live app after that
+fix was deployed. The bug never once reproduced in this codebase via pytest, `TestClient`, or direct
+curl, only in the real browser-to-Phala round trip, which goes through a CORS preflight and a dstack
+reverse proxy that none of those tools exercise — so the exact hop that re-wraps the body as a JSON
+string is still unconfirmed. Rather than keep guessing, `start_agentic_route`/
+`start_agentic_package_route` no longer let FastAPI auto-inject `body: AgenticStartRequest` at all;
+both now call `_parse_agentic_start_body(request)`, which reads the raw body and — if it comes back
+as a string instead of a dict — decodes it a second time before validating. This makes the endpoint
+correct regardless of where in the chain the double-encoding happens, without needing to isolate it.
+Verified live: a curl request sending the *exact* double-encoded shape from the production error
+(`json.dumps(json.dumps({"token": ...}))` as the raw body) now completes a real negotiation instead
+of 422ing. Locked in with `test_start_agentic_tolerates_a_double_json_encoded_body` in both
+`tests/test_offercheck_agentic.py` and `tests/test_offercheck_package.py`.
+
+**Package-mode opt-in parity** (`PATCH .../candidate/enable-agentic-package`, `PATCH
+.../employer/enable-agentic-package`) — genuinely new endpoints, not just UI wiring, despite the
+request describing it as "no new backend work needed." `package_agentic_ready` depends on
+`candidate_package_ask` (a full package object) which the scalar `enable-agentic` endpoints never
+touch, so reusing them literally couldn't have worked. The candidate endpoint asks the UI for one
+number (`candidate_total_comp_floor`) and synthesizes `candidate_package_ask` server-side from the
+already-known `candidate_ask` as `base` plus neutral defaults (`_DEFAULT_PACKAGE_TERMS` in
+`routes.py`) for every other term. The employer endpoint needs no synthesis — `PackageEmployerAgent`
+only needs `band_min`/`band_mid`/`band_max` (already set) plus the one new number,
+`employer_total_comp_budget`. Both follow the same single-set/409/412 discipline as the scalar
+endpoints. `SessionView.my_package_agentic_sealed` (viewer-scoped, mirrors `my_agentic_sealed`) lets
+each side's button hide itself once sealed.
+
+**Full transcript UI pass**: `RoundHistory` (chat-bubble — own moves right/teal, other party's
+left/grey, monospace) and `PackageRoundHistory` (the existing per-term comparison table, now reused
+for the *live* polled view, not just a just-completed result) replace the old plain-text round list
+in both session-view pages. `SessionView.package_converged_hint` reuses `package.is_converged()`/
+`total_comp_value()` — the same functions already feeding the agents' own prompts — to surface
+"within 2% of total comp — consider accepting" to the human UI too. `AgenticPanel`/
+`PackageAgenticPanel` now take `view` as a prop so the "Agents negotiating…" button shows a live
+round counter + spinner during the blocking call — real progress, since the mediator mutates session
+state each round and the independent polling loop keeps picking it up. Poll interval: 3000ms → 1500ms.
+
+**Demo-link sync fix**: an employer opening a candidate's shared link during a solo demo run saw a
+blank band form requiring a second, disconnected "Load demo data" click. The employer's band still
+can't be auto-filled from the candidate's real numbers (core privacy mechanic — gap% would always be
+0 otherwise), but for the demo-convenience path specifically: `CandidateNew.jsx` tags the generated
+employer link with `&demo=1` when demo data was used; `EmployerSession.jsx` detects the flag and
+auto-prefills (never auto-submits) the same independent demo band on load.
+
+---
+
 ## Deployment Notes
 
 **`docker-compose.phala.yml` is gitignored** — it contains production env var placeholders and must not be committed. The file lives only on disk and is uploaded manually to the Phala dashboard. After any change, rebuild and push only the app image:
@@ -1064,3 +1129,12 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/deals/run" -Conte
 | πCreds (Behavioral Integrity Credentials) | https://arxiv.org/pdf/2606.03771 |
 | Props (Data Provenance) | https://arxiv.org/pdf/2410.20522 |
 | NDAI (Negotiated Data Access) | https://arxiv.org/pdf/2502.07924 |
+
+
+---
+
+## Working style
+- Do not ask clarifying questions before starting work
+- Make reasonable assumptions and state them inline
+- Only ask if genuinely blocked with no reasonable assumption available
+- Prefer action over confirmation

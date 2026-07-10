@@ -524,3 +524,164 @@ def test_session_view_reflects_package_progress_after_agentic_run(client):
     post_candidate = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
     assert post_candidate["package_state"] == post_employer["package_state"]
     assert post_candidate["package_history"] == post_employer["package_history"]
+
+
+# ---------------------------------------------------------------------------
+# PATCH .../candidate/enable-agentic-package and .../employer/enable-agentic-package
+# ---------------------------------------------------------------------------
+
+def _unsealed_scalar_session_via_http(client):
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+        },
+    )
+    return submit.json()
+
+
+def test_enable_candidate_package_agentic_synthesizes_package_ask(client):
+    body = _unsealed_scalar_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/candidate/enable-agentic-package",
+        json={"token": body["candidate_token"], "candidate_total_comp_floor": 250000},
+    )
+    assert resp.status_code == 200
+    view = resp.json()
+    assert view["my_package_agentic_sealed"] is True
+    assert "250000" not in resp.text  # sealed floor never leaks
+
+    session = store.get_session(body["session_id"])
+    assert session.candidate_package_ask is not None
+    assert session.candidate_package_ask["base"] == 190000  # synthesized from candidate_ask
+
+
+def test_enable_candidate_package_agentic_wrong_token_403(client):
+    body = _unsealed_scalar_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/candidate/enable-agentic-package",
+        json={"token": "wrong-token", "candidate_total_comp_floor": 250000},
+    )
+    assert resp.status_code == 403
+
+
+def test_enable_candidate_package_agentic_already_sealed_409(client):
+    session_id, candidate_token, _ = _submit_package_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{session_id}/candidate/enable-agentic-package",
+        json={"token": candidate_token, "candidate_total_comp_floor": 300000},
+    )
+    assert resp.status_code == 409
+
+
+def test_enable_employer_package_agentic_succeeds(client):
+    body = _unsealed_scalar_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/band",
+        json={"employer_token": body["employer_token"], "band_min": 155000, "band_mid": 175000, "band_max": 195000},
+    )
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/enable-agentic-package",
+        json={"token": body["employer_token"], "employer_total_comp_budget": 300000},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["my_package_agentic_sealed"] is True
+    assert "300000" not in resp.text
+
+
+def test_enable_employer_package_agentic_before_band_set_412(client):
+    body = _unsealed_scalar_session_via_http(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{body['session_id']}/employer/enable-agentic-package",
+        json={"token": body["employer_token"], "employer_total_comp_budget": 300000},
+    )
+    assert resp.status_code == 412
+
+
+def test_post_creation_package_opt_in_reaches_ready_and_runs(client):
+    """Full FIX 1 flow: neither side seals package fields at creation/band time — both opt in
+    later via the new PATCH endpoints, package_agentic_ready flips true, and
+    start-agentic-package runs exactly as if sealed up front."""
+    body = _unsealed_scalar_session_via_http(client)
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 200000},
+    )
+    pre = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert pre["package_agentic_ready"] is False
+
+    client.patch(
+        f"/api/offercheck/sessions/{session_id}/candidate/enable-agentic-package",
+        json={"token": candidate_token, "candidate_total_comp_floor": 250000},
+    )
+    client.patch(
+        f"/api/offercheck/sessions/{session_id}/employer/enable-agentic-package",
+        json={"token": employer_token, "employer_total_comp_budget": 300000},
+    )
+    post = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert post["package_agentic_ready"] is True
+
+    session = store.get_session(session_id)
+    candidate_agent, employer_agent = package_mediator.build_package_agents(session)
+    emp_effect = _scripted([{"action": "accept", "package": None, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "package": _package(base=190000), "reasoning": "x"}])
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.package_mediator.build_package_agents", return_value=(candidate_agent, employer_agent)):
+        resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic-package", json={"token": candidate_token})
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "AGREED"
+
+
+def test_package_converged_hint_reflects_current_packages(client):
+    session_id, candidate_token, employer_token = _submit_package_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 200000,
+              "employer_total_comp_budget": 300000},
+    )
+    session = store.get_session(session_id)
+    # Nothing has countered yet — employer_current_package is None, hint must be false.
+    view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert view["package_converged_hint"] is False
+
+    # Manually set both current packages within 2% total comp and confirm the hint flips true.
+    session.candidate_current_package = _package(base=190000, equity_grant=150000, signing_bonus=20000, annual_bonus_pct=10)
+    session.employer_current_package = _package(base=189000, equity_grant=150000, signing_bonus=20000, annual_bonus_pct=10)
+    view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    assert view["package_converged_hint"] is True
+
+
+def test_start_agentic_package_tolerates_a_double_json_encoded_body(client):
+    """Package-mode counterpart to the scalar test of the same name in
+    tests/test_offercheck_agentic.py — see that test's docstring for the full bug context."""
+    session_id, candidate_token, employer_token = _submit_package_session_via_http(client)
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 200000,
+              "employer_total_comp_budget": 300000},
+    )
+
+    session = store.get_session(session_id)
+    candidate_agent, employer_agent = package_mediator.build_package_agents(session)
+    emp_effect = _scripted([{"action": "accept", "package": None, "reasoning": "fine"}])
+    cand_effect = _scripted([{"action": "counter", "package": _package(base=190000), "reasoning": "x"}])
+
+    double_encoded = json.dumps(json.dumps({"token": candidate_token})).encode()
+
+    with patch.object(employer_agent.client.messages, "create", side_effect=emp_effect), \
+         patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect), \
+         patch("app.offercheck.agents.package_mediator.build_package_agents", return_value=(candidate_agent, employer_agent)):
+        resp = client.post(
+            f"/api/offercheck/sessions/{session_id}/start-agentic-package",
+            content=double_encoded,
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "AGREED"

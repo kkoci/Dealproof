@@ -1490,6 +1490,67 @@ without sealing anything, PATCHed both `enable-agentic` endpoints, confirmed `ag
 true and no sealed value ever appeared in any response body; confirmed a human-driven round's `value`
 stays `null` to the other party even after the same session later runs agentic mode.
 
+### Live 422 fix, package-mode opt-in parity, and a full transcript UI pass
+
+Found via a real production screenshot (a live 422 on "Let agents negotiate"), plus a direct follow-up
+request once that was diagnosed: three more fixes, landed together.
+
+**The 422 bug.** `start_agentic_route`/`start_agentic_package_route` had both `body: AgenticStartRequest`
+(a Pydantic model with its own `token` field) *and* a bare `token: str | None = None` function
+parameter — an ambiguous same-name collision between a body field and a query parameter. The error
+seen in production (`model_attributes_type`, "Input should be a valid dictionary or object to extract
+fields from", with `input` being the raw JSON-string body) is the textbook symptom of a body getting
+resolved as a string instead of a parsed object. Couldn't 100%-confirm root cause via exact-version
+reproduction — this system runs Python 3.14, and the pinned `pydantic==2.10.5`/`fastapi==0.115.6` in
+`requirements.txt` has no prebuilt wheel for it (would need Python 3.11–3.13 to match production
+exactly) — but the fix is correct regardless: nothing in the frontend ever actually sends `?token=` to
+either endpoint (confirmed via grep — only the JSON body or `X-Demo-Token` header are used in practice),
+so the bare parameter was dead weight creating an unforced collision. Renamed to
+`query_token: str | None = Query(default=None, alias="token")` — same external `?token=` contract for
+demo-link URLs, zero ambiguity with `body.token` internally.
+
+**Package-mode opt-in parity.** The post-creation "Enable AI negotiation" opt-in shipped for scalar
+mode only; full-package mode lost its UI entry point as a side effect and had no way to reach
+`package_agentic_ready` post-creation. This needed two small **new** endpoints — not a pure UI wiring
+job, despite looking like one — because `package_agentic_ready` depends on `candidate_package_ask` (a
+full package object), which the scalar `enable-agentic` endpoints never touch. `PATCH
+.../candidate/enable-agentic-package` asks the UI for exactly one number (`candidate_total_comp_floor`)
+and synthesizes `candidate_package_ask` server-side from the candidate's already-known `candidate_ask`
+as `base` plus neutral defaults for every other term (0 equity/signing/bonus, 4yr vesting, hybrid,
+etc.) — the candidate never has to describe a full package to opt in. `PATCH
+.../employer/enable-agentic-package` needs no synthesis: `PackageEmployerAgent` only ever needs
+`band_min`/`band_mid`/`band_max` (already set) plus the one new number, `employer_total_comp_budget`.
+Both endpoints follow the exact same single-set/409/412 discipline as their scalar counterparts. A new
+`SessionView.my_package_agentic_sealed` (viewer-scoped, same pattern as `my_agentic_sealed`) lets each
+button hide itself once that party has sealed.
+
+**Full transcript UI pass.** `RoundHistory` (chat-bubble style — own moves right-aligned/teal, the
+other party's left-aligned/grey, monospace amounts) and `PackageRoundHistory` (the existing per-term
+comparison table, now reused for the *live* polled view, not just the just-completed result) replace
+the old plain-text round list in both `CandidateSession.jsx` and `EmployerSession.jsx`. A new
+`SessionView.package_converged_hint` (reusing `package.is_converged()`/`total_comp_value()` — the exact
+functions the agents' own prompts already use) surfaces "within 2% of total comp — consider accepting"
+to the human UI, not just inside agent prompts. The "Round X of 5" header now reflects whichever
+channel is actually active (`package_round_number` once `packageActive`, scalar otherwise — same
+precedence the earlier sync-bug fix established). `AgenticPanel`/`PackageAgenticPanel` now receive
+`view` as a prop, so the "Agents negotiating…" button shows a live round counter and spinner while the
+blocking negotiation call is in flight — the polling loop keeps running independently and the mediator
+mutates session state progressively as each round completes, so this is real progress, not a fake
+timer. Poll interval dropped from 3000ms to 1500ms across both pages.
+
+**Demo-link sync fix.** A related but separate complaint: an employer opening a candidate's shared
+link during a solo demo run saw a blank band form and had to click a second, independent "Load demo
+data" button with its own hardcoded numbers — confusing, and not actually connected to what the
+candidate had entered. The employer's band is deliberately never auto-filled from the candidate's real
+numbers (that's the core privacy mechanic — if it were, gap% would always be 0), but for the *demo*
+convenience path specifically: `CandidateNew.jsx`'s "Load demo data" now tags the generated employer
+link with `&demo=1`; `EmployerSession.jsx` detects that flag and auto-prefills (never auto-submits) the
+same independent demo band on page load, so a solo demo run doesn't need a second manual click.
+
+Verified live: package-mode PATCH endpoints confirmed via curl (both flip `package_agentic_ready` true,
+no sealed value ever appears in any response body); full pytest suite at 276 passed, 2 skipped, same 3
+pre-existing unrelated `test_e2e.py` failures.
+
 ---
 
 ## ETHGlobal NYC — TinyCloud Demo Flow

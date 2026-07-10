@@ -1,0 +1,56 @@
+/* Offer Check colour system v3 — see offercheck_colour_system_v3.md at repo root.
+   Logo teal (#0D9488) + logo navy (#0F172A) are the two anchors everything else derives from. */
+:root {
+  /* Backgrounds */
+  --color-bg-primary: #F8FAFC;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-elevated: #F1F5F9;
+  --color-bg-input: #FFFFFF;
+
+  /* Text */
+  --color-text-primary: #0F172A;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94A3B8;
+  --color-text-inverse: #FFFFFF;
+
+  /* Borders */
+  --color-border-default: #E2E8F0;
+  --color-border-strong: #CBD5E1;
+  --color-border-accent: #0D9488;
+
+  /* Brand teal */
+  --color-teal: #0D9488;
+  --color-teal-hover: #0F766E;
+  --color-teal-subtle: #F0FDFA;
+  --color-teal-border: #99F6E4;
+  --color-teal-text: #134E4A;
+
+  /* Sealed / private */
+  --color-sealed: #D97706;
+  --color-sealed-subtle: #FFFBEB;
+  --color-sealed-border: #FCD34D;
+  --color-sealed-text: #92400E;
+  --color-sealed-icon: #D97706;
+
+  /* Success / accept */
+  --color-success: #059669;
+  --color-success-hover: #047857;
+  --color-success-subtle: #ECFDF5;
+  --color-success-text: #064E3B;
+
+  /* Danger / walk away */
+  --color-danger: #DC2626;
+  --color-danger-hover: #B91C1C;
+  --color-danger-subtle: #FEF2F2;
+  --color-danger-text: #7F1D1D;
+
+  /* Gap indicator */
+  --color-gap-large: #D97706;
+  --color-gap-closing: #059669;
+  --color-gap-zero: #0D9488;
+
+  /* Neutral */
+  --color-neutral: #64748B;
+  --color-neutral-hover: #475569;
+  --color-neutral-subtle: #F8FAFC;
+}

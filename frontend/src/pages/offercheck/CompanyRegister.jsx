@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { offercheckRegisterCompany } from '../../api.js'
 
 const inputClass =
-  'w-full px-3 py-2.5 rounded-lg bg-gray-900/60 border border-gray-700/60 text-gray-200 placeholder-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all'
-const labelClass = 'block text-xs font-medium text-gray-400 mb-1.5'
+  'w-full px-3 py-2.5 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12] transition-all'
+const labelClass = 'block text-xs font-medium text-ink-secondary mb-1.5'
 
 export default function CompanyRegister() {
   const navigate = useNavigate()
@@ -41,18 +41,18 @@ export default function CompanyRegister() {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
         <div className="w-full max-w-lg mx-auto">
-          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">You're registered</h1>
-          <p className="text-sm text-amber-400 mb-6">
-            Save this API key now — it's shown exactly once and cannot be recovered.
+          <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">You're registered</h1>
+          <p className="text-sm text-sealed-text mb-6">
+            🔒 Save this API key now — it's shown exactly once and cannot be recovered.
           </p>
 
-          <div className="p-4 rounded-xl bg-gray-900/40 border border-gray-800/40 mb-4">
-            <p className="text-xs text-gray-500 mb-2">Your API key</p>
+          <div className="p-4 rounded-xl bg-sealed-subtle border border-dashed border-sealed-border mb-4">
+            <p className="text-xs text-sealed-text mb-2">Your API key</p>
             <div className="flex gap-2">
               <input
                 readOnly
                 value={result.api_key}
-                className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-gray-950/60 border border-gray-700/60 text-gray-300 text-xs font-mono"
+                className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-white border border-sealed-border text-sealed-text text-xs font-mono"
                 onFocus={(e) => e.target.select()}
               />
               <button
@@ -60,15 +60,15 @@ export default function CompanyRegister() {
                   navigator.clipboard?.writeText(result.api_key)
                   setCopied(true)
                 }}
-                className="px-3 py-2 rounded-lg bg-gray-700/60 hover:bg-gray-600/60 text-gray-200 text-xs font-medium transition-all"
+                className="px-3 py-2 rounded-lg bg-teal-subtle border-[1.5px] border-teal hover:bg-teal-subtle/70 text-teal text-xs font-medium transition-all"
               >
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-gray-900/40 border border-gray-800/40 mb-6 text-sm text-gray-400">
-            Recommended plan: <span className="text-gray-200 font-medium">{result.recommended_plan}</span>
+          <div className="p-4 rounded-xl bg-bg-surface border border-border mb-6 text-sm text-ink-secondary" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+            Recommended plan: <span className="text-ink-primary font-medium">{result.recommended_plan}</span>
             {' — '}
             {result.pricing.price_usd != null
               ? `$${result.pricing.price_usd} ${result.pricing.billing_period === 'monthly' ? '/month' : 'per verification'}`
@@ -77,7 +77,7 @@ export default function CompanyRegister() {
 
           <button
             onClick={goToDashboard}
-            className="w-full px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all"
+            className="w-full px-6 py-3 rounded-xl bg-teal hover:bg-teal-hover text-white font-semibold text-sm transition-all"
           >
             Go to dashboard
           </button>
@@ -89,8 +89,8 @@ export default function CompanyRegister() {
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Register your company</h1>
-        <p className="text-sm text-gray-500 mb-8">
+        <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Register your company</h1>
+        <p className="text-sm text-ink-muted mb-8">
           Get an API key for bulk verification and the TA dashboard.
         </p>
 
@@ -112,13 +112,13 @@ export default function CompanyRegister() {
           </div>
 
           {error && (
-            <div className="px-3 py-2 rounded-lg bg-red-950/40 border border-red-800/50 text-red-400 text-sm">{error}</div>
+            <div className="px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>
           )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="w-full px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all disabled:opacity-50"
+            className="w-full px-6 py-3 rounded-xl bg-teal hover:bg-teal-hover text-white font-semibold text-sm transition-all disabled:opacity-50"
           >
             {submitting ? 'Registering…' : 'Register'}
           </button>

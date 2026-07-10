@@ -109,6 +109,28 @@ class EmployerEnableAgenticRequest(BaseModel):
     employer_priorities: str | None = None
 
 
+class CandidateEnablePackageAgenticRequest(BaseModel):
+    """
+    Package-mode counterpart to CandidateEnableAgenticRequest — seals candidate_total_comp_floor
+    (the only number the UI asks for) after session creation. candidate_package_ask (the full
+    opening package PackageCandidateAgent needs) is synthesized server-side from the candidate's
+    existing candidate_ask as base plus neutral defaults for every other term — see
+    routes.py::enable_candidate_package_agentic for the exact defaults.
+    """
+    token: str
+    candidate_total_comp_floor: float = Field(gt=0)
+    candidate_package_priorities: str | None = None
+
+
+class EmployerEnablePackageAgenticRequest(BaseModel):
+    """Package-mode counterpart to EmployerEnableAgenticRequest — seals employer_total_comp_budget
+    after the band has already been set. Unlike the candidate side, no package synthesis is needed
+    here — PackageEmployerAgent only ever needs band_min/mid/max (already set) + this budget."""
+    token: str
+    employer_total_comp_budget: float = Field(gt=0)
+    employer_priorities: str | None = None
+
+
 class MoveRequest(BaseModel):
     token: str
     move: Move
@@ -224,6 +246,8 @@ class SessionView(BaseModel):
     package_turn: Actor | None = None  # None when package_state is terminal
     package_history: list[PackageRoundDetail] = Field(default_factory=list)
     package_agreed_package: OfferPackage | None = None
+    my_package_agentic_sealed: bool = False  # viewer's own side has sealed candidate_total_comp_floor / employer_total_comp_budget
+    package_converged_hint: bool = False  # candidate/employer current packages are within 2% total comp — same threshold package_mediator uses to nudge agents toward accepting
 
 
 # ---------------------------------------------------------------------------

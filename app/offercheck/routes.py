@@ -40,10 +40,11 @@ endpoint — currently only start-agentic — requires either a valid party
 token OR a valid X-Demo-Token. No exceptions; any future agent-calling
 endpoint must add the same check.
 """
+import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from app.config import settings
 from app.offercheck import auth, billing, credential, demo_auth, negotiation, package, parsing, rate_limit, store, verifier
@@ -62,6 +63,7 @@ from app.offercheck.schemas import (
     BulkVerifyResponse,
     BulkVerifyResult,
     CandidateEnableAgenticRequest,
+    CandidateEnablePackageAgenticRequest,
     CandidateSubmitRequest,
     CandidateSubmitResponse,
     CompanyRegisterRequest,
@@ -75,6 +77,7 @@ from app.offercheck.schemas import (
     EmployerBandRequest,
     EmployerBandResponse,
     EmployerEnableAgenticRequest,
+    EmployerEnablePackageAgenticRequest,
     ExtractedOfferFields,
     MoveRequest,
     OfferLetterExtraction,
@@ -178,6 +181,19 @@ def _view_for(session: Session, viewer: str) -> SessionView:
             for r in session.package_history
         ],
         package_agreed_package=OfferPackage(**session.package_agreed) if session.package_agreed else None,
+        my_package_agentic_sealed=(
+            session.candidate_total_comp_floor is not None
+            if viewer == "candidate"
+            else session.employer_total_comp_budget is not None
+        ),
+        package_converged_hint=(
+            session.candidate_current_package is not None
+            and session.employer_current_package is not None
+            and package.is_converged(
+                package.total_comp_value(session.candidate_current_package),
+                package.total_comp_value(session.employer_current_package),
+            )
+        ),
     )
 
 
@@ -454,6 +470,56 @@ async def enable_employer_agentic(session_id: str, body: EmployerEnableAgenticRe
     return _view_for(session, "employer")
 
 
+_DEFAULT_PACKAGE_TERMS = {
+    "equity_grant": 0.0, "vesting_years": 4.0, "cliff_months": 12.0, "signing_bonus": 0.0,
+    "annual_bonus_pct": 0.0, "remote": "hybrid", "start_date_days": 30.0, "pto_days": 15.0,
+}
+
+
+@router.patch("/sessions/{session_id}/candidate/enable-agentic-package", response_model=SessionView)
+async def enable_candidate_package_agentic(session_id: str, body: CandidateEnablePackageAgenticRequest) -> SessionView:
+    """
+    Package-mode counterpart to enable_candidate_agentic. The UI only asks for one number
+    (candidate_total_comp_floor) — candidate_package_ask (the full opening package
+    PackageCandidateAgent needs) is synthesized here from session.candidate_ask as `base` plus
+    neutral defaults (_DEFAULT_PACKAGE_TERMS) for every other term, only if not already set by
+    an earlier creation-time submission. Single-set otherwise, same "sealed" contract as the
+    scalar version.
+    """
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+    if session.state in negotiation.TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail="session is already terminal")
+    if session.candidate_total_comp_floor is not None:
+        raise HTTPException(status_code=409, detail="candidate has already sealed package agentic negotiation for this session")
+    session.candidate_total_comp_floor = body.candidate_total_comp_floor
+    session.candidate_package_priorities = body.candidate_package_priorities
+    if session.candidate_package_ask is None:
+        session.candidate_package_ask = {"base": session.candidate_ask, **_DEFAULT_PACKAGE_TERMS}
+        session.candidate_current_package = session.candidate_package_ask
+    return _view_for(session, "candidate")
+
+
+@router.patch("/sessions/{session_id}/employer/enable-agentic-package", response_model=SessionView)
+async def enable_employer_package_agentic(session_id: str, body: EmployerEnablePackageAgenticRequest) -> SessionView:
+    """Package-mode counterpart to enable_employer_agentic — seals employer_total_comp_budget.
+    No synthesis needed here: PackageEmployerAgent only ever needs band_min/mid/max (already set
+    at band-submission time) plus this budget."""
+    session = _get_session_or_404(session_id)
+    if body.token != session.employer_token:
+        raise HTTPException(status_code=403, detail="invalid employer token")
+    if session.state in negotiation.TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail="session is already terminal")
+    if not session.band_set:
+        raise HTTPException(status_code=412, detail="employer must submit their salary band first")
+    if session.employer_total_comp_budget is not None:
+        raise HTTPException(status_code=409, detail="employer has already sealed package agentic negotiation for this session")
+    session.employer_total_comp_budget = body.employer_total_comp_budget
+    session.employer_priorities = body.employer_priorities or session.employer_priorities
+    return _view_for(session, "employer")
+
+
 @router.get("/sessions/{session_id}", response_model=SessionView)
 async def get_session_view(session_id: str, token: str) -> SessionView:
     session = _get_session_or_404(session_id)
@@ -662,13 +728,43 @@ def _authorize_agentic_call(session: Session, party_token: str | None, demo_toke
     raise HTTPException(status_code=401, detail="a valid party token or demo token is required")
 
 
+async def _parse_agentic_start_body(request: Request) -> AgenticStartRequest:
+    """
+    Manually parses + validates the request body for start-agentic(-package) instead of
+    letting FastAPI auto-inject it as a `body: AgenticStartRequest` parameter.
+
+    Why: a live 422 ("Input should be a valid dictionary or object to extract fields from")
+    on these two endpoints specifically was reported repeatedly from the deployed app — the
+    body Pydantic received was a JSON *string* (`'{"token":"..."}'`) instead of a parsed
+    object. It never reproduced against this codebase in pytest, TestClient, or direct curl —
+    only in the real browser-to-Phala round trip, which involves a CORS preflight and a
+    dstack reverse proxy neither of those tools exercise. Rather than keep guessing at which
+    hop in that chain re-wraps the body, parse it manually here and tolerate either shape:
+    a normal dict, or a JSON string that itself decodes to the dict. This is strictly more
+    permissive than FastAPI's default body injection, not a behavior change for any client
+    that was already sending a correctly-encoded body.
+    """
+    raw = await request.body()
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="request body is not valid JSON")
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="request body is not valid JSON")
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="request body must be a JSON object")
+    return AgenticStartRequest.model_validate(parsed)
+
+
 @router.post("/sessions/{session_id}/start-agentic", response_model=AgenticResult)
 async def start_agentic_route(
     session_id: str,
-    body: AgenticStartRequest,
     request: Request,
     x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
-    token: str | None = None,
+    query_token: str | None = Query(default=None, alias="token"),
 ) -> AgenticResult:
     """
     Phase 2A (offercheck_phase2_spec.md): runs CandidateAgent vs EmployerAgent
@@ -685,8 +781,9 @@ async def start_agentic_route(
     alone isn't enough since it resets on a fresh session (see rate_limit.py).
     """
     rate_limit.check_agentic_call(request)
+    body = await _parse_agentic_start_body(request)
     session = _get_session_or_404(session_id)
-    _authorize_agentic_call(session, body.token, x_demo_token or token)
+    _authorize_agentic_call(session, body.token, x_demo_token or query_token)
 
     try:
         candidate_agent, employer_agent = mediator.build_agents(session)
@@ -754,10 +851,9 @@ async def verify_demo_token_route(token: str, session: str) -> VerifyTokenRespon
 @router.post("/sessions/{session_id}/start-agentic-package", response_model=PackageAgenticResult)
 async def start_agentic_package_route(
     session_id: str,
-    body: AgenticStartRequest,
     request: Request,
     x_demo_token: str | None = Header(default=None, alias="X-Demo-Token"),
-    token: str | None = None,
+    query_token: str | None = Query(default=None, alias="token"),
 ) -> PackageAgenticResult:
     """
     Phase 2B (offercheck_phase2_spec.md): runs PackageCandidateAgent vs
@@ -779,8 +875,9 @@ async def start_agentic_package_route(
     against the same per-session Claude-call spend cap and per-IP rate limit.
     """
     rate_limit.check_agentic_call(request)
+    body = await _parse_agentic_start_body(request)
     session = _get_session_or_404(session_id)
-    _authorize_agentic_call(session, body.token, x_demo_token or token)
+    _authorize_agentic_call(session, body.token, x_demo_token or query_token)
 
     try:
         candidate_agent, employer_agent = package_mediator.build_package_agents(session)
