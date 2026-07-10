@@ -190,11 +190,12 @@ tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_agentrail.py       8   Agent Rail Phase 1: sealed-value isolation (prompt + transcript), negotiation outcomes, verify_quote
+tests/test_agentrail_api.py   5   Agent Rail Phase 2: POST/GET deal lifecycle over TestClient, live polling, 404/409, failure→"failed" not 500
 ```
 
 Note: as of this branch, `pytest tests/` reports 3 pre-existing failures in `tests/test_e2e.py`
 (sign_result mock returns a real sim_quote instead of the patched value) unrelated to Agent Rail —
-present before `app/agentrail/` was added. `tests/test_agentrail.py` passes 8/8 in isolation.
+present before `app/agentrail/` was added. `tests/test_agentrail*.py` pass 13/13 in isolation.
 
 **Resilience guarantees:**
 - Memory sidecar down → deal proceeds, `memory_attested: false`
@@ -443,13 +444,13 @@ with a supplier's agent, DealProof runs both inside the same TDX enclave with se
 mutually-invisible instructions, so neither principal (nor the platform operator) can see
 the other side's private parameters — only the attested outcome exits.
 
-### Phase 1 (current) — CLI-only, no API, no frontend, no persistence
+### Phase 1 — CLI-only negotiation engine (complete)
 
 ```
 app/agentrail/buyer_agent.py      BuyerAgent — sealed budget_ceiling, min_spec, urgency; opens negotiation
 app/agentrail/supplier_agent.py   SupplierAgent — sealed floor_price_bulk/standard, inventory, lead_time_days
 app/agentrail/mediator.py         run_procurement_negotiation() — buyer-opens loop, mirrors app/agents/negotiation.py shape
-app/agentrail/schemas.py          BuyerParameters, SupplierParameters, ProcurementRound, ProcurementResult
+app/agentrail/schemas.py          BuyerParameters, SupplierParameters, ProcurementRound, ProcurementResult (dataclasses)
 app/agentrail/verify_quote.py     verify_quote() — structural DCAP check, reuses TD Report Body offsets from app/tee/attestation.py
 demo_agentrail.py                 CLI demo — industrial sensor scenario (500 units, $45 buyer ceiling, $38 supplier floor)
 contracts/AgentDealEscrow.sol     Stub only — do not implement deposit/release/refund until Phase 3
@@ -477,19 +478,64 @@ separate TEE client for Agent Rail.
 
 Attestation payload for Agent Rail deals: `{final_price, final_quantity, terms}` — no
 `data_hash`/`memory_hash` fields (Props and Contexto memory are DealProof-core-only
-concepts and out of scope for Phase 1 procurement deals).
+concepts and out of scope for procurement deals).
 
-### What NOT to build yet (Phase 1)
-No frontend, no auth, no persistent storage, no API endpoints, no multi-tenant support.
-`contracts/AgentDealEscrow.sol` is a stub — do not wire it to the negotiation flow.
-OAuth3/UCAN delegation and πCreds conduct credentials are explicitly Phase 3 — do not
-pre-build them (see `build_spec_agent_rail.md` § Architectural Decisions).
+### Phase 2 — API + shareable frontend (complete)
 
-### Next phases
-Phase 2 (after Phase 1 validation): FastAPI endpoints (`POST /deal/create`, `GET /deal/:id`,
-`GET /deal/:id/attest`) + a minimal single-page frontend, deployed to Phala Cloud, no login.
-Phase 3 (after ≥2 external "I want to use this" signals): OAuth3 principal registration,
-full `AgentDealEscrow.sol` implementation, πCreds conduct credential on deal completion.
+```
+app/agentrail/api_schemas.py      Pydantic request/response models — separate from schemas.py's dataclasses,
+                                   mirroring the app/api/schemas.py vs app/agents split in core
+app/agentrail/store.py            In-memory dict deal store (no DB, per spec — demo-mode only, lost on restart)
+app/agentrail/routes.py           APIRouter(prefix="/api/agentrail") — wired into app/main.py alongside core `router`
+  POST /api/agentrail/deals              sealed buyer+supplier params → 201 {deal_id, status: "negotiating"}
+  GET  /api/agentrail/deals/{id}         poll status; transcript fills in live as rounds complete
+  GET  /api/agentrail/deals/{id}/attest  DCAP receipt (409 until status == "agreed")
+frontend/src/pages/agentrail/AgentRailDemo.jsx   single page, 3 internal states: setup → negotiating → result
+frontend/src/api.js               + createAgentRailDeal / getAgentRailDeal / getAgentRailAttestation
+frontend/src/App.jsx              + "/agent-rail" route and NavBar link (additive — core deal-room routes untouched)
+tests/test_agentrail_api.py       Full create→poll→attest lifecycle over TestClient, 404s, 409, failure→"failed" not 500
+```
+
+**Negotiation runs as a background `asyncio.create_task`, not inline in the request handler**
+(unlike DealProof core's `POST /api/deals/run`, which awaits the full negotiation before
+responding). `POST /api/agentrail/deals` returns immediately with `status: "negotiating"`;
+the frontend polls `GET /api/agentrail/deals/{id}` every ~1.2s. This is what makes the
+"live negotiation view" in the spec possible without websockets — there's no websocket infra
+in this repo and the spec doesn't call for one.
+
+**`run_procurement_negotiation()` gained an `on_round` callback** (see `mediator.py`) — awaited
+right after each round is appended to the transcript. `routes.py` uses it to push into
+`store.append_round()` so `GET /api/agentrail/deals/{id}` reflects rounds as they happen. Phase 1's
+`demo_agentrail.py` still works unchanged — `on_round` defaults to `None`.
+
+**No nav strip for this vertical.** Unlike SOC2/Dev Credential/Fundraising (see
+`feedback-vertical-nav` guidance elsewhere in this repo's history), Agent Rail was added as
+an *additional* route (`/agent-rail`) with a NavBar link — the core deal-room UI (`/`, `/create`,
+`/deal/:id`) was left intact. No `NAV_FIX_agentrail.md` brief has been given; if one arrives,
+follow it (strip to standalone) rather than this note.
+
+**Testing background-task endpoints:** `TestClient(app)` must be used as a context manager
+(`with TestClient(app) as client:`) so its portal thread's event loop keeps the
+`asyncio.create_task` negotiation running between requests — poll with real `time.sleep()`,
+not by awaiting anything, since the test itself is synchronous. See `_poll_until_done()` in
+`tests/test_agentrail_api.py`. Mocking `anthropic.AsyncAnthropic` per-agent doesn't work here
+(`BuyerAgent`/`SupplierAgent` are constructed inside the route handler, and both modules share
+the same `anthropic` module object, so two separate class-level patches clobber each other) —
+patch once and dispatch on the distinct opening line of each agent's system prompt instead
+(`"You are a procurement supplier"` vs. buyer's prompt, which itself contains the substring
+"supplier agent" later on — match on the prompt's start, not `in`).
+
+### What NOT to build yet
+No auth, no persistent storage (Phase 2's in-memory store is explicitly demo-only), no
+multi-tenant support. `contracts/AgentDealEscrow.sol` is still a stub — do not wire it to the
+negotiation flow. OAuth3/UCAN delegation and πCreds conduct credentials are explicitly Phase 3
+— do not pre-build them (see `build_spec_agent_rail.md` § Architectural Decisions).
+
+### Next phase
+Phase 3 (only after ≥2 external "I want to use this" signals, per the spec — do not self-initiate):
+OAuth3 principal registration/delegation, full `AgentDealEscrow.sol` implementation
+(deposit → negotiate → release/refund/dispute), πCreds conduct credential on deal completion,
+SQLite persistence for the deal store.
 
 ---
 

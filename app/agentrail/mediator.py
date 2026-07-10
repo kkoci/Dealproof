@@ -16,6 +16,7 @@ buyer moving first (procurement convention: buyer issues the RFQ/proposal,
 supplier responds) instead of the seller-opens pattern used for data deals.
 """
 import logging
+from typing import Awaitable, Callable
 
 from app.agentrail.buyer_agent import BuyerAgent
 from app.agentrail.supplier_agent import SupplierAgent
@@ -23,6 +24,8 @@ from app.agentrail.schemas import ProcurementRound, ProcurementResult
 from app.tee.attestation import sign_result
 
 logger = logging.getLogger(__name__)
+
+OnRoundCallback = Callable[[ProcurementRound], Awaitable[None]]
 
 
 def _normalise_action(response: dict, valid: set[str], default: str) -> dict:
@@ -50,7 +53,14 @@ async def run_procurement_negotiation(
     buyer: BuyerAgent,
     supplier: SupplierAgent,
     max_rounds: int = 5,
+    on_round: OnRoundCallback | None = None,
 ) -> ProcurementResult:
+    """
+    `on_round`, when provided, is awaited with each ProcurementRound right after
+    it's appended to the transcript — Phase 2's API layer uses this to update
+    the in-memory deal store live, so GET /api/agentrail/deals/{id} reflects
+    rounds as they complete rather than only once the negotiation finishes.
+    """
     history: list[dict] = []
     transcript: list[ProcurementRound] = []
     buyer_action: dict = {}
@@ -70,8 +80,11 @@ async def run_procurement_negotiation(
                 buyer_action, valid={"accept", "counter", "reject"}, default="counter"
             )
         logger.info(f"Buyer action: {buyer_action}")
-        transcript.append(_round(round_num, "buyer", buyer_action))
+        buyer_round = _round(round_num, "buyer", buyer_action)
+        transcript.append(buyer_round)
         history.append({"role": "buyer", "content": buyer_action})
+        if on_round is not None:
+            await on_round(buyer_round)
 
         if buyer_action["action"] == "reject":
             logger.info("Buyer rejected. No deal.")
@@ -88,8 +101,11 @@ async def run_procurement_negotiation(
             supplier_action, valid={"accept", "counter", "reject"}, default="counter"
         )
         logger.info(f"Supplier action: {supplier_action}")
-        transcript.append(_round(round_num, "supplier", supplier_action))
+        supplier_round = _round(round_num, "supplier", supplier_action)
+        transcript.append(supplier_round)
         history.append({"role": "supplier", "content": supplier_action})
+        if on_round is not None:
+            await on_round(supplier_round)
 
         if supplier_action["action"] == "reject":
             logger.info("Supplier rejected. No deal.")

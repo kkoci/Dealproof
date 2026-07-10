@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.agentrail.routes import router as agentrail_router
 from app.config import settings
 import app.db as db
 
@@ -49,6 +50,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(agentrail_router)
 
 
 @app.get("/health")

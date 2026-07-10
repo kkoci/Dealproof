@@ -104,3 +104,37 @@ export function getDcapVerification(id) {
 export function getDealVerification(id) {
   return request(`/api/deals/${id}/verification`)
 }
+
+// ---------------------------------------------------------------------------
+// Agent Rail — B2B procurement deal room (Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/agentrail/deals — sealed buyer + supplier parameters, starts negotiation
+ * @param {{buyer: object, supplier: object, max_rounds?: number}} body
+ * @returns {Promise<{deal_id: string, status: string}>}
+ */
+export function createAgentRailDeal(body) {
+  return request('/api/agentrail/deals', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/agentrail/deals/:id — poll live negotiation status + transcript
+ * @param {string} id
+ * @returns {Promise<object>}
+ */
+export function getAgentRailDeal(id) {
+  return request(`/api/agentrail/deals/${id}`)
+}
+
+/**
+ * GET /api/agentrail/deals/:id/attest — DCAP attestation receipt (only once agreed)
+ * @param {string} id
+ * @returns {Promise<object>}
+ */
+export function getAgentRailAttestation(id) {
+  return request(`/api/agentrail/deals/${id}/attest`)
+}

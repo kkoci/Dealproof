@@ -1110,8 +1110,8 @@ Dealproof/
 | M9 | ETHGlobal NYC prize submission copy — ETHGLOBAL_SUBMISSIONS.md | ✅ Complete |
 | **Agent Rail** | **B2B Agent × Agent Deal Room** (`build_spec_agent_rail.md`) | |
 | AR-1 | Phase 1 — CLI procurement demo: sealed buyer/supplier agents, mediator loop, DCAP attestation, escrow stub | ✅ Complete |
-| AR-2 | Phase 2 — Shareable web demo (API + frontend, deployed to Phala Cloud) | 🔜 Pending |
-| AR-3 | Phase 3 — Production: OAuth3 principal delegation, full escrow, πCreds conduct credential | 🔜 Pending |
+| AR-2 | Phase 2 — Shareable web demo: `POST/GET /api/agentrail/deals`, live-polling React page, no login | ✅ Complete |
+| AR-3 | Phase 3 — Production: OAuth3 principal delegation, full escrow, πCreds conduct credential | 🔜 Pending (needs ≥2 external validation signals first) |
 
 ---
 
@@ -1119,7 +1119,7 @@ Dealproof/
 
 When a company's AI procurement agent negotiates with a supplier's AI agent, the platform operator can normally see everything, and neither principal can verify what instructions the opposing agent was given. Agent Rail runs both agents inside the same TDX enclave as DealProof core — each with sealed instructions the other side and the operator never see — and produces a hardware-signed attestation over the agreed terms. Only the outcome exits the enclave; the buyer's budget ceiling and the supplier's price floor never do.
 
-**Phase 1 (current)** is a CLI-only proof of the trust primitive — no frontend, no API, no persistence:
+**Phase 1** is a CLI-only proof of the trust primitive — no frontend, no API, no persistence:
 
 ```
 app/agentrail/
@@ -1140,7 +1140,25 @@ python demo_agentrail.py
 
 The demo negotiates 500 industrial sensors between a buyer (budget ceiling $45/unit, IP67 + 12-month warranty) and a supplier (floor $38/unit for bulk orders, 800-unit inventory), prints every round, and closes with a DCAP attestation receipt plus an explicit leak check confirming neither sealed value appeared anywhere in the transcript. Reuses `app.tee.attestation.sign_result` from DealProof core — no separate attestation stack.
 
-See `build_spec_agent_rail.md` for the full phased spec (Phase 2: shareable web demo; Phase 3: production auth + escrow + πCreds).
+**Phase 2** adds a shareable, no-login web demo on top of the same engine:
+
+```
+app/agentrail/
+├── api_schemas.py       Pydantic request/response models (buyer/supplier params never echoed back)
+├── store.py             In-memory deal store — demo mode only, no DB
+└── routes.py            POST/GET under /api/agentrail — mounted in app/main.py
+
+frontend/src/pages/agentrail/AgentRailDemo.jsx   single page: setup → live negotiation → result
+```
+
+```bash
+uvicorn app.main:app --reload      # backend on :8000
+cd frontend && npm run dev         # frontend on :5173 → /agent-rail
+```
+
+`POST /api/agentrail/deals` returns immediately (`status: "negotiating"`) and runs the negotiation as a background task; the frontend polls `GET /api/agentrail/deals/{id}` every ~1.2s so rounds appear live as agents produce them — no websockets. `GET /api/agentrail/deals/{id}/attest` returns the DCAP receipt once a deal reaches `agreed`. Same sealed-parameter guarantee as Phase 1: the API never echoes the buyer's budget ceiling or the supplier's floor prices back in any response.
+
+See `build_spec_agent_rail.md` for the full phased spec (Phase 3: OAuth3 principal delegation, full escrow, πCreds — gated on external validation, not started).
 
 ---
 
