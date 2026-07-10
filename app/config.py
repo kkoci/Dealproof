@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     private_key: str = ""
     contract_address: str = ""
 
+    # Agent Rail escrow (Phase 3) — separate contract/address from DealProof.sol above;
+    # shares rpc_url/private_key since those are chain-level, not contract-specific.
+    # Not deployed to any live network as of Phase 3 — see contracts/src/AgentDealEscrow.sol.
+    agentrail_contract_address: str = ""
+
     # Memory sidecar
     memory_service_url: str = "http://localhost:4011"
     openai_api_key: str = ""

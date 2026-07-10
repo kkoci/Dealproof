@@ -31,6 +31,14 @@ class DealRecord:
     terms: dict | None = None
     attestation: str | None = None
     error: str | None = None
+    # Phase 3 — conduct credential (redacted, see app/agentrail/credential.py) and escrow.
+    # credential/picreds_hash are computed from buyer_ceiling/floor_price while those are
+    # still in scope inside the background task; the raw sealed values themselves are
+    # never stored here.
+    credential: dict | None = None
+    picreds_hash: str | None = None
+    escrow_tx: str | None = None
+    settlement_tx: str | None = None
 
 
 _deals: dict[str, DealRecord] = {}
@@ -73,3 +81,22 @@ def mark_failed(deal_id: str, error: str) -> None:
     if record is not None:
         record.status = STATUS_FAILED
         record.error = error
+
+
+def set_credential(deal_id: str, credential: dict, picreds_hash: str) -> None:
+    record = _deals.get(deal_id)
+    if record is not None:
+        record.credential = credential
+        record.picreds_hash = picreds_hash
+
+
+def set_escrow_tx(deal_id: str, tx_hash: str) -> None:
+    record = _deals.get(deal_id)
+    if record is not None:
+        record.escrow_tx = tx_hash
+
+
+def set_settlement_tx(deal_id: str, tx_hash: str) -> None:
+    record = _deals.get(deal_id)
+    if record is not None:
+        record.settlement_tx = tx_hash

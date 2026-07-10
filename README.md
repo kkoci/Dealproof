@@ -1111,7 +1111,7 @@ Dealproof/
 | **Agent Rail** | **B2B Agent × Agent Deal Room** (`build_spec_agent_rail.md`) | |
 | AR-1 | Phase 1 — CLI procurement demo: sealed buyer/supplier agents, mediator loop, DCAP attestation, escrow stub | ✅ Complete |
 | AR-2 | Phase 2 — Shareable web demo: `POST/GET /api/agentrail/deals`, live-polling React page, no login | ✅ Complete |
-| AR-3 | Phase 3 — Production: OAuth3 principal delegation, full escrow, πCreds conduct credential | 🔜 Pending (needs ≥2 external validation signals first) |
+| AR-3 | Phase 3 — Full escrow contract (local only) + πCreds conduct credential | 🔄 Partial — OAuth3 principal delegation + live deployment intentionally deferred |
 
 ---
 
@@ -1130,7 +1130,6 @@ app/agentrail/
 └── verify_quote.py      DCAP quote structural verification (reuses TD Report Body parsing)
 
 demo_agentrail.py         CLI demo — industrial sensor procurement scenario
-contracts/AgentDealEscrow.sol   Stub only — full escrow is Phase 3
 ```
 
 Run it:
@@ -1158,7 +1157,21 @@ cd frontend && npm run dev         # frontend on :5173 → /agent-rail
 
 `POST /api/agentrail/deals` returns immediately (`status: "negotiating"`) and runs the negotiation as a background task; the frontend polls `GET /api/agentrail/deals/{id}` every ~1.2s so rounds appear live as agents produce them — no websockets. `GET /api/agentrail/deals/{id}/attest` returns the DCAP receipt once a deal reaches `agreed`. Same sealed-parameter guarantee as Phase 1: the API never echoes the buyer's budget ceiling or the supplier's floor prices back in any response.
 
-See `build_spec_agent_rail.md` for the full phased spec (Phase 3: OAuth3 principal delegation, full escrow, πCreds — gated on external validation, not started).
+**Phase 3** adds a πCreds conduct credential and a full (locally-tested-only) escrow contract:
+
+```
+contracts/src/AgentDealEscrow.sol   Full deposit -> release/refund/dispute — compiled + tested locally, not deployed
+app/agentrail/escrow.py             deposit_escrow / release_escrow / refund_escrow — mocked web3.py, no live network
+app/agentrail/credential.py         audit_procurement_conduct() — reuses core's constraint checks, redacted findings
+docs/agentrail_api.md               Full endpoint reference for enterprise integration
+GET /api/agentrail/deals/{id}/credential   πCreds conduct credential (agreed deals only)
+```
+
+The conduct credential reuses `app.picreds.constraints.run_all_checks()` from DealProof core unmodified, but never returns the raw sealed numbers: core's own finding text embeds the literal budget/floor because core's aren't sealed values, so Agent Rail writes its own redacted pass/fail descriptions instead (see `app/agentrail/credential.py`). It's computed once, inside the negotiation background task, while `buyer.budget_ceiling`/`supplier.floor_price_*` are still in scope — they're never persisted to the deal store.
+
+Escrow (`POST /deals` gains optional `supplier_address`/`escrow_amount_eth`) deposits at creation and releases automatically on agreement, mirroring DealProof core's Step 1b/3b resilience pattern exactly: if `AGENTRAIL_CONTRACT_ADDRESS` isn't set, it's skipped with a warning, not a failure. **Not deployed to Sepolia or any live network** — verified only via `npx hardhat compile` and a fully-mocked Python test suite, by design (see `build_spec_agent_rail.md` § Decision — OAuth3/principal delegation and live deployment were explicitly deferred rather than guessed at).
+
+See `build_spec_agent_rail.md` for the full phased spec and `docs/agentrail_api.md` for the complete API reference.
 
 ---
 

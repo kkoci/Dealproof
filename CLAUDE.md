@@ -190,7 +190,9 @@ tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
 tests/test_agentrail.py       8   Agent Rail Phase 1: sealed-value isolation (prompt + transcript), negotiation outcomes, verify_quote
-tests/test_agentrail_api.py   5   Agent Rail Phase 2: POST/GET deal lifecycle over TestClient, live polling, 404/409, failure→"failed" not 500
+tests/test_agentrail_api.py  10   Agent Rail Phase 2+3: deal lifecycle, live polling, 404/409, credential + escrow wiring, failure→"failed" not 500
+tests/test_agentrail_credential.py 5   Agent Rail Phase 3: role adapter, redacted findings never leak sealed values, hard-constraint failures
+tests/test_agentrail_escrow.py     4   Agent Rail Phase 3: deposit/release/refund against mocked web3.py, EscrowNotConfigured
 ```
 
 Note: as of this branch, `pytest tests/` reports 3 pre-existing failures in `tests/test_e2e.py`
@@ -525,17 +527,62 @@ patch once and dispatch on the distinct opening line of each agent's system prom
 (`"You are a procurement supplier"` vs. buyer's prompt, which itself contains the substring
 "supplier agent" later on — match on the prompt's start, not `in`).
 
-### What NOT to build yet
-No auth, no persistent storage (Phase 2's in-memory store is explicitly demo-only), no
-multi-tenant support. `contracts/AgentDealEscrow.sol` is still a stub — do not wire it to the
-negotiation flow. OAuth3/UCAN delegation and πCreds conduct credentials are explicitly Phase 3
-— do not pre-build them (see `build_spec_agent_rail.md` § Architectural Decisions).
+### Phase 3 — πCreds conduct credential + full escrow, local-only (complete, with explicit scope cuts)
 
-### Next phase
-Phase 3 (only after ≥2 external "I want to use this" signals, per the spec — do not self-initiate):
-OAuth3 principal registration/delegation, full `AgentDealEscrow.sol` implementation
-(deposit → negotiate → release/refund/dispute), πCreds conduct credential on deal completion,
-SQLite persistence for the deal store.
+The build spec gates Phase 3 on "≥2 external validation signals" and says to wait for a
+live OAuth3 session before designing agent-delegation auth. The user explicitly asked to
+proceed anyway; two sub-decisions were asked back rather than guessed at (2026-07 session):
+**(1)** OAuth3/principal-delegation auth — skipped entirely this pass, not stubbed, not faked.
+**(2)** Escrow — implement fully but verify only via `npx hardhat compile` + a mocked Python
+test suite; do not deploy to Sepolia or touch real keys/funds. Both choices are load-bearing —
+don't quietly reverse either without asking again.
+
+```
+contracts/src/AgentDealEscrow.sol   Full deposit->release/refund/dispute — compiles clean, not deployed
+contracts/scripts/deploy_agent_rail.js   Mirrors deploy.js — not run
+app/agentrail/escrow.py             deposit_escrow/release_escrow/refund_escrow — mirrors app/contract/escrow.py exactly
+app/agentrail/credential.py         audit_procurement_conduct(), build_credential() — see below
+docs/agentrail_api.md               Full endpoint reference, incl. an explicit "not yet built" section
+tests/test_agentrail_escrow.py      Mocked web3.py, same pattern as tests/test_contract.py
+tests/test_agentrail_credential.py  Redacted-findings leak checks, role-adapter correctness
+```
+
+**The conduct credential cannot reuse `app.picreds.auditor.audit_deal_conduct()` or its
+LLM layer verbatim — it would leak sealed values.** Core's `check_buyer_budget_respected`
+finding text embeds the literal number (`f"...within budget (${buyer_budget})"`), which is
+fine for core (budget/floor are plain, non-sealed `DealCreate` fields already visible in
+`DealResult`) but would leak Agent Rail's sealed ceiling/floor straight into a public API
+response. `credential.py` reuses `run_all_checks()` (the deterministic booleans — safe,
+numeric-comparison-only) but writes its own redacted finding text, and **has no LLM call at
+all** — core's qualitative layer prompts Claude with the raw numbers and trusts the model not
+to restate them, an acceptable risk for core's non-sealed values but not one taken on here.
+If a qualitative layer is wanted later, it must not receive `buyer_ceiling`/`floor_price` in
+its prompt — genuineness/collusion can be assessed from the transcript alone (see how
+`app/agents/auditor.py`'s `AuditorAgent` already does exactly this).
+
+**Must be computed inside the negotiation background task, not a later GET handler.**
+`buyer.budget_ceiling`/`supplier.floor_price_*` only exist in `_run_negotiation()`'s closure
+(see `routes.py`) — the store never persists them (by design, same as Phase 2). Compute the
+credential there, right after `store.mark_agreed()`, while those values are still in scope.
+
+**Escrow mirrors DealProof core's Step 1b/3b resilience pattern exactly** — deposit at
+creation (optional `supplier_address`/`escrow_amount_eth` on `POST /deals`), release
+automatically on agreement, both wrapped in `try/except EscrowNotConfigured: log+skip`. It is
+non-fatal by construction: a deal with escrow fields set behaves identically to one without,
+minus `escrow_tx`/`settlement_tx` staying `null`, as long as `AGENTRAIL_CONTRACT_ADDRESS` is
+unset (which it is — verified live: see git history for the manual curl walkthrough that
+confirmed the warning-log-and-continue path with real Claude calls).
+
+`raiseDispute`/`resolveDispute` exist on the Solidity contract but have no Python wrapper or
+HTTP endpoint — intentionally cut to keep the wired flow to deposit→negotiate→release/refund.
+Add them only if a real dispute-resolution flow is actually being built, not preemptively.
+
+### Still not built (do not pre-build without being asked)
+OAuth3/UCAN principal registration and agent delegation — no protocol design exists anywhere
+in this repo; inventing one contradicts explicit spec guidance to wait for it. No auth of any
+kind currently gates these endpoints — anyone who can reach the API can create a deal.
+SQLite persistence for the deal store (still in-memory, Phase 2 scope). Live escrow deployment
+to Sepolia or any other network.
 
 ---
 

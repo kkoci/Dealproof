@@ -177,6 +177,144 @@ def test_get_unknown_deal_returns_404():
         assert r.status_code == 404
 
 
+def test_credential_endpoint_returns_conduct_credential_after_agreement():
+    from app.main import app
+
+    buyer_responses = [
+        json.dumps({"action": "propose", "price": 40.0, "quantity": 500,
+                    "terms": {}, "reasoning": "Opening at $40."}),
+        json.dumps({"action": "accept", "price": 41.0, "quantity": 500,
+                    "terms": {}, "reasoning": "Accepting supplier's counter."}),
+    ]
+    supplier_responses = [
+        json.dumps({"action": "counter", "price": 41.0, "quantity": 500,
+                    "terms": {}, "reasoning": "Countering at $41."}),
+    ]
+
+    with _mocked_anthropic(buyer_responses, supplier_responses), \
+         patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock) as mock_sign:
+        mock_sign.return_value = VALID_SIM_QUOTE
+
+        with TestClient(app) as client:
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            deal_id = r.json()["deal_id"]
+            status_body = _poll_until_done(client, deal_id)
+            assert status_body["status"] == "agreed"
+            assert status_body["picreds_attested"] is True
+            assert status_body["picreds_hash"]
+
+            r = client.get(f"/api/agentrail/deals/{deal_id}/credential")
+            assert r.status_code == 200
+            cred = r.json()
+            assert cred["credential_type"] == "conduct"
+            assert cred["genuine_negotiation"] is True
+            assert cred["final_price"] == 41.0
+            assert cred["picreds_hash"] == status_body["picreds_hash"]
+            assert set(cred["checks"].keys()) == {
+                "buyer_budget", "seller_floor", "capitulation", "convergence",
+            }
+            for check in cred["checks"].values():
+                assert check["passed"] is True
+                assert "$" not in check["finding"]
+
+            # No sealed value anywhere in the credential response.
+            cred_str = json.dumps(cred)
+            assert "45.0" not in cred_str
+            assert "38.0" not in cred_str
+            assert "42.0" not in cred_str
+
+
+def test_credential_endpoint_409_before_agreed():
+    from app.main import app
+
+    buyer_responses = [json.dumps({
+        "action": "reject", "price": 0.0, "quantity": 0, "terms": {}, "reasoning": "Not worth it.",
+    })]
+    supplier_responses = [json.dumps({
+        "action": "counter", "price": 44.0, "quantity": 500, "terms": {}, "reasoning": "Countering.",
+    })]
+
+    with _mocked_anthropic(buyer_responses, supplier_responses), \
+         patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock):
+        with TestClient(app) as client:
+            r = client.post("/api/agentrail/deals", json=_PAYLOAD)
+            deal_id = r.json()["deal_id"]
+            _poll_until_done(client, deal_id)
+
+            r = client.get(f"/api/agentrail/deals/{deal_id}/credential")
+            assert r.status_code == 409
+
+
+def test_credential_endpoint_404_unknown_deal():
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.get("/api/agentrail/deals/does-not-exist/credential")
+        assert r.status_code == 404
+
+
+def test_escrow_deposit_and_release_wired_through_deal_lifecycle():
+    from app.main import app
+
+    buyer_responses = [json.dumps({
+        "action": "propose", "price": 41.0, "quantity": 500, "terms": {}, "reasoning": "Opening.",
+    })]
+    supplier_responses = [json.dumps({
+        "action": "accept", "price": 41.0, "quantity": 500, "terms": {}, "reasoning": "Accepted.",
+    })]
+
+    payload = {**_PAYLOAD, "supplier_address": "0x" + "b" * 40, "escrow_amount_eth": 0.05}
+
+    with _mocked_anthropic(buyer_responses, supplier_responses), \
+         patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock) as mock_sign, \
+         patch("app.agentrail.routes.deposit_escrow", new_callable=AsyncMock) as mock_deposit, \
+         patch("app.agentrail.routes.release_escrow", new_callable=AsyncMock) as mock_release:
+        mock_sign.return_value = VALID_SIM_QUOTE
+        mock_deposit.return_value = "0xdeposit123"
+        mock_release.return_value = "0xrelease456"
+
+        with TestClient(app) as client:
+            r = client.post("/api/agentrail/deals", json=payload)
+            deal_id = r.json()["deal_id"]
+            assert mock_deposit.called
+
+            body = _poll_until_done(client, deal_id)
+            assert body["status"] == "agreed"
+            assert body["escrow_tx"] == "0xdeposit123"
+            assert body["settlement_tx"] == "0xrelease456"
+            assert mock_release.called
+
+
+def test_escrow_not_configured_is_non_fatal():
+    from app.agentrail.escrow import EscrowNotConfigured
+    from app.main import app
+
+    buyer_responses = [json.dumps({
+        "action": "propose", "price": 41.0, "quantity": 500, "terms": {}, "reasoning": "Opening.",
+    })]
+    supplier_responses = [json.dumps({
+        "action": "accept", "price": 41.0, "quantity": 500, "terms": {}, "reasoning": "Accepted.",
+    })]
+
+    payload = {**_PAYLOAD, "supplier_address": "0x" + "b" * 40, "escrow_amount_eth": 0.05}
+
+    with _mocked_anthropic(buyer_responses, supplier_responses), \
+         patch("app.agentrail.mediator.sign_result", new_callable=AsyncMock) as mock_sign, \
+         patch("app.agentrail.routes.deposit_escrow", new_callable=AsyncMock) as mock_deposit:
+        mock_sign.return_value = VALID_SIM_QUOTE
+        mock_deposit.side_effect = EscrowNotConfigured("AGENTRAIL_CONTRACT_ADDRESS not set")
+
+        with TestClient(app) as client:
+            r = client.post("/api/agentrail/deals", json=payload)
+            assert r.status_code == 201
+            deal_id = r.json()["deal_id"]
+
+            body = _poll_until_done(client, deal_id)
+            assert body["status"] == "agreed"
+            assert body["escrow_tx"] is None
+            assert body["settlement_tx"] is None
+
+
 def test_negotiation_failure_marks_deal_failed_not_500():
     from app.main import app
 
