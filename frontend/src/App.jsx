@@ -32,7 +32,7 @@ function NavBar() {
               Dashboard
             </Link>
             <a
-              href={`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'}/docs`}
+              href={`${import.meta.env.VITE_BACKEND_URL || 'https://d31d2a226327eaf1da3c400fc137f21639555cf8-8000.dstack-pha-prod5.phala.network'}/docs`}
               target="_blank"
               rel="noopener noreferrer"
               className="px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors flex items-center gap-1.5"
