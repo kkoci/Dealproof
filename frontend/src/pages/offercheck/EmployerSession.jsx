@@ -512,7 +512,19 @@ export default function EmployerSession() {
   // Once it's actually been used (package_round_number > 0) it's the negotiation in progress,
   // so terminal/turn must defer to it — otherwise this side gets stuck showing "waiting" forever
   // after a package AI negotiation agrees, because the scalar state never advances on its own.
-  const packageActive = view && view.package_round_number > 0
+  //
+  // Both channels can be enabled at once (nothing stops sealing both authority limits), and
+  // start-agentic runs the scalar negotiation to completion synchronously. If the scalar side
+  // finishes first — before package_round_number ever ticks past 0 — activeState/isTerminal must
+  // not lock onto the scalar's terminal state, or the not-yet-run package button/panel vanish
+  // for good (package_round_number can never become > 0 once its own "enable"/"run" controls are
+  // hidden). So package also counts as "active" once it's merely enabled and the scalar channel
+  // already finished, as long as package itself isn't terminal yet.
+  const packageStarted = view && view.package_round_number > 0
+  const packageEnabled = view && view.package_agentic_ready
+  const scalarTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
+  const packageTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.package_state)
+  const packageActive = view && (packageStarted || (packageEnabled && scalarTerminal && !packageTerminal))
   const activeState = view && (packageActive ? view.package_state : view.state)
   const activeRound = view && (packageActive ? view.package_round_number : view.round_number)
   const isTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(activeState)
