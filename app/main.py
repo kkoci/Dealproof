@@ -8,8 +8,9 @@ Changes from Phase 1:
 """
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -61,6 +62,17 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(devcred_router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Unhandled exceptions otherwise hit Starlette's ServerErrorMiddleware, which sits
+    # outside CORSMiddleware — the resulting 500 has no Access-Control-Allow-Origin
+    # header, so cross-origin callers (the Vercel frontend) see an opaque NetworkError
+    # instead of the real status. Handling it here keeps the response inside the
+    # middleware stack so CORS headers still get attached.
+    logging.getLogger(__name__).exception("Unhandled exception on %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.get("/health")

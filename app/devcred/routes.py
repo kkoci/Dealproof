@@ -103,7 +103,16 @@ async def _fetch_commit_list(token: str, repo: str, client: httpx.AsyncClient) -
             )
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="GitHub token invalid or expired")
-        resp.raise_for_status()
+        if resp.status_code == 403:
+            raise HTTPException(
+                status_code=429,
+                detail=f"GitHub API rate limit hit while fetching {repo} — try again shortly",
+            )
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"GitHub API error {resp.status_code} while fetching {repo}",
+            )
 
         page_data = resp.json()
         if not page_data:
