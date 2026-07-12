@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routes import router
 from app.devcred.routes import router as devcred_router
@@ -43,6 +44,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+class CatchAllExceptionsMiddleware(BaseHTTPMiddleware):
+    """
+    Converts any unhandled exception into a real Response *before* it reaches
+    CORSMiddleware. A handler registered via app.add_exception_handler(Exception, ...)
+    does NOT work for this: Starlette special-cases bare-Exception handlers to run
+    in ServerErrorMiddleware, which wraps outside all user middleware (including
+    CORSMiddleware) — so the resulting 500 still has no Access-Control-Allow-Origin
+    header and cross-origin callers see an opaque browser-level CORS/network error
+    instead of the real status. This middleware must be added before CORSMiddleware
+    (see below) so it sits inside it and its response passes back through normally.
+    """
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception:
+            logging.getLogger(__name__).exception("Unhandled exception on %s", request.url.path)
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+app.add_middleware(CatchAllExceptionsMiddleware)
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -62,17 +84,6 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(devcred_router)
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    # Unhandled exceptions otherwise hit Starlette's ServerErrorMiddleware, which sits
-    # outside CORSMiddleware — the resulting 500 has no Access-Control-Allow-Origin
-    # header, so cross-origin callers (the Vercel frontend) see an opaque NetworkError
-    # instead of the real status. Handling it here keeps the response inside the
-    # middleware stack so CORS headers still get attached.
-    logging.getLogger(__name__).exception("Unhandled exception on %s", request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 @app.get("/health")

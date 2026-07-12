@@ -366,11 +366,16 @@ async def evaluate_credential(request: Request, credential_id: str) -> DevCredEv
     credential_hash = _hash_credential(cred_fields)
     cred_fields["credential_hash"] = credential_hash
 
-    # Step 5 — TDX attestation: bind credential_hash + corpus_root
-    tee_quote = await sign_result({
-        "credential_hash": credential_hash,
-        "repo_corpus_root": repo_corpus_root,
-    })
+    # Step 5 — TDX attestation: bind credential_hash + corpus_root (non-fatal,
+    # same resilience pattern as the main deal re-attestation in api/routes.py)
+    tee_quote: str | None = None
+    try:
+        tee_quote = await sign_result({
+            "credential_hash": credential_hash,
+            "repo_corpus_root": repo_corpus_root,
+        })
+    except Exception:
+        pass
     tee_attested = bool(tee_quote)
     cred_fields["tee_attested"] = tee_attested
 
