@@ -24,6 +24,7 @@ import sys
 import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from starlette.requests import Request
 
 # Allow imports from scripts/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -56,6 +57,20 @@ def _inspector() -> GitInspectorAgent:
 
 def _metrics(scenario: str) -> dict:
     return extract_commit_metrics(SCENARIOS[scenario])
+
+
+def _fake_request(path: str = "/api/devcred/test/evaluate", client_host: str = "127.0.0.1") -> Request:
+    """Minimal Starlette Request satisfying slowapi's rate-limit checks for direct route calls."""
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "path": path,
+        "headers": [],
+        "client": (client_host, 12345),
+        "server": ("testserver", 80),
+        "scheme": "http",
+        "query_string": b"",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +505,8 @@ async def test_full_pipeline_round_trip():
 
         mock_db.get_dev_credential = AsyncMock(return_value=db_record)
         mock_db.update_dev_credential_result = AsyncMock(side_effect=fake_update_dev_credential_result)
+        mock_db.increment_daily_eval_count = AsyncMock(return_value=1)
+        mock_db.decrement_daily_eval_count = AsyncMock()
 
         evaluator_mock_client = AsyncMock()
         evaluator_mock_client.messages.create = AsyncMock(
@@ -499,7 +516,7 @@ async def test_full_pipeline_round_trip():
         with patch("app.devcred.agents.git_evaluator.anthropic.AsyncAnthropic",
                    return_value=evaluator_mock_client):
             from app.devcred.routes import evaluate_credential
-            response = await evaluate_credential(credential_id)
+            response = await evaluate_credential(_fake_request(), credential_id)
 
     assert response.credential.seniority_level == "senior"
     assert response.credential.developer_handle == "octocat"

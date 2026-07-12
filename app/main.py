@@ -10,10 +10,14 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.routes import router
 from app.devcred.routes import router as devcred_router
 from app.config import settings
+from app.rate_limit import limiter
 import app.db as db
 
 logging.basicConfig(level=settings.log_level)
@@ -26,6 +30,7 @@ async def lifespan(app: FastAPI):
     await db.create_arc_anchors_table()
     await db.create_transcript_corpora_table()
     await db.create_dev_credentials_table()
+    await db.create_eval_counter_table()
     await db.reset_stale_negotiations()  # recover deals interrupted by crashes/restarts
     yield
 
@@ -36,6 +41,10 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

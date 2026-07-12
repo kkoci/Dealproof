@@ -137,6 +137,7 @@ TinyCloud/feed/                 TinyCloud CLI + saved corpus (conversations.json
 TinyCloud/listen/               TinyCloud Listen backend — source of truth for data shapes
 TinyCloud/TINYCLOUD_WORKFLOW.md Auth setup, session patch, bulk download, troubleshooting
 PAYLOADS.md                    Full payload reference: deals, ingest modes, real transcript, eval corpora
+app/rate_limit.py          Shared slowapi Limiter — per-IP rate limits on paid-API endpoints
 app/dkim/verifier.py       DKIM email proof (dkimpy + DoH)
 app/memory/client.py       Contexto sidecar client (search, add, get_memory_hash)
 app/picreds/auditor.py     LLM audit: audit_agent_policy(), audit_deal_conduct()
@@ -156,6 +157,7 @@ app/devcred/schemas.py                     SeniorDevCredential + DevCredEvaluate
 (routes.py Phase 3)                        POST /api/devcred/{id}/evaluate + GET /api/devcred/{id}
 scripts/generate_git_fixtures.py           7 scenarios: genuine_senior/mid/junior + 3 SCAE adversarial + thin_history
 tests/test_devcred.py                      29 tests — corpus root, SCAE ×3, inspector ×4, clamp, pipeline, schema, hash
+tests/test_devcred_rate_limit.py           5 tests — /evaluate 3/hr + /ingest 10/hr (slowapi), daily 50/day hard stop, counter DB layer
 frontend/src/pages/devcred/Landing.jsx     /devcred/ — hero, flow diagram, privacy pills, 3-step explanation
 frontend/src/pages/devcred/Setup.jsx       /devcred/new — token input (cleared post-submit), repo selector, progress steps
 frontend/src/pages/devcred/Results.jsx     /devcred/:id — credential card + TrustStackBar + share/download actions
@@ -245,6 +247,7 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
 | DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
 | DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | 🔜 Pending |
+| DC-6 | Rate limiting — slowapi 3/hr (`/evaluate`) + 10/hr (`/ingest`) per IP; daily 50/day hard stop via `eval_counters` table | ✅ Complete |
 
 ---
 
@@ -387,6 +390,36 @@ told to be transparent and price issues in proactively.
 
 DataQualityAgent is non-fatal. If it fails, `data_quality_report: null`, `quality_attested: false`,
 and agents proceed without quality context — same pattern as memory, πCreds, Auditor.
+
+---
+
+## Dev Credential Rate Limiting
+
+**SECURITY: Any endpoint that calls an external paid API (Claude, GitHub) must be
+rate-limited. This is a standing requirement** — see the same rule enforced on the
+Offer Check vertical (`vertical/hr-offer-check` branch, `app/offercheck/rate_limit.py`).
+
+`app/rate_limit.py` holds one process-wide `slowapi.Limiter` (`key_func=get_remote_address`),
+imported by `app/main.py` (wires `app.state.limiter` + `SlowAPIMiddleware` +
+`RateLimitExceeded` → 429 JSON handler) and by `app/devcred/routes.py`.
+
+| Endpoint | Limit | Reason |
+|----------|-------|--------|
+| `POST /api/devcred/{id}/evaluate` | 3/hour/IP | Calls Claude (`GitEvaluatorAgent`) — paid, primary credit-drain risk |
+| `POST /api/devcred/ingest` | 10/hour/IP | Calls GitHub API — free tier, lower priority, still rate-limited per the standing rule |
+
+**Daily hard stop, independent of the per-IP limit:** `app/db.py`'s `eval_counters` table
+(one row per UTC day) tracks total `/evaluate` calls across all callers. `evaluate_credential()`
+calls `db.increment_daily_eval_count(today)` before touching the DB record or Claude; if the
+returned count exceeds `DAILY_EVAL_LIMIT` (50, module constant in `app/devcred/routes.py`), it
+calls `db.decrement_daily_eval_count(today)` to compensate (so the rejected call isn't counted)
+and returns HTTP 503. The increment-then-compensate pattern keeps the check atomic under
+SQLite's serialized writers without a separate lock.
+
+Both route functions take a `request: Request` argument — required by slowapi's `@limiter.limit(...)`
+decorator to read `request.client.host`. Any test that calls these functions directly (not through
+`TestClient`) must construct a real `starlette.requests.Request` with a `client` tuple in its scope;
+see `_fake_request()` in `tests/test_devcred.py` / `tests/test_devcred_rate_limit.py`.
 
 ---
 

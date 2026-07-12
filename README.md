@@ -258,6 +258,7 @@ tests/test_picreds.py        11 tests  — πCreds: deterministic constraint che
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
 tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
+tests/test_devcred_rate_limit.py  5 tests — /evaluate 3/hr + /ingest 10/hr per-IP limits, daily 50/day hard stop, counter DB layer
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1115,6 +1116,7 @@ Dealproof/
 | DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | ✅ Complete |
 | DC-4 | Synthetic fixtures (7 scenarios) + SCAE tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
 | DC-5 | Frontend — `/devcred/` landing, `/devcred/new` setup, `/devcred/:id` credential card + TrustStackBar | ✅ Complete |
+| DC-6 | Rate limiting — slowapi 3/hr (`/evaluate`) + 10/hr (`/ingest`) per IP; daily 50/day hard stop | ✅ Complete |
 
 ---
 

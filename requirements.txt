@@ -16,3 +16,5 @@ dnspython==2.7.0
 cryptography>=42.0.0
 # ETHGlobal M7: Hedera HCS deal outcome publishing
 hiero_sdk_python
+# Dev Credential: per-IP rate limiting on paid-API endpoints
+slowapi==0.1.10

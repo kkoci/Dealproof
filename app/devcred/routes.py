@@ -10,6 +10,9 @@ Privacy constraints:
   - repo names: hashed into corpus_root only, never stored in DB
   - employer names: never appear in the system
   - raw diffs + file paths: not stored, only aggregate metrics
+
+SECURITY: Any endpoint that calls an external paid API (Claude, GitHub)
+must be rate-limited. This is a standing requirement.
 """
 import hashlib
 import json
@@ -17,7 +20,7 @@ import math
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import app.db as db
@@ -29,6 +32,7 @@ from app.devcred.schemas import (
     DevCredEvaluateResponse,
     DevCredStatusResponse,
 )
+from app.rate_limit import limiter
 from app.tee.attestation import sign_result
 
 router = APIRouter(prefix="/api/devcred", tags=["devcred"])
@@ -36,6 +40,7 @@ router = APIRouter(prefix="/api/devcred", tags=["devcred"])
 GITHUB_API = "https://api.github.com"
 MAX_COMMITS_PER_REPO = 300
 DETAIL_SAMPLE_SIZE = 50  # commits fetched individually for file/diff details
+DAILY_EVAL_LIMIT = 50  # hard stop across all users/IPs, resets at UTC midnight
 
 
 class DevCredIngest(BaseModel):
@@ -168,10 +173,14 @@ async def _enrich_sample_with_details(
 
 
 @router.post("/ingest", response_model=DevCredIngestResponse)
-async def ingest_repos(body: DevCredIngest) -> DevCredIngestResponse:
+@limiter.limit("10/hour")
+async def ingest_repos(request: Request, body: DevCredIngest) -> DevCredIngestResponse:
     """
     Fetch commits from GitHub, extract deterministic metrics, compute corpus root.
     GitHub token is used in-memory only — never written to disk or database.
+
+    Rate-limited to 10 requests/hour/IP — GitHub API is free tier but still
+    an external call; see module docstring SECURITY note.
     """
     for repo in body.repos:
         if "/" not in repo or repo.startswith("/") or repo.endswith("/"):
@@ -274,7 +283,8 @@ def _fallback_evaluation(hard: GitInspectionReport, metrics: dict) -> GitEvaluat
 # ---------------------------------------------------------------------------
 
 @router.post("/{credential_id}/evaluate", response_model=DevCredEvaluateResponse)
-async def evaluate_credential(credential_id: str) -> DevCredEvaluateResponse:
+@limiter.limit("3/hour")
+async def evaluate_credential(request: Request, credential_id: str) -> DevCredEvaluateResponse:
     """
     Run the full two-layer analysis pipeline on an ingested corpus.
 
@@ -285,7 +295,20 @@ async def evaluate_credential(credential_id: str) -> DevCredEvaluateResponse:
       4. credential_hash = SHA-256(credential fields)
       5. Embed {credential_hash, repo_corpus_root} in TDX report_data
       6. Persist to dev_credentials, return credential + TDX quote
+
+    Rate-limited to 3 requests/hour/IP, plus a hard stop of DAILY_EVAL_LIMIT
+    calls/day across all callers — this endpoint makes a paid Claude call;
+    see module docstring SECURITY note.
     """
+    today = datetime.now(timezone.utc).date().isoformat()
+    daily_count = await db.increment_daily_eval_count(today)
+    if daily_count > DAILY_EVAL_LIMIT:
+        await db.decrement_daily_eval_count(today)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Daily evaluation limit reached ({DAILY_EVAL_LIMIT}/day across all users) — try again tomorrow.",
+        )
+
     record = await db.get_dev_credential(credential_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Credential not found: {credential_id}")

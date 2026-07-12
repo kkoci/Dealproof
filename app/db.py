@@ -407,6 +407,45 @@ async def get_dev_credential(credential_id: str) -> dict | None:
     }
 
 
+async def create_eval_counter_table() -> None:
+    """Create the eval_counters table if it does not exist — one row per UTC day."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eval_counters (
+                day   TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        await db.commit()
+
+
+async def increment_daily_eval_count(day: str) -> int:
+    """Atomically increment and return today's /evaluate call count."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO eval_counters (day, count) VALUES (?, 1) "
+            "ON CONFLICT(day) DO UPDATE SET count = count + 1",
+            (day,),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT count FROM eval_counters WHERE day = ?", (day,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0]
+
+
+async def decrement_daily_eval_count(day: str) -> None:
+    """Compensate a rejected /evaluate call so it isn't counted against the daily limit."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE eval_counters SET count = count - 1 WHERE day = ?", (day,)
+        )
+        await db.commit()
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.
