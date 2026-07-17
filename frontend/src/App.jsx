@@ -1,5 +1,5 @@
 import React from 'react'
-import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom'
 import Landing from './pages/offercheck/Landing.jsx'
 import CandidateNew from './pages/offercheck/CandidateNew.jsx'
 import CandidateJoin from './pages/offercheck/CandidateJoin.jsx'
@@ -11,7 +11,15 @@ import Dashboard from './pages/offercheck/Dashboard.jsx'
 import Demo from './pages/offercheck/Demo.jsx'
 import logo from './assets/icon.svg'
 
+// Company mode = the company-auth surfaces (register, invite creation, dashboard itself).
+// The Dashboard link is scoped to those — it reads a company API key from localStorage and
+// lists that company's sessions, so it has no meaning for a candidate or on the landing page.
+function isCompanyMode(pathname) {
+  return pathname.startsWith('/offercheck/company') || pathname === '/offercheck/dashboard'
+}
+
 function NavBar() {
+  const { pathname } = useLocation()
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-50 bg-bg-surface border-b border-border"
@@ -27,12 +35,14 @@ function NavBar() {
           </Link>
 
           <div className="flex items-center gap-1">
-            <Link
-              to="/offercheck/dashboard"
-              className="px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors"
-            >
-              Dashboard
-            </Link>
+            {isCompanyMode(pathname) && (
+              <Link
+                to="/offercheck/dashboard"
+                className="px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors"
+              >
+                Dashboard
+              </Link>
+            )}
             <a
               href={`${import.meta.env.VITE_BACKEND_URL || 'https://d31d2a226327eaf1da3c400fc137f21639555cf8-8000.dstack-pha-prod5.phala.network'}/docs`}
               target="_blank"
