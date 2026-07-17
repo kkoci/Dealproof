@@ -147,10 +147,11 @@ frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pe
 
 --- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md
     and offercheck_phase2_spec.md (agentic layer — different numbering scheme, see README) ---
-app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction, Company/Bulk/Credential/Agentic schemas
+app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction, Company/Bulk/Credential/Agentic schemas, EmployerInvite* / CandidateJoinRequest schemas
 app/offercheck/verifier.py    check_consistency() — software-only plausibility check, no LLM/TEE
 app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash()
 app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens) — company_id/credential/attestation/candidate_floor/employer_authority_limit fields
+app/offercheck/invites.py     EmployerInvite in-memory store — employer-initiated negotiation, pending until a candidate claims it (see "Employer-Initiated Invites" below)
 app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
 app/offercheck/credential.py  OfferVerifiedCredential + PackageCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
 app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
@@ -163,11 +164,13 @@ app/offercheck/demo_auth.py   Magic-link auth — stateless HMAC tokens, single-
 app/offercheck/rate_limit.py  Per-IP hourly rate limits — session creation + both agentic endpoints, hardcoded limits, no new env vars
 app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter, /employer/band, /employer/move, /candidate/move, /company/register,
                                /company/ats-connect, /company/verify/bulk, /integrations/{provider}/webhook/{company_id}, /sessions/{id}/start-agentic,
-                               /sessions/{id}/start-agentic-package, /auth/demo-link; GET /sessions/{id}, /attest, /dcap-verify, /credential,
-                               /company/sessions, /auth/verify; PATCH /sessions/{id}/candidate/enable-agentic, /sessions/{id}/employer/enable-agentic
-frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor + package terms), CandidateSession, EmployerSession
-                                 (+ attestation/credential panel + agentic panel + package results table), Demo (magic-link spectator view),
-                                 CompanyRegister, Dashboard
+                               /sessions/{id}/start-agentic-package, /auth/demo-link, /employer/new, /candidate/join/{invite_id};
+                               GET /sessions/{id}, /attest, /dcap-verify, /credential, /company/sessions, /auth/verify, /employer/invite/{invite_id};
+                               PATCH /sessions/{id}/candidate/enable-agentic, /sessions/{id}/employer/enable-agentic
+frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor + package terms), CandidateJoin (employer-invite claim
+                                 form, same fields as CandidateNew), CandidateSession, EmployerSession (+ attestation/credential panel + agentic
+                                 panel + package results table), Demo (magic-link spectator view), CompanyRegister, CompanyNew (employer-initiated
+                                 invite creation + status check), Dashboard
 ```
 
 ---
@@ -199,7 +202,15 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (276 passed, 2 skipped — run with `pytest`, no Docker or tappd required)
+## Test Suite (288 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+
+The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
+assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
+Confirmed via `git stash` that these fail identically with zero Offer Check changes applied; this
+dev machine runs Python 3.14 while `requirements.txt` pins `pydantic==2.10.5`/`fastapi==0.115.6`
+(no prebuilt wheel for 3.14 — see the "Live 422 Fix" section below for the same friction
+documented previously). Not touched or explained further here — flagged so it isn't mistaken for
+a regression introduced by the invite work below.
 
 ```
 tests/test_agents.py          6   BuyerAgent + SellerAgent + AuditorAgent unit tests
@@ -219,6 +230,8 @@ tests/test_offercheck_agentic.py 25  Offer Check: CandidateAgent/EmployerAgent c
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 43  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, PATCH enable-agentic-package endpoints, converged_hint field, HTTP e2e
 tests/test_offercheck_rate_limit.py 10  Offer Check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
+tests/test_offercheck_invites.py 12  Offer Check: employer-initiated invite lifecycle (create → unclaimed status → join → normal Session),
+                                      company-auth gating, double-claim rejection, sealed agentic floor pass-through
 ```
 
 **Resilience guarantees:**
@@ -269,6 +282,8 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P13 | Tests — 11 new cases in `tests/test_offercheck_agentic.py`, 1 new case in `tests/test_offercheck_package.py` | ✅ Complete |
 | OC-P14 | Live 422 fix (query-param/body-field name collision in start-agentic routes); package-mode "enable AI negotiation" opt-in parity (2 new PATCH endpoints); full transcript UI pass (chat-bubble round history, live round counter + spinner, convergence hint); demo-link auto-prefill sync fix | ✅ Complete |
 | OC-P15 | Tests — 9 new cases across `tests/test_offercheck_package.py` and `tests/test_offercheck_agentic.py` | ✅ Complete |
+| OC-P16 | Employer-initiated invites — `POST /employer/new`, `GET /employer/invite/{id}`, `POST /candidate/join/{id}` (`app/offercheck/invites.py`); `CompanyNew.jsx` + `CandidateJoin.jsx` | ✅ Complete |
+| OC-P17 | Tests — `tests/test_offercheck_invites.py` (10 tests) | ✅ Complete |
 
 ---
 
@@ -924,6 +939,51 @@ can't be auto-filled from the candidate's real numbers (core privacy mechanic �
 0 otherwise), but for the demo-convenience path specifically: `CandidateNew.jsx` tags the generated
 employer link with `&demo=1` when demo data was used; `EmployerSession.jsx` detects the flag and
 auto-prefills (never auto-submits) the same independent demo band on load.
+
+---
+
+## Employer-Initiated Invites
+
+Every prior Offer Check flow started with the candidate calling `POST /sessions`. This adds the
+mirror image: an authenticated company (Phase 3 API key) opens a negotiation with
+`POST /employer/new` before any candidate exists, gets back a shareable
+`/offercheck/candidate/join/{invite_id}` link, and the candidate claims it later with
+`POST /candidate/join/{invite_id}` — the same negotiation, just initiated from the other side.
+
+**`app/offercheck/invites.py` is a fourth independent in-memory store**, alongside `store.py`'s
+`Session` and `auth.py`'s `Company` — same no-DB, lost-on-restart precedent as everything else in
+this vertical. An `EmployerInvite` is a *pending* record only: `id`, `company_id`,
+`band_min`/`band_mid`/`band_max`, optional `requirements` (free text, shown only on the employer's
+own dashboard, never to the candidate), optional `ats_candidate_ref`/`employer_authority_limit`/
+`employer_priorities` (Phase 2A agentic pass-through), `status` (`PENDING_CANDIDATE` / `CLAIMED`),
+and `session_id` (set once claimed).
+
+**`store.create_session()` still runs exactly once, at claim time, and nothing about the state
+machine changes.** `POST /candidate/join/{invite_id}` (`routes.py::join_invite_route`) calls
+`store.create_session()` with the identical signature `POST /sessions` uses, just sourcing
+`company_id`/`ats_candidate_ref`/`employer_authority_limit`/`employer_priorities` from the invite
+instead of an `X-API-Key` header, then immediately calls the existing, unmodified
+`negotiation.set_employer_band()` with the invite's band. That function only sets
+`band_min`/`band_mid`/`band_max`/`band_set` — it does not touch `session.state` (state stays
+`PENDING_EMPLOYER`, turn stays `"employer"`, exactly as it does when a human employer calls
+`POST .../employer/band` by hand). The employer still has to make their own first actual move
+(counter/accept/walk) — the invite only pre-seals the band, it doesn't pre-play a turn. This is
+why `negotiation.py`, `store.py`'s `Session` dataclass, `app/tee/attestation.py`, and
+`app/offercheck/agents/mediator.py` needed zero changes for this feature — the invite flow is
+pure composition of existing public functions.
+
+**`GET /employer/invite/{id}` is gated by the owning company's `X-API-Key`, not just the
+`invite_id`** — once `CLAIMED`, it returns the session's `employer_token`, which is exactly what
+`POST /sessions` hands the candidate directly for the employer side in the base flow. Requiring
+the API key here (rather than treating the invite id as a bearer credential) keeps that token from
+leaking to anyone who merely guesses or is handed the invite id.
+
+**Not built, out of scope for this pass** (per the originating request's own explicit scope cut):
+invite expiry, an employer-side "cancel this invite" action, and a "list my open invitations"
+view. `GET /company/sessions` already lists claimed sessions once they exist; there is currently no
+way to see *unclaimed* invites in the dashboard UI (the API (`GET /employer/invite/{id}`) supports
+checking one invite at a time, given its id — `CompanyNew.jsx` uses exactly that after creating an
+invite). Flagging these as real gaps, not silently dropped, if a future pass wants them.
 
 ---
 

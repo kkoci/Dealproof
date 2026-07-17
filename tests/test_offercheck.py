@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import negotiation, parsing, rate_limit, store, verifier
+from app.offercheck import invites, negotiation, parsing, rate_limit, store, verifier
 from app.offercheck.schemas import CompetingOffer
 
 
@@ -77,9 +77,11 @@ def test_consistency_flags_blank_company():
 def _clear_store():
     store.reset()
     rate_limit.reset()
+    invites.reset()
     yield
     store.reset()
     rate_limit.reset()
+    invites.reset()
 
 
 def _new_session(candidate_ask=185_000.0):

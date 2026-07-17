@@ -245,7 +245,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-268 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
+278 tests pass, 2 skipped (live integration tests) — run with `pytest`, no Docker or tappd required. Every external call (Claude API, tappd, SQLite, memory sidecar, Stripe, Greenhouse, Lever) is either mocked or redirected to a temp file.
 
 > Three pre-existing `tests/test_e2e.py` failures (core DealProof, unrelated to any vertical) reproduce
 > in isolation with zero Offer Check code involved — not introduced by this work, not fixed by it.
@@ -266,6 +266,7 @@ tests/test_offercheck_agentic.py 24 tests  — vertical/hr-offer-check: Candidat
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 35 tests — vertical/hr-offer-check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, HTTP e2e
 tests/test_offercheck_rate_limit.py 10 tests — vertical/hr-offer-check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
+tests/test_offercheck_invites.py 10 tests — vertical/hr-offer-check: employer-initiated invite lifecycle (create -> unclaimed status -> join -> normal Session), company-auth gating, double-claim rejection
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1136,6 +1137,8 @@ Dealproof/
 | OC-17 | Tests — `tests/test_offercheck_rate_limit.py` (10 tests) | ✅ Complete |
 | OC-18 | Live negotiation transcript (round-by-round offer amounts) exposed to both parties for agentic-mode rounds; post-creation "enable AI negotiation" opt-in (`PATCH .../candidate\|employer/enable-agentic`); package-mode `SessionView` sync fix | ✅ Complete |
 | OC-19 | Tests — 11 new cases in `tests/test_offercheck_agentic.py`, 1 new case in `tests/test_offercheck_package.py` | ✅ Complete |
+| OC-20 | Employer-initiated invites — `POST /employer/new`, `GET /employer/invite/{id}`, `POST /candidate/join/{id}` (`app/offercheck/invites.py`); frontend `CompanyNew.jsx` + `CandidateJoin.jsx` | ✅ Complete |
+| OC-21 | Tests — `tests/test_offercheck_invites.py` (10 tests) | ✅ Complete |
 | OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
 
 > **Two build-spec documents, two numbering schemes:** `build_spec_offer_check.md`'s Phase 1/2/3
@@ -1550,6 +1553,19 @@ same independent demo band on page load, so a solo demo run doesn't need a secon
 Verified live: package-mode PATCH endpoints confirmed via curl (both flip `package_agentic_ready` true,
 no sealed value ever appears in any response body); full pytest suite at 276 passed, 2 skipped, same 3
 pre-existing unrelated `test_e2e.py` failures.
+
+**Employer-initiated invites (OC-20/21).** Every prior flow started with the candidate calling
+`POST /sessions`. This adds the mirror image: an authenticated company calls `POST /employer/new`
+with their private band (+ optional `requirements` text, agentic `employer_authority_limit`) and
+gets back a shareable `/offercheck/candidate/join/{invite_id}` link — no `Session`, no tokens exist
+yet. A candidate later claims it with `POST /candidate/join/{invite_id}`, which is the one place
+`store.create_session()` runs for this flow, using the exact same call shape as `POST /sessions`
+and then sealing the band via the existing, unmodified `negotiation.set_employer_band()`. Nothing
+about the state machine, attestation, or the agentic mediator needed to change — the invite flow
+is pure composition of already-shipped functions. `GET /employer/invite/{id}` is gated by the
+owning company's API key (not just the invite id), since once claimed it hands back the session's
+`employer_token`. Out of scope for this pass, flagged rather than silently dropped: invite expiry,
+an employer-side cancel action, and a "list my open invitations" view.
 
 ---
 

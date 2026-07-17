@@ -90,12 +90,17 @@ export default function Dashboard() {
       <div className="w-full max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-ink-primary">Company dashboard</h1>
-          <button
-            onClick={() => { localStorage.removeItem('offercheck_api_key'); setApiKey(''); setSessions(null) }}
-            className="text-xs text-ink-muted hover:text-ink-secondary"
-          >
-            Use a different key
-          </button>
+          <div className="flex items-center gap-4">
+            <Link to="/offercheck/company/new" className="text-xs text-teal hover:text-teal-hover font-medium">
+              + Start a negotiation
+            </Link>
+            <button
+              onClick={() => { localStorage.removeItem('offercheck_api_key'); setApiKey(''); setSessions(null) }}
+              className="text-xs text-ink-muted hover:text-ink-secondary"
+            >
+              Use a different key
+            </button>
+          </div>
         </div>
 
         <div className="mb-6 p-4 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>

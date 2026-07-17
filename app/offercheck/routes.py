@@ -9,6 +9,9 @@ and billing usage tracking (see build_spec_offer_check.md).
 
 Endpoints:
   POST /sessions                          candidate submits competing offer + ask (optional X-API-Key to tag a company)
+  POST /employer/new                      authenticated employer opens an invite before any candidate exists (X-API-Key)
+  GET  /employer/invite/{id}               invite status check, employer_token once claimed (X-API-Key, owning company only)
+  POST /candidate/join/{id}                candidate claims an invite -> creates the Session (mirrors POST /sessions)
   POST /parse-offer-letter                candidate uploads a PDF -> draft fields to review
   POST /sessions/{id}/employer/band       employer's one-time private band -> gap preview
   POST /sessions/{id}/employer/move       employer accepts / counters / walks
@@ -47,7 +50,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, demo_auth, negotiation, package, parsing, rate_limit, store, verifier
+from app.offercheck import auth, billing, credential, demo_auth, invites, negotiation, package, parsing, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -64,6 +67,7 @@ from app.offercheck.schemas import (
     BulkVerifyResult,
     CandidateEnableAgenticRequest,
     CandidateEnablePackageAgenticRequest,
+    CandidateJoinRequest,
     CandidateSubmitRequest,
     CandidateSubmitResponse,
     CompanyRegisterRequest,
@@ -78,7 +82,10 @@ from app.offercheck.schemas import (
     EmployerBandResponse,
     EmployerEnableAgenticRequest,
     EmployerEnablePackageAgenticRequest,
+    EmployerInviteRequest,
+    EmployerInviteResponse,
     ExtractedOfferFields,
+    InviteStatusResponse,
     MoveRequest,
     OfferLetterExtraction,
     OfferPackage,
@@ -345,6 +352,116 @@ async def submit_session(
         candidate_total_comp_floor=body.candidate_total_comp_floor,
         candidate_package_priorities=body.candidate_package_priorities,
     )
+    if company is not None:
+        auth.record_session(company, session.id)
+
+    return CandidateSubmitResponse(
+        session_id=session.id,
+        candidate_token=session.candidate_token,
+        employer_token=session.employer_token,
+        employer_link=f"/offercheck/employer/{session.id}?token={session.employer_token}",
+        state=session.state,
+        consistency=consistency,
+    )
+
+
+@router.post("/employer/new", response_model=EmployerInviteResponse, status_code=201)
+async def create_employer_invite_route(
+    body: EmployerInviteRequest,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> EmployerInviteResponse:
+    """
+    Employer-initiated counterpart to POST /sessions (candidate-initiated).
+    An authenticated company opens a negotiation before any candidate exists
+    — no Session, no tokens, until a candidate claims the invite at
+    POST /candidate/join/{invite_id}.
+    """
+    company = _require_company(x_api_key)
+    invite = invites.create_invite(
+        company.id,
+        body.band_min,
+        body.band_mid,
+        body.band_max,
+        requirements=body.requirements,
+        ats_candidate_ref=body.ats_candidate_ref,
+        employer_authority_limit=body.employer_authority_limit,
+        employer_priorities=body.employer_priorities,
+    )
+    return EmployerInviteResponse(
+        invite_id=invite.id,
+        candidate_join_link=f"/offercheck/candidate/join/{invite.id}",
+        status=invite.status,
+    )
+
+
+@router.get("/employer/invite/{invite_id}", response_model=InviteStatusResponse)
+async def get_employer_invite_route(
+    invite_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> InviteStatusResponse:
+    """
+    Status check for the invite's own creating company. Gated by X-API-Key
+    (not just invite_id) because, once claimed, this hands back the
+    employer_token needed to act on the resulting session — the same
+    information POST /sessions gives the candidate directly, just deferred
+    here until a candidate exists to negotiate with.
+    """
+    company = _require_company(x_api_key)
+    invite = invites.get_invite(invite_id)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="invite not found")
+    if invite.company_id != company.id:
+        raise HTTPException(status_code=403, detail="invite does not belong to this company")
+
+    employer_token = None
+    if invite.status == invites.CLAIMED and invite.session_id:
+        session = store.get_session(invite.session_id)
+        employer_token = session.employer_token if session else None
+
+    return InviteStatusResponse(
+        invite_id=invite.id,
+        status=invite.status,
+        session_id=invite.session_id,
+        employer_token=employer_token,
+    )
+
+
+@router.post("/candidate/join/{invite_id}", response_model=CandidateSubmitResponse)
+async def join_invite_route(invite_id: str, body: CandidateJoinRequest, request: Request) -> CandidateSubmitResponse:
+    """
+    Candidate-side claim of an employer-initiated invite. The one place
+    store.create_session() runs for this flow — identical call shape to
+    POST /sessions, just sourcing company_id/ats_candidate_ref/employer_*
+    fields from the invite instead of an X-API-Key header. Immediately seals
+    the employer's band from the invite via the existing
+    negotiation.set_employer_band(), so the resulting session lands exactly
+    where it would have had the employer called POST .../employer/band by
+    hand — same state machine, same turn order, nothing new.
+    """
+    rate_limit.check_session_create(request)
+    invite = invites.get_invite(invite_id)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="invite not found")
+    if invite.status == invites.CLAIMED:
+        raise HTTPException(status_code=409, detail="invite has already been claimed")
+
+    consistency = verifier.check_consistency(body.competing_offer, body.candidate_ask)
+    session = store.create_session(
+        body.competing_offer,
+        body.candidate_ask,
+        consistency,
+        company_id=invite.company_id,
+        ats_candidate_ref=invite.ats_candidate_ref,
+        candidate_floor=body.candidate_floor,
+        candidate_priorities=body.candidate_priorities,
+    )
+    negotiation.set_employer_band(session, invite.band_min, invite.band_mid, invite.band_max)
+    session.employer_authority_limit = invite.employer_authority_limit
+    session.employer_priorities = invite.employer_priorities
+
+    invites.claim_invite(invite, session.id)
+
+    company = auth.get_company(invite.company_id)
     if company is not None:
         auth.record_session(company, session.id)
 

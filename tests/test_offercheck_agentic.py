@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import demo_auth, negotiation, rate_limit, store, verifier
+from app.offercheck import demo_auth, invites, negotiation, rate_limit, store, verifier
 from app.offercheck.agents import mediator
 from app.offercheck.agents.candidate_agent import CandidateAgent
 from app.offercheck.agents.employer_agent import EmployerAgent
@@ -36,10 +36,12 @@ def _clear_store():
     store.reset()
     rate_limit.reset()
     demo_auth.reset()
+    invites.reset()
     yield
     store.reset()
     rate_limit.reset()
     demo_auth.reset()
+    invites.reset()
 
 
 def _plausible_offer(**overrides):

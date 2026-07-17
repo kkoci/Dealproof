@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import auth, billing, credential, negotiation, rate_limit, store, verifier
+from app.offercheck import auth, billing, credential, invites, negotiation, rate_limit, store, verifier
 from app.offercheck.integrations import _shared, greenhouse, lever, workday
 from app.offercheck.schemas import CompetingOffer
 
@@ -24,10 +24,12 @@ def _clear_stores():
     store.reset()
     auth.reset()
     rate_limit.reset()
+    invites.reset()
     yield
     store.reset()
     auth.reset()
     rate_limit.reset()
+    invites.reset()
 
 
 def _mock_httpx_client(json_response: dict, status_ok: bool = True):

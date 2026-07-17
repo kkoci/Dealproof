@@ -70,12 +70,19 @@ export default {
       animation: {
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'blink': 'blink 1s step-end infinite',
+        // luxe SKILL.md "Motion Restraint" — one entrance keyframe, reused everywhere a
+        // panel/notice mounts (rise-in only; there is no matching exit, see docs/design/luxe audit notes).
+        'rise-in': 'riseIn 300ms cubic-bezier(0.22, 1, 0.36, 1) both',
       },
       keyframes: {
         blink: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0' },
-        }
+        },
+        riseIn: {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
       }
     },
   },

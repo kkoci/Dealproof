@@ -332,6 +332,51 @@ class CompanySessionsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Employer-initiated invites — mirror image of the candidate-initiated flow
+# above (POST /sessions). An authenticated company opens a negotiation before
+# any candidate/Session exists; a Session is only ever created at claim time.
+# ---------------------------------------------------------------------------
+
+InviteStatus = Literal["PENDING_CANDIDATE", "CLAIMED"]
+
+
+class EmployerInviteRequest(BaseModel):
+    band_min: float = Field(gt=0)
+    band_mid: float = Field(gt=0)
+    band_max: float = Field(gt=0)
+    requirements: str | None = None  # free text for the employer's own dashboard — never shown to the candidate
+    ats_candidate_ref: str | None = None
+    employer_authority_limit: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
+    employer_priorities: str | None = None
+
+
+class EmployerInviteResponse(BaseModel):
+    invite_id: str
+    candidate_join_link: str
+    status: InviteStatus
+
+
+class InviteStatusResponse(BaseModel):
+    """
+    employer_token is populated only once the invite is CLAIMED. Safe to
+    return here because this endpoint requires the owning company's
+    X-API-Key — the same trust boundary that already gates every other
+    company-scoped read in this vertical.
+    """
+    invite_id: str
+    status: InviteStatus
+    session_id: str | None = None
+    employer_token: str | None = None
+
+
+class CandidateJoinRequest(BaseModel):
+    competing_offer: CompetingOffer
+    candidate_ask: float = Field(gt=0)
+    candidate_floor: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
+    candidate_priorities: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # Phase 2A — agentic negotiation (offercheck_phase2_spec.md)
 # ---------------------------------------------------------------------------
 

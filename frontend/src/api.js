@@ -376,3 +376,44 @@ export function offercheckBulkVerify(apiKey, body) {
     body: JSON.stringify(body),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Employer-initiated invites — mirror of the candidate-initiated flow above
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/offercheck/employer/new — authenticated employer opens an invite before any candidate exists
+ * @param {string} apiKey
+ * @param {{ band_min: number, band_mid: number, band_max: number, requirements?: string, employer_authority_limit?: number, employer_priorities?: string }} body
+ * @returns {Promise<object>} EmployerInviteResponse { invite_id, candidate_join_link, status }
+ */
+export function offercheckCreateInvite(apiKey, body) {
+  return request('/api/offercheck/employer/new', {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey },
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/offercheck/employer/invite/:inviteId — status check for the invite's own creating company
+ * @param {string} apiKey
+ * @param {string} inviteId
+ * @returns {Promise<object>} InviteStatusResponse { invite_id, status, session_id, employer_token }
+ */
+export function offercheckGetInvite(apiKey, inviteId) {
+  return request(`/api/offercheck/employer/invite/${inviteId}`, { headers: { 'X-API-Key': apiKey } })
+}
+
+/**
+ * POST /api/offercheck/candidate/join/:inviteId — candidate claims an employer-initiated invite
+ * @param {string} inviteId
+ * @param {object} body { competing_offer, candidate_ask, candidate_floor?, candidate_priorities? }
+ * @returns {Promise<object>} CandidateSubmitResponse — same shape as offercheckSubmit's response
+ */
+export function offercheckJoinInvite(inviteId, body) {
+  return request(`/api/offercheck/candidate/join/${inviteId}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}

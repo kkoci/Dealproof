@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import demo_auth, rate_limit, store
+from app.offercheck import demo_auth, invites, rate_limit, store
 
 
 @pytest.fixture(autouse=True)
@@ -25,10 +25,12 @@ def _clear_state():
     store.reset()
     demo_auth.reset()
     rate_limit.reset()
+    invites.reset()
     yield
     store.reset()
     demo_auth.reset()
     rate_limit.reset()
+    invites.reset()
 
 
 class _FakeRequest:

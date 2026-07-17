@@ -25,12 +25,22 @@ export default function Landing() {
             offer letter or raw ask — just the gap, round by round, until you converge.
           </p>
 
-          <div className="flex justify-center mb-16">
+          {/* luxe SKILL.md Press Feedback: scale(0.96) on :active, layered on top of the existing
+              hover-lift (translateY) rather than replacing it — applied to BOTH CTAs together so the
+              paired buttons stay visually consistent with each other (see docs/design/luxe audit notes
+              on why this isn't extended to CandidateNew.jsx / Dashboard.jsx). */}
+          <div className="flex flex-col sm:flex-row justify-center gap-3 mb-16">
             <Link
               to="/offercheck/new"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl bg-teal hover:bg-teal-hover text-white font-semibold text-base transition-all hover:-translate-y-0.5 active:translate-y-0"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl bg-teal hover:bg-teal-hover text-white font-semibold text-base transition-[background-color,transform] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.96] active:duration-100"
             >
               I'm the candidate — start verification
+            </Link>
+            <Link
+              to="/offercheck/company/new"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl bg-transparent border-[1.5px] border-border-strong hover:bg-bg-elevated text-ink-primary font-semibold text-base transition-[background-color,transform] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.96] active:duration-100"
+            >
+              I'm the employer — start a negotiation
             </Link>
           </div>
 

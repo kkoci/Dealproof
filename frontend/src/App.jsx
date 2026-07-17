@@ -2,9 +2,11 @@ import React from 'react'
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom'
 import Landing from './pages/offercheck/Landing.jsx'
 import CandidateNew from './pages/offercheck/CandidateNew.jsx'
+import CandidateJoin from './pages/offercheck/CandidateJoin.jsx'
 import CandidateSession from './pages/offercheck/CandidateSession.jsx'
 import EmployerSession from './pages/offercheck/EmployerSession.jsx'
 import CompanyRegister from './pages/offercheck/CompanyRegister.jsx'
+import CompanyNew from './pages/offercheck/CompanyNew.jsx'
 import Dashboard from './pages/offercheck/Dashboard.jsx'
 import Demo from './pages/offercheck/Demo.jsx'
 import logo from './assets/icon.svg'
@@ -74,9 +76,11 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/offercheck/new" element={<CandidateNew />} />
+            <Route path="/offercheck/candidate/join/:inviteId" element={<CandidateJoin />} />
             <Route path="/offercheck/candidate/:sessionId" element={<CandidateSession />} />
             <Route path="/offercheck/employer/:sessionId" element={<EmployerSession />} />
             <Route path="/offercheck/company/register" element={<CompanyRegister />} />
+            <Route path="/offercheck/company/new" element={<CompanyNew />} />
             <Route path="/offercheck/dashboard" element={<Dashboard />} />
             <Route path="/offercheck/demo" element={<Demo />} />
             <Route path="*" element={<NotFound />} />

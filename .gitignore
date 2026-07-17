@@ -126,3 +126,9 @@ test_dkim_live.ps1
 
 # Tiny Cloud
 TinyCloud/
+
+# eval stuff
+app/generic_negotiate/
+data.json
+eval_harness.py
+eval_results/
