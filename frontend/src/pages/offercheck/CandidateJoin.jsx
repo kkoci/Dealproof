@@ -33,6 +33,23 @@ export default function CandidateJoin() {
   const [parseNotice, setParseNotice] = useState(null)
   const fileInputRef = useRef(null)
 
+  // Same numbers CandidateNew.jsx's own "Load demo data" uses for the candidate-initiated
+  // flow — kept identical so either entry point demos consistently.
+  const loadDemoData = () => {
+    const startDate = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    setForm({
+      company: 'Stripe',
+      role: 'Senior Software Engineer',
+      base_salary: '180000',
+      equity_value: '40000',
+      bonus: '15000',
+      start_date: startDate,
+      candidate_ask: '190000',
+    })
+    setParseNotice(null)
+    setError('')
+  }
+
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
   const handlePdfUpload = async (e) => {
@@ -92,7 +109,16 @@ export default function CandidateJoin() {
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">You've been invited to negotiate</h1>
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary">You've been invited to negotiate</h1>
+          <button
+            type="button"
+            onClick={loadDemoData}
+            className="shrink-0 mt-1 px-2.5 py-1 rounded-md bg-bg-elevated hover:bg-border text-ink-secondary hover:text-ink-primary text-xs font-medium transition-all"
+          >
+            Load demo data
+          </button>
+        </div>
         <p className="text-sm text-ink-muted mb-6">
           Enter your competing offer and your ask. These details stay private — the employer only ever sees a gap percentage.
         </p>

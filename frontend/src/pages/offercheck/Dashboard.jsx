@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { offercheckConnectAts, offercheckListCompanySessions } from '../../api.js'
+import { offercheckCheckCompanyKey, offercheckConnectAts, offercheckListCompanySessions } from '../../api.js'
 
 const STATE_LABEL = {
   PENDING_EMPLOYER: 'Awaiting band',
@@ -20,6 +20,10 @@ const STATE_COLOR = {
 export default function Dashboard() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('offercheck_api_key') || '')
   const [keyInput, setKeyInput] = useState('')
+  // Verified *before* the authenticated view renders — see offercheckCheckCompanyKey. Starts
+  // 'empty' rather than null so a key-less first render goes straight to the key-entry screen
+  // instead of flashing a "checking" state for nothing.
+  const [keyStatus, setKeyStatus] = useState('empty')
   const [sessions, setSessions] = useState(null)
   const [error, setError] = useState('')
   const [atsProvider, setAtsProvider] = useState('greenhouse')
@@ -38,7 +42,18 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    if (apiKey) refresh(apiKey)
+    if (!apiKey) {
+      setKeyStatus('empty')
+      return
+    }
+    let cancelled = false
+    setKeyStatus('checking')
+    offercheckCheckCompanyKey(apiKey).then((status) => {
+      if (cancelled) return
+      setKeyStatus(status)
+      if (status === 'valid') refresh(apiKey)
+    })
+    return () => { cancelled = true }
   }, [apiKey])
 
   const handleUseKey = (e) => {
@@ -46,6 +61,13 @@ export default function Dashboard() {
     if (!keyInput.trim()) return
     localStorage.setItem('offercheck_api_key', keyInput.trim())
     setApiKey(keyInput.trim())
+  }
+
+  const useDifferentKey = () => {
+    localStorage.removeItem('offercheck_api_key')
+    setApiKey('')
+    setSessions(null)
+    setKeyStatus('empty')
   }
 
   const handleConnectAts = async (e) => {
@@ -60,7 +82,7 @@ export default function Dashboard() {
     }
   }
 
-  if (!apiKey) {
+  if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
         <div className="w-full max-w-md mx-auto">
@@ -77,9 +99,46 @@ export default function Dashboard() {
               Go
             </button>
           </form>
+          {keyStatus === 'malformed' && (
+            <p className="text-xs text-danger mb-4">That doesn't look like a valid API key — check for typos.</p>
+          )}
           <Link to="/offercheck/company/register" className="text-sm text-teal hover:text-teal-hover underline">
             Don't have a key? Register your company
           </Link>
+        </div>
+      </div>
+    )
+  }
+
+  if (keyStatus === 'checking') {
+    return (
+      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
+        <div className="w-full max-w-md mx-auto">
+          <p className="text-sm text-ink-muted">Checking your key…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (keyStatus === 'unregistered') {
+    return (
+      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
+        <div className="w-full max-w-md mx-auto">
+          <h1 className="text-2xl font-bold text-ink-primary mb-2">No company registered yet</h1>
+          <p className="text-sm text-ink-muted mb-6">
+            This server instance has no record of that key — register to get started.
+          </p>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/offercheck/company/register"
+              className="px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-medium transition-colors"
+            >
+              Register your company
+            </Link>
+            <button onClick={useDifferentKey} className="text-xs text-ink-muted hover:text-ink-secondary">
+              Use a different key
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -94,10 +153,7 @@ export default function Dashboard() {
             <Link to="/offercheck/company/new" className="text-xs text-teal hover:text-teal-hover font-medium">
               + Start a negotiation
             </Link>
-            <button
-              onClick={() => { localStorage.removeItem('offercheck_api_key'); setApiKey(''); setSessions(null) }}
-              className="text-xs text-ink-muted hover:text-ink-secondary"
-            >
+            <button onClick={useDifferentKey} className="text-xs text-ink-muted hover:text-ink-secondary">
               Use a different key
             </button>
           </div>

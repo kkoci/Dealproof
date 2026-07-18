@@ -184,7 +184,9 @@ function AttestationPanel({ sessionId, token, visible }) {
             </div>
           )}
           <p className="text-xs text-ink-muted leading-relaxed mb-2">
-            This verification ran inside a TDX enclave. Neither party's raw data was observable by the platform.
+            {receipt.tee_attested
+              ? 'Verified by secure, tamper-proof computation — neither side could see or alter the other’s private numbers, and the result can’t be faked.'
+              : 'This demo run skipped the real secure hardware — for testing only, not a verified result.'}
           </p>
           <p className="text-[11px] font-mono text-ink-muted break-all mb-3">{receipt.attestation}</p>
           {cred && (
@@ -233,12 +235,17 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
 
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-4 w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
-      >
-        Enable AI negotiation
-      </button>
+      <div className="mt-4">
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
+        >
+          Enable AI negotiation
+        </button>
+        <p className="mt-1.5 text-xs text-ink-muted">
+          An AI agent will negotiate on your behalf, using the private authority limit you set below — it will never agree to a number above that limit.
+        </p>
+      </div>
     )
   }
 
@@ -265,6 +272,9 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
           Cancel
         </button>
       </div>
+      <p className="text-[11px] text-ink-muted">
+        Sealing locks in your number privately — the other side never sees it, only the eventual outcome.
+      </p>
     </form>
   )
 }
@@ -299,12 +309,17 @@ function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled }) {
 
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-3 w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
-      >
-        Enable AI negotiation (full package)
-      </button>
+      <div className="mt-3">
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
+        >
+          Enable AI negotiation (full package)
+        </button>
+        <p className="mt-1.5 text-xs text-ink-muted">
+          An AI agent will negotiate the full compensation package on your behalf, using the private budget you set below — it will never agree above that budget.
+        </p>
+      </div>
     )
   }
 
@@ -331,6 +346,9 @@ function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled }) {
           Cancel
         </button>
       </div>
+      <p className="text-[11px] text-ink-muted">
+        Sealing locks in your number privately — the other side never sees it, only the eventual outcome.
+      </p>
     </form>
   )
 }
@@ -712,19 +730,44 @@ export default function EmployerSession() {
           </div>
         )}
 
+        {/* Three real states, distinct copy for each — same design as CandidateSession.jsx's
+            mirror: neither sealed -> plain CTA below; other side already sealed -> nudge banner
+            ABOVE the CTA; I've sealed, other side hasn't -> green confirmation banner. Once both
+            are sealed, agentic_ready flips and AgenticPanel takes over with its own "both sides
+            have sealed... Let agents negotiate" copy — the transition into negotiation starting. */}
+        {view?.band_set && !view?.my_agentic_sealed && view?.other_agentic_sealed && !isTerminal && (
+          <div className="mt-4 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
+            The candidate has already enabled AI negotiation (salary) — enable yours to get started.
+          </div>
+        )}
         <EnableAgenticButton
           sessionId={sessionId}
           token={token}
           visible={Boolean(view?.band_set && !view?.my_agentic_sealed && !isTerminal)}
           onEnabled={refresh}
         />
+        {view?.band_set && view?.my_agentic_sealed && !view?.agentic_ready && !isTerminal && (
+          <div className="mt-4 px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
+            <span>✓ AI negotiation enabled (salary) — waiting for the candidate to enable their side too.</span>
+          </div>
+        )}
 
+        {view?.band_set && !view?.my_package_agentic_sealed && view?.other_package_agentic_sealed && !isTerminal && (
+          <div className="mt-3 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
+            The candidate has already enabled package AI negotiation — enable yours to get started.
+          </div>
+        )}
         <EnablePackageAgenticButton
           sessionId={sessionId}
           token={token}
           visible={Boolean(view?.band_set && !view?.my_package_agentic_sealed && !isTerminal)}
           onEnabled={refresh}
         />
+        {view?.band_set && view?.my_package_agentic_sealed && !view?.package_agentic_ready && !isTerminal && (
+          <div className="mt-3 px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
+            <span>✓ Package AI negotiation enabled — waiting for the candidate to enable their side too.</span>
+          </div>
+        )}
 
         <AgenticPanel
           sessionId={sessionId}

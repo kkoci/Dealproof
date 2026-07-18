@@ -365,6 +365,34 @@ export function offercheckListCompanySessions(apiKey) {
 }
 
 /**
+ * Classifies a stored/entered company API key before any authenticated UI renders, so a stale
+ * key (e.g. left over in localStorage from before a backend restart wiped the in-memory company
+ * store) never surfaces as a raw "invalid API key" error — it reads as "no company registered
+ * yet" instead, since that's what it actually is.
+ *
+ * 'empty'        — no key at all
+ * 'malformed'    — doesn't look like a key this backend issues (heuristic: "oc_" prefix,
+ *                  matches auth.register_company's raw_key format) — the one case that's
+ *                  actually "you typed something wrong"
+ * 'unregistered' — well-formed but the backend has no record of it (never registered, or
+ *                  registered against a since-restarted server instance) — NOT a typo
+ * 'valid'        — backend confirms it resolves to a real company
+ *
+ * @param {string} apiKey
+ * @returns {Promise<'empty'|'malformed'|'unregistered'|'valid'>}
+ */
+export async function offercheckCheckCompanyKey(apiKey) {
+  if (!apiKey) return 'empty'
+  if (!apiKey.startsWith('oc_')) return 'malformed'
+  try {
+    await offercheckListCompanySessions(apiKey)
+    return 'valid'
+  } catch {
+    return 'unregistered'
+  }
+}
+
+/**
  * POST /api/offercheck/company/verify/bulk
  * @param {string} apiKey
  * @param {{ verifications: object[] }} body

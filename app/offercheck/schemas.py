@@ -235,6 +235,7 @@ class SessionView(BaseModel):
     my_current_value: float | None = None
     agentic_ready: bool = False  # Phase 2A: True once both sides have sealed floor/authority_limit — booleans only, never the values
     my_agentic_sealed: bool = False  # True once the viewer's own side has sealed their floor/authority_limit — lets the UI hide its own "enable AI negotiation" prompt without exposing the other side's status
+    other_agentic_sealed: bool = False  # True once the OTHER side has sealed theirs — a boolean coordination signal only (never their floor/limit value), so a viewer who hasn't sealed yet can see "the other side is already ready" instead of the two-sided agentic_ready being their only signal
     package_agentic_ready: bool = False  # Phase 2B: True once both sides have sealed package_ask/total_comp_floor + budget
     # Package-mode progress (Phase 2B) — a parallel channel to state/round_number/turn/history
     # above (see app.offercheck.package's module docstring for why it's parallel, not merged).
@@ -247,6 +248,7 @@ class SessionView(BaseModel):
     package_history: list[PackageRoundDetail] = Field(default_factory=list)
     package_agreed_package: OfferPackage | None = None
     my_package_agentic_sealed: bool = False  # viewer's own side has sealed candidate_total_comp_floor / employer_total_comp_budget
+    other_package_agentic_sealed: bool = False  # package-mode counterpart to other_agentic_sealed — the OTHER side has sealed their package floor/budget
     package_converged_hint: bool = False  # candidate/employer current packages are within 2% total comp — same threshold package_mediator uses to nudge agents toward accepting
 
 

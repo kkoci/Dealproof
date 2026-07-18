@@ -407,6 +407,45 @@ def test_my_agentic_sealed_flag_is_per_viewer(client):
     assert emp_view["my_agentic_sealed"] is False   # employer hasn't sealed anything yet
 
 
+def test_other_agentic_sealed_flag_is_the_mirror_image_of_my_agentic_sealed(client):
+    """
+    other_agentic_sealed lets a viewer who HASN'T sealed yet see that the other party already
+    has — the missing third state between "neither sealed" and "both sealed" (agentic_ready).
+    Only a boolean coordination signal crosses, never the other side's floor/limit value.
+    """
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={
+            "competing_offer": {"company": "Stripe", "role": "Engineer", "base_salary": 180000,
+                                 "equity_value": 40000, "bonus": 15000, "start_date": "2026-09-01"},
+            "candidate_ask": 190000,
+            "candidate_floor": 175000,
+        },
+    )
+    body = submit.json()
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    # Candidate sealed at creation, employer hasn't yet.
+    cand_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    emp_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
+    assert cand_view["other_agentic_sealed"] is False  # employer hasn't sealed — candidate sees that
+    assert emp_view["other_agentic_sealed"] is True    # candidate already sealed — employer sees that
+    assert "175000" not in emp_view.__repr__()          # still never the raw value
+
+    # Employer now seals too — agentic_ready flips, and both my_/other_ flags read True from both sides.
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 195000,
+              "employer_authority_limit": 195000},
+    )
+    cand_view2 = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    emp_view2 = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
+    assert cand_view2["other_agentic_sealed"] is True
+    assert emp_view2["other_agentic_sealed"] is True
+    assert cand_view2["agentic_ready"] is True
+    assert emp_view2["agentic_ready"] is True
+
+
 # ---------------------------------------------------------------------------
 # PATCH .../candidate/enable-agentic and .../employer/enable-agentic
 # ---------------------------------------------------------------------------

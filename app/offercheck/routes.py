@@ -168,6 +168,9 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         my_agentic_sealed=(
             session.candidate_floor is not None if viewer == "candidate" else session.employer_authority_limit is not None
         ),
+        other_agentic_sealed=(
+            session.employer_authority_limit is not None if viewer == "candidate" else session.candidate_floor is not None
+        ),
         package_agentic_ready=(
             session.candidate_package_ask is not None
             and session.candidate_total_comp_floor is not None
@@ -192,6 +195,11 @@ def _view_for(session: Session, viewer: str) -> SessionView:
             session.candidate_total_comp_floor is not None
             if viewer == "candidate"
             else session.employer_total_comp_budget is not None
+        ),
+        other_package_agentic_sealed=(
+            session.employer_total_comp_budget is not None
+            if viewer == "candidate"
+            else session.candidate_total_comp_floor is not None
         ),
         package_converged_hint=(
             session.candidate_current_package is not None

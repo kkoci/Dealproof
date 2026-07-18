@@ -560,6 +560,28 @@ def test_enable_candidate_package_agentic_synthesizes_package_ask(client):
     assert session.candidate_package_ask["base"] == 190000  # synthesized from candidate_ask
 
 
+def test_other_package_agentic_sealed_flag_is_the_mirror_image(client):
+    """Package-mode counterpart to the scalar other_agentic_sealed test — lets a viewer who
+    hasn't sealed their package floor/budget yet see that the other party already has."""
+    body = _unsealed_scalar_session_via_http(client)
+    session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
+
+    client.patch(
+        f"/api/offercheck/sessions/{session_id}/candidate/enable-agentic-package",
+        json={"token": candidate_token, "candidate_total_comp_floor": 250000},
+    )
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/band",
+        json={"employer_token": employer_token, "band_min": 155000, "band_mid": 175000, "band_max": 195000},
+    )
+
+    cand_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
+    emp_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
+    assert cand_view["other_package_agentic_sealed"] is False  # employer hasn't sealed a budget yet
+    assert emp_view["other_package_agentic_sealed"] is True    # candidate already sealed — employer sees that
+    assert "250000" not in emp_view.__repr__()                  # still never the raw value
+
+
 def test_enable_candidate_package_agentic_wrong_token_403(client):
     body = _unsealed_scalar_session_via_http(client)
     resp = client.patch(

@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { offercheckCreateInvite, offercheckGetInvite } from '../../api.js'
+import { offercheckCheckCompanyKey, offercheckCreateInvite, offercheckGetInvite } from '../../api.js'
 
 // luxe SKILL.md "Controls, Dials & Selectors" control anatomy: named transition properties
 // (never `transition: all`) at the spec's 120ms smooth-out easing for hover/focus.
@@ -18,6 +18,9 @@ const smallButtonClass =
 export default function CompanyNew() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('offercheck_api_key') || '')
   const [keyInput, setKeyInput] = useState('')
+  // Verified *before* the form renders — see offercheckCheckCompanyKey. Starts 'empty' rather
+  // than null so a key-less first render goes straight to the key-entry screen.
+  const [keyStatus, setKeyStatus] = useState('empty')
   const [form, setForm] = useState({
     band_min: '', band_mid: '', band_max: '',
     requirements: '', employer_authority_limit: '', employer_priorities: '',
@@ -31,11 +34,43 @@ export default function CompanyNew() {
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
+  // Same band numbers EmployerSession.jsx's own "Load demo data" uses for the human flow —
+  // keeping them identical means a solo demo run (this form -> candidate join -> employer
+  // session) lines up without the demo-er having to remember or re-type anything.
+  const loadDemoData = () => {
+    setForm((f) => ({
+      ...f,
+      band_min: '155000',
+      band_mid: '175000',
+      band_max: '195000',
+      requirements: 'Senior Software Engineer, backend team',
+    }))
+  }
+
+  useEffect(() => {
+    if (!apiKey) {
+      setKeyStatus('empty')
+      return
+    }
+    let cancelled = false
+    setKeyStatus('checking')
+    offercheckCheckCompanyKey(apiKey).then((result) => {
+      if (!cancelled) setKeyStatus(result)
+    })
+    return () => { cancelled = true }
+  }, [apiKey])
+
   const handleUseKey = (e) => {
     e.preventDefault()
     if (!keyInput.trim()) return
     localStorage.setItem('offercheck_api_key', keyInput.trim())
     setApiKey(keyInput.trim())
+  }
+
+  const useDifferentKey = () => {
+    localStorage.removeItem('offercheck_api_key')
+    setApiKey('')
+    setKeyStatus('empty')
   }
 
   const handleSubmit = async (e) => {
@@ -74,7 +109,7 @@ export default function CompanyNew() {
     }
   }
 
-  if (!apiKey) {
+  if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
         <div className="w-full max-w-md mx-auto">
@@ -91,9 +126,46 @@ export default function CompanyNew() {
               Go
             </button>
           </form>
+          {keyStatus === 'malformed' && (
+            <p className="text-xs text-danger mb-4">That doesn't look like a valid API key — check for typos.</p>
+          )}
           <Link to="/offercheck/company/register" className="text-sm text-teal hover:text-teal-hover underline">
             Don't have a key? Register your company
           </Link>
+        </div>
+      </div>
+    )
+  }
+
+  if (keyStatus === 'checking') {
+    return (
+      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
+        <div className="w-full max-w-md mx-auto">
+          <p className="text-sm text-ink-muted">Checking your key…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (keyStatus === 'unregistered') {
+    return (
+      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
+        <div className="w-full max-w-md mx-auto">
+          <h1 className="text-2xl font-bold text-ink-primary mb-2">No company registered yet</h1>
+          <p className="text-sm text-ink-muted mb-6">
+            This server instance has no record of that key — register to get started.
+          </p>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/offercheck/company/register"
+              className="px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-medium transition-colors"
+            >
+              Register your company
+            </Link>
+            <button onClick={useDifferentKey} className="text-xs text-ink-muted hover:text-ink-secondary">
+              Use a different key
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -171,7 +243,16 @@ export default function CompanyNew() {
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Start a negotiation</h1>
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary">Start a negotiation</h1>
+          <button
+            type="button"
+            onClick={loadDemoData}
+            className="shrink-0 mt-1 px-2.5 py-1 rounded-md bg-bg-elevated hover:bg-border text-ink-secondary hover:text-ink-primary text-xs font-medium transition-all"
+          >
+            Load demo data
+          </button>
+        </div>
         <p className="text-sm text-ink-muted mb-6">
           Your salary band stays private. The candidate only ever sees a gap percentage.
         </p>
