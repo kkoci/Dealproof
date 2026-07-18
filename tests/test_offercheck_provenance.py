@@ -7,7 +7,8 @@ EmployerInviteRequest.require_provenance_credential and
 negotiation.apply_move()'s gate). See CLAUDE.md's "Offer Check Architecture"
 and app/offercheck/provenance.py's module docstring for the design.
 """
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -116,10 +117,47 @@ class _EmptyGithubAsyncClient:
 
 
 # ---------------------------------------------------------------------------
+# Fake GitEvaluatorAgent (the LLM layer) — verify_git_provenance calls it after
+# GitInspectorAgent; these tests exist specifically to prove the semantic output
+# survives end-to-end into the API response, not just the deterministic fields
+# GitInspectorAgent alone would produce.
+# ---------------------------------------------------------------------------
+
+_LLM_EVALUATION = {
+    "seniority_level": "senior",
+    "primary_languages": ["Go", "Python"],
+    "specializations": ["distributed systems", "API design"],
+    "contribution_pattern": "Consistent long-term contributions with strong test culture.",
+    "qualitative_assessment": "Highly experienced engineer with deep polyglot skills.",
+    "confidence": "high",
+    "caveats": [],
+}
+
+
+def _mock_evaluator_client(response_text: str | None = None, raise_error: bool = False):
+    client = AsyncMock()
+    if raise_error:
+        client.messages.create = AsyncMock(side_effect=RuntimeError("simulated LLM failure"))
+    else:
+        msg = MagicMock()
+        msg.content = [MagicMock(text=response_text or json.dumps(_LLM_EVALUATION))]
+        client.messages.create = AsyncMock(return_value=msg)
+    return client
+
+
+# ---------------------------------------------------------------------------
 # POST .../candidate/verify-credential
 # ---------------------------------------------------------------------------
 
-def test_verify_credential_returns_summary_and_is_visible_to_both_parties(client):
+def test_verify_credential_returns_full_semantic_credential_and_is_visible_to_both_parties(client):
+    """
+    Covers the semantic (LLM) layer, not just the deterministic one — the whole
+    point of reusing app.devcred's GitEvaluatorAgent per this module's docstring.
+    A version of this endpoint that silently dropped the LLM layer back to the
+    deterministic-only fallback would still pass a test that only checked
+    hard_seniority_signal/total_commits; asserting on primary_languages/
+    specializations/qualitative_assessment/confidence catches that regression.
+    """
     submit = client.post(
         "/api/offercheck/sessions",
         json={"competing_offer": _COMPETING_OFFER, "candidate_ask": 185000},
@@ -127,25 +165,68 @@ def test_verify_credential_returns_summary_and_is_visible_to_both_parties(client
     body = submit.json()
     session_id, candidate_token, employer_token = body["session_id"], body["candidate_token"], body["employer_token"]
 
-    with patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClient()):
+    with patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClient()), \
+         patch("app.devcred.agents.git_evaluator.anthropic.AsyncAnthropic", return_value=_mock_evaluator_client()):
         resp = client.post(
             f"/api/offercheck/sessions/{session_id}/candidate/verify-credential",
             json={"token": candidate_token, "github_token": "fake-token", "repos": ["octocat/hello-world"]},
         )
     assert resp.status_code == 200
     cred = resp.json()["credential"]
-    assert cred["seniority_signal"] in ("junior", "mid", "senior")
+
+    # Deterministic layer (GitInspectorAgent) — unchanged from before.
+    assert cred["hard_seniority_signal"] in ("junior", "mid", "senior")
     assert cred["total_commits"] == 2
+
+    # Semantic layer (GitEvaluatorAgent) — the actual differentiator this test protects.
+    assert cred["seniority_level"] == "senior"
+    assert cred["primary_languages"] == ["Go", "Python"]
+    assert cred["specializations"] == ["distributed systems", "API design"]
+    assert cred["qualitative_assessment"] == "Highly experienced engineer with deep polyglot skills."
+    assert cred["confidence"] == "high"
+    assert cred["caveats"] == []
 
     # Visible to the candidate...
     candidate_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token})
+    candidate_cred = candidate_view.json()["candidate_provenance_credential"]
     assert candidate_view.json()["candidate_provenance_verified"] is True
-    assert candidate_view.json()["candidate_provenance_credential"]["total_commits"] == 2
+    assert candidate_cred["total_commits"] == 2
+    assert candidate_cred["seniority_level"] == "senior"
+    assert candidate_cred["qualitative_assessment"] == "Highly experienced engineer with deep polyglot skills."
 
     # ...and to the employer — this is evidence meant to be shown, not a sealed number.
     employer_view = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token})
+    employer_cred = employer_view.json()["candidate_provenance_credential"]
     assert employer_view.json()["candidate_provenance_verified"] is True
-    assert employer_view.json()["candidate_provenance_credential"]["total_commits"] == 2
+    assert employer_cred["total_commits"] == 2
+    assert employer_cred["seniority_level"] == "senior"
+    assert employer_cred["specializations"] == ["distributed systems", "API design"]
+
+
+def test_verify_credential_falls_back_to_deterministic_only_when_llm_fails(client):
+    """
+    Non-fatal discipline (see app.devcred.routes._fallback_evaluation, reused directly):
+    an LLM failure must not fail the whole verification — it degrades to a
+    deterministic-only evaluation instead, same pattern as every other Claude-calling
+    path in this codebase (memory sidecar, πCreds, Auditor, DKIM).
+    """
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={"competing_offer": _COMPETING_OFFER, "candidate_ask": 185000},
+    )
+    body = submit.json()
+
+    with patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClient()), \
+         patch("app.devcred.agents.git_evaluator.anthropic.AsyncAnthropic", return_value=_mock_evaluator_client(raise_error=True)):
+        resp = client.post(
+            f"/api/offercheck/sessions/{body['session_id']}/candidate/verify-credential",
+            json={"token": body["candidate_token"], "github_token": "fake-token", "repos": ["octocat/hello-world"]},
+        )
+    assert resp.status_code == 200
+    cred = resp.json()["credential"]
+    assert cred["confidence"] == "low"
+    assert cred["seniority_level"] == cred["hard_seniority_signal"]
+    assert any("LLM evaluation failed" in c for c in cred["caveats"])
 
 
 def test_verify_credential_wrong_token_rejected(client):
@@ -261,7 +342,8 @@ def test_required_credential_blocks_candidate_move_until_verified(client):
     assert blocked.status_code == 412
 
     # Verify, then the same move succeeds.
-    with patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClient()):
+    with patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClient()), \
+         patch("app.devcred.agents.git_evaluator.anthropic.AsyncAnthropic", return_value=_mock_evaluator_client()):
         verify = client.post(
             f"/api/offercheck/sessions/{session_id}/candidate/verify-credential",
             json={"token": candidate_token, "github_token": "fake-token", "repos": ["octocat/hello-world"]},

@@ -593,8 +593,10 @@ async def candidate_move(session_id: str, body: MoveRequest) -> SessionView:
 async def verify_credential_route(session_id: str, body: VerifyCredentialRequest, request: Request) -> VerifyCredentialResponse:
     """
     Candidate-initiated, on-demand proof of real git-commit history behind their
-    claimed experience — see app.offercheck.provenance for the pipeline and why it
-    deliberately reuses only app.devcred's deterministic layer, not its LLM one.
+    claimed experience — see app.offercheck.provenance for the full two-layer
+    pipeline (deterministic GitInspectorAgent + LLM GitEvaluatorAgent, same as
+    app.devcred's own product). Rate-limited tighter than a plain GitHub-fetch
+    endpoint because it makes a paid Claude call — see rate_limit.check_provenance_verify.
 
     Not gated by session state or turn order — a candidate may verify before,
     during, or after the employer sets require_provenance_credential; only

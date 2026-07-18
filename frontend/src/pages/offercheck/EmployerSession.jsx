@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { offercheckEmployerApproval, offercheckEmployerApprovalPackage, offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckEnableEmployerPackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
 
-const SENIORITY_LABEL = { junior: 'Junior signal', mid: 'Mid-level signal', senior: 'Senior signal' }
+const SENIORITY_LABEL = { junior: 'Junior', mid: 'Mid-level', senior: 'Senior', staff: 'Staff+' }
 
 const APPROVAL_LABEL = { approve: 'approve', request_more_rounds: 'ask for more rounds', decline: 'decline' }
 const TERMINAL_STATES = ['AGREED', 'WALKAWAY', 'EXPIRED', 'DECLINED', 'STALEMATE']
@@ -590,9 +590,15 @@ function ProvenanceStatusPanel({ visible, view }) {
       <div className="mt-4 p-4 rounded-xl bg-success-subtle border border-success/30">
         <p className="text-xs font-semibold text-success-text mb-1">✓ Candidate's git-provenance credential verified</p>
         {c && (
-          <p className="text-xs text-ink-muted">
-            {SENIORITY_LABEL[c.seniority_signal] || c.seniority_signal} · {c.years_active}y active · {c.total_commits} commits analyzed
-          </p>
+          <>
+            <p className="text-xs text-ink-muted">
+              {SENIORITY_LABEL[c.seniority_level] || c.seniority_level} · {c.years_active}y active · {c.total_commits} commits analyzed
+              {c.primary_languages?.length > 0 ? ` · ${c.primary_languages.join(', ')}` : ''}
+            </p>
+            {c.qualitative_assessment && (
+              <p className="text-xs text-ink-muted mt-1 italic">{c.qualitative_assessment}</p>
+            )}
+          </>
         )}
       </div>
     )

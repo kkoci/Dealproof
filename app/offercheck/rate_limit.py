@@ -31,13 +31,17 @@ WINDOW_SECONDS = 3600  # 1 hour
 
 SESSION_CREATE_LIMIT = 10   # new sessions per IP per hour
 AGENTIC_CALL_LIMIT = 5      # start-agentic(-package) calls per IP per hour
-PROVENANCE_VERIFY_LIMIT = 10  # candidate/verify-credential calls per IP per hour — same
-                               # order of magnitude as app.devcred's own 10/hour ingest
-                               # limiter for the identical GitHub-fetch pipeline; this
-                               # endpoint is candidate-token-gated but, per this module's
-                               # own docstring, a candidate token can be self-issued via
-                               # POST /sessions with zero credential, so it gets the same
-                               # per-IP backstop as session creation and agentic calls.
+PROVENANCE_VERIFY_LIMIT = 3   # candidate/verify-credential calls per IP per hour — matches
+                               # app.devcred's own 3/hour /evaluate limit, not its 10/hour
+                               # /ingest limit: app.offercheck.provenance.verify_git_provenance
+                               # runs the full two-layer pipeline (GitHub fetch + a paid
+                               # GitEvaluatorAgent Claude call), so this endpoint has the same
+                               # cost profile as devcred's LLM-calling endpoint, not its
+                               # free-tier-only one. This endpoint is candidate-token-gated
+                               # but, per this module's own docstring, a candidate token can
+                               # be self-issued via POST /sessions with zero credential, so it
+                               # gets the same per-IP backstop as session creation and agentic
+                               # calls.
 
 _session_create_hits: dict[str, list[float]] = defaultdict(list)
 _agentic_call_hits: dict[str, list[float]] = defaultdict(list)

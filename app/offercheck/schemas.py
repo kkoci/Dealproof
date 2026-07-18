@@ -235,18 +235,29 @@ class PackageRoundDetail(BaseModel):
 
 class ProvenanceCredentialSummary(BaseModel):
     """
-    Deterministic git-provenance signal (see app.offercheck.provenance) — mirrors
-    app.devcred.agents.git_inspector.GitInspectionReport's fields, minus repo/company
-    names, so it's safe to show to the counterparty like any other credential in this
-    codebase (cf. app.devcred.schemas.SeniorDevCredential).
+    Full two-layer git-provenance credential (see app.offercheck.provenance) — mirrors
+    app.devcred.schemas.SeniorDevCredential's field naming exactly (hard_seniority_signal
+    vs. seniority_level; the latter is the LLM-adjusted value and can only be >= the
+    former, enforced in app.devcred.agents.git_evaluator). No repo/company names, no raw
+    token, so it's safe to show to the counterparty like any other credential in this
+    codebase.
     """
-    seniority_signal: Literal["junior", "mid", "senior"]
+    # Hard findings — app.devcred.agents.git_inspector.GitInspectionReport, deterministic, no LLM.
+    hard_seniority_signal: Literal["junior", "mid", "senior"]
     years_active: float
     languages_deep: list[str]
     has_test_culture: bool
     consistent_contribution: bool
     avg_commit_quality: Literal["low", "medium", "high"]
     total_commits: int
+    # Qualitative layer — app.devcred.agents.git_evaluator.GitEvaluation (or its
+    # deterministic-only fallback on LLM failure, see app.devcred.routes._fallback_evaluation).
+    seniority_level: str
+    primary_languages: list[str]
+    specializations: list[str]
+    qualitative_assessment: str
+    confidence: str
+    caveats: list[str]
 
 
 class VerifyCredentialRequest(BaseModel):
