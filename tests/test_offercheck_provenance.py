@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.offercheck import auth, invites, rate_limit, store
+from app.offercheck import auth, invites, provenance, rate_limit, store
 
 pytestmark = []
 
@@ -410,3 +410,71 @@ def test_required_credential_does_not_block_employer_moves(client):
         json={"token": body["employer_token"], "move": "counter", "value": 170_000},
     )
     assert employer_move.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# provenance.clean_repo_name — regression tests for a real live "Not Found" report.
+#
+# Root cause, confirmed by direct trace against the real GitHub API (not assumed): a
+# zero-width space (U+200B) or a mid-string non-breaking space (U+00A0) survives naive
+# .trim()/str.strip() untouched — .trim() doesn't treat U+200B as whitespace at all, and
+# it only ever strips characters at the string's edges, never the middle. httpx then
+# silently percent-encodes the invisible character into the URL path, and GitHub returns
+# a genuine 404 for it — indistinguishable from "repo doesn't exist" in our own error
+# message. Reproduction strings below are built with chr() rather than embedded escapes,
+# so there is zero ambiguity about which codepoint each test actually exercises.
+# ---------------------------------------------------------------------------
+
+_ZERO_WIDTH_SPACE = chr(0x200B)
+_NBSP = chr(0x00A0)
+
+_DIRTY_REPO_TRAILING_ZWS = "kkoci/Dealproof" + _ZERO_WIDTH_SPACE
+_DIRTY_REPO_MID_STRING_NBSP = "kkoci" + _NBSP + "/Dealproof"
+_CLEAN_REPO = "kkoci/Dealproof"
+
+
+def test_clean_repo_name_strips_trailing_zero_width_space():
+    assert provenance.clean_repo_name(_DIRTY_REPO_TRAILING_ZWS) == _CLEAN_REPO
+
+
+def test_clean_repo_name_strips_mid_string_nbsp():
+    assert provenance.clean_repo_name(_DIRTY_REPO_MID_STRING_NBSP) == _CLEAN_REPO
+
+
+def test_clean_repo_name_leaves_already_clean_string_untouched():
+    assert provenance.clean_repo_name(_CLEAN_REPO) == _CLEAN_REPO
+
+
+def test_verify_credential_cleans_dirty_repo_before_fetching_from_github(client):
+    """
+    End-to-end regression test: a candidate pasting a repo name with a trailing
+    zero-width space or a mid-string non-breaking space (real-world copy-paste
+    artifacts, e.g. from a rendered GitHub page) must resolve exactly like the clean
+    string would — the dirty codepoint must never reach the GitHub-bound URL.
+    """
+    submit = client.post(
+        "/api/offercheck/sessions",
+        json={"competing_offer": _COMPETING_OFFER, "candidate_ask": 185000},
+    )
+    body = submit.json()
+
+    captured_urls = []
+
+    class _RecordingGithubClient(_FakeGithubAsyncClient):
+        async def get(self, url, headers=None, params=None, timeout=None):
+            captured_urls.append(url)
+            return await super().get(url, headers=headers, params=params, timeout=timeout)
+
+    for dirty_repo in (_DIRTY_REPO_TRAILING_ZWS, _DIRTY_REPO_MID_STRING_NBSP):
+        captured_urls.clear()
+        with patch("httpx.AsyncClient", return_value=_RecordingGithubClient()), \
+             patch("app.devcred.agents.git_evaluator.anthropic.AsyncAnthropic", return_value=_mock_evaluator_client()):
+            resp = client.post(
+                f"/api/offercheck/sessions/{body['session_id']}/candidate/verify-credential",
+                json={"token": body["candidate_token"], "github_token": "fake-token", "repos": [dirty_repo]},
+            )
+        assert resp.status_code == 200, f"failed for {dirty_repo!r}: {resp.text}"
+        assert captured_urls, "no GitHub calls were recorded"
+        for url in captured_urls:
+            assert f"/repos/{_CLEAN_REPO}/" in url, f"expected cleaned repo in URL, got {url!r}"
+            assert _ZERO_WIDTH_SPACE not in url and _NBSP not in url, f"dirty codepoint reached the GitHub URL: {url!r}"

@@ -4,6 +4,23 @@ import { offercheckCandidateApproval, offercheckCandidateApprovalPackage, offerc
 
 const SENIORITY_LABEL = { junior: 'Junior', mid: 'Mid-level', senior: 'Senior', staff: 'Staff+' }
 
+// Strips standard whitespace plus invisible zero-width/directional format characters
+// ANYWHERE in the string, not just the edges (unlike .trim()) — none of these are ever
+// legitimately part of a GitHub "owner/repo" identifier. Confirmed via direct trace against
+// the real GitHub API (2026-07): a zero-width space or a non-breaking space that .trim()
+// misses (mid-string, or U+200B which .trim() never strips at all) reaches GitHub as a
+// literal percent-encoded byte in the URL path, and GitHub genuinely returns 404 for it —
+// indistinguishable from "repo doesn't exist" in our own error message. Mirrors the
+// identical character class used server-side in app.offercheck.provenance.clean_repo_name
+// — same set on both sides. Chars named explicitly by \uXXXX escape rather than pasted
+// literally, so this source file's own bytes stay plain ASCII: U+200B zero-width space,
+// U+200C zero-width non-joiner, U+200D zero-width joiner, U+200E left-to-right mark,
+// U+200F right-to-left mark, U+2060 word joiner, U+FEFF byte-order mark, U+00AD soft hyphen.
+const INVISIBLE_CHARS_RE = /[\s​‌‍‎‏⁠﻿­]/g
+function cleanRepoName(raw) {
+  return raw.replace(INVISIBLE_CHARS_RE, '')
+}
+
 const APPROVAL_LABEL = { approve: 'approve', request_more_rounds: 'ask for more rounds', decline: 'decline' }
 const TERMINAL_STATES = ['AGREED', 'WALKAWAY', 'EXPIRED', 'DECLINED', 'STALEMATE']
 
@@ -619,7 +636,7 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified }) 
       await offercheckVerifyCredential(sessionId, {
         token,
         github_token: githubToken,
-        repos: repos.split(',').map((r) => r.trim()).filter(Boolean),
+        repos: repos.split(',').map(cleanRepoName).filter(Boolean),
       })
       setOpen(false)
       setGithubToken('')

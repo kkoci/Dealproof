@@ -605,17 +605,25 @@ async def verify_credential_route(session_id: str, body: VerifyCredentialRequest
     negotiation.apply_move()'s gate enforces the requirement, at the moment it
     actually matters. github_token is used in-memory only for this one call and
     never persisted, same discipline as app.devcred.routes.ingest_repos.
+
+    repos are cleaned via provenance.clean_repo_name() before validation — defense in
+    depth alongside the identical client-side clean in CandidateSession.jsx's
+    VerifyCredentialPanel, for a caller that bypasses the frontend entirely (direct API
+    call, a different client). See that function's docstring: a zero-width space or a
+    mid-string non-breaking space survives naive .trim()/str.strip() and otherwise reaches
+    GitHub as a genuine, indistinguishable-from-real 404 — confirmed via direct trace.
     """
     rate_limit.check_provenance_verify(request)
     session = _get_session_or_404(session_id)
     if body.token != session.candidate_token:
         raise HTTPException(status_code=403, detail="invalid candidate token")
 
-    for repo in body.repos:
+    cleaned_repos = [provenance.clean_repo_name(repo) for repo in body.repos]
+    for repo in cleaned_repos:
         if "/" not in repo or repo.startswith("/") or repo.endswith("/"):
             raise HTTPException(status_code=400, detail=f"Invalid repo format (expected owner/repo): {repo}")
 
-    summary = await provenance.verify_git_provenance(body.github_token, body.repos)
+    summary = await provenance.verify_git_provenance(body.github_token, cleaned_repos)
     session.candidate_provenance_credential = summary
 
     return VerifyCredentialResponse(session_id=session.id, credential=ProvenanceCredentialSummary(**summary))

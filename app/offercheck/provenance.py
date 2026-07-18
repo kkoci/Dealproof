@@ -32,6 +32,8 @@ fails (LLM error, malformed response), app.devcred.routes._fallback_evaluation p
 minimal evaluation from the hard findings alone rather than failing the whole verification
 — reused directly, not reimplemented, so both products degrade identically.
 """
+import re
+
 import httpx
 from fastapi import HTTPException
 
@@ -39,6 +41,29 @@ from app.devcred.agents.git_evaluator import GitEvaluatorAgent
 from app.devcred.agents.git_inspector import GitInspectorAgent
 from app.devcred.git_hasher import extract_commit_metrics
 from app.devcred.routes import _enrich_sample_with_details, _fallback_evaluation, _fetch_all_branch_commits
+
+# Matches standard/Unicode whitespace (\s already covers space, tab, newline, NBSP U+00A0,
+# and BOM U+FEFF in Python's re module) plus invisible zero-width/directional format
+# characters \s does NOT cover — confirmed via direct trace against the real GitHub API
+# (2026-07): a zero-width space or a non-breaking space anywhere in a "owner/repo" string
+# reaches GitHub as a literal percent-encoded byte in the URL path and GitHub genuinely
+# returns 404 for it — indistinguishable from "repo doesn't exist" in our own error
+# message. None of these characters are ever legitimately part of a GitHub owner/repo
+# identifier, so stripping them anywhere in the string (not just the edges, unlike
+# str.strip()/JS .trim()) is always safe. Mirrors the identical character class used
+# client-side in CandidateSession.jsx's VerifyCredentialPanel — same set on both sides, so
+# a string that cleans one way in the browser cleans identically here for a caller that
+# bypasses the frontend entirely (direct API call, a different client).
+# Chars named explicitly by \uXXXX escape rather than pasted literally, so this source
+# file's own bytes stay plain ASCII: U+200B zero-width space, U+200C zero-width
+# non-joiner, U+200D zero-width joiner, U+200E left-to-right mark, U+200F right-to-left
+# mark, U+2060 word joiner, U+FEFF byte-order mark, U+00AD soft hyphen.
+_INVISIBLE_CHARS_RE = re.compile("[\\s​‌‍‎‏⁠﻿­]")
+
+
+def clean_repo_name(raw: str) -> str:
+    """Strips whitespace and invisible Unicode format characters from anywhere in `raw`."""
+    return _INVISIBLE_CHARS_RE.sub("", raw)
 
 
 async def verify_git_provenance(github_token: str, repos: list[str]) -> dict:
