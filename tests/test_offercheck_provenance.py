@@ -310,6 +310,38 @@ def test_invite_require_provenance_credential_defaults_false_and_passes_through_
     assert required_view.json()["require_provenance_credential"] is True
 
 
+def test_employer_invite_responses_surface_require_provenance_credential(client):
+    """
+    Regression test: EmployerInviteResponse (POST /employer/new) and
+    InviteStatusResponse (GET /employer/invite/{id}) must themselves report
+    require_provenance_credential — otherwise CompanyNew.jsx's "Invite created"
+    screen has no field to render and the setting is invisible to the employer
+    from the moment they set it, even though it's correctly stored and enforced
+    on the resulting session (see test_required_credential_blocks_candidate_move_until_verified).
+    """
+    _, api_key = _register_company(client)
+
+    created = client.post(
+        "/api/offercheck/employer/new",
+        json={"band_min": 155_000, "band_mid": 175_000, "band_max": 195_000, "require_provenance_credential": True},
+        headers={"X-API-Key": api_key},
+    )
+    assert created.json()["require_provenance_credential"] is True
+
+    status = client.get(
+        f"/api/offercheck/employer/invite/{created.json()['invite_id']}",
+        headers={"X-API-Key": api_key},
+    )
+    assert status.json()["require_provenance_credential"] is True
+
+    not_required = client.post(
+        "/api/offercheck/employer/new",
+        json={"band_min": 155_000, "band_mid": 175_000, "band_max": 195_000},
+        headers={"X-API-Key": api_key},
+    )
+    assert not_required.json()["require_provenance_credential"] is False
+
+
 def test_required_credential_blocks_candidate_move_until_verified(client):
     _, api_key = _register_company(client)
     created = client.post(

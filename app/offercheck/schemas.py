@@ -429,6 +429,7 @@ class EmployerInviteResponse(BaseModel):
     invite_id: str
     candidate_join_link: str
     status: InviteStatus
+    require_provenance_credential: bool = False
 
 
 class InviteStatusResponse(BaseModel):
@@ -442,6 +443,7 @@ class InviteStatusResponse(BaseModel):
     status: InviteStatus
     session_id: str | None = None
     employer_token: str | None = None
+    require_provenance_credential: bool = False
 
 
 class CandidateJoinRequest(BaseModel):

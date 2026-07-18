@@ -434,6 +434,7 @@ async def create_employer_invite_route(
         invite_id=invite.id,
         candidate_join_link=f"/offercheck/candidate/join/{invite.id}",
         status=invite.status,
+        require_provenance_credential=invite.require_provenance_credential,
     )
 
 
@@ -466,6 +467,7 @@ async def get_employer_invite_route(
         status=invite.status,
         session_id=invite.session_id,
         employer_token=employer_token,
+        require_provenance_credential=invite.require_provenance_credential,
     )
 
 

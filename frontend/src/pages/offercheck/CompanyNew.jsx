@@ -179,8 +179,14 @@ export default function CompanyNew() {
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
         <div className="w-full max-w-lg mx-auto animate-rise-in">
           <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Invite created</h1>
-          <p className="text-sm text-ink-muted mb-6">
+          <p className="text-sm text-ink-muted mb-2">
             Send this link to the candidate. Their raw numbers stay private — you'll only ever see a gap percentage.
+          </p>
+          <p className="text-xs mb-6">
+            Verified credential required:{' '}
+            <span className={invite.require_provenance_credential ? 'text-teal font-semibold' : 'text-ink-muted'}>
+              {invite.require_provenance_credential ? 'Yes' : 'No'}
+            </span>
           </p>
 
           <div className="p-4 rounded-xl bg-bg-surface border border-border mb-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
