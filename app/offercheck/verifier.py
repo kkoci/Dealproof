@@ -55,7 +55,16 @@ def check_consistency(offer: CompetingOffer, candidate_ask: float) -> Consistenc
 
     total_comp = offer.base_salary + offer.bonus + offer.equity_value
     if total_comp > 0 and candidate_ask > total_comp * MAX_ASK_TO_TOTAL_COMP_RATIO:
-        issues.append("candidate ask is far above the reported competing total comp")
+        # Self-contained on purpose: this compares the opening ask against the candidate's
+        # separate outside offer, not the negotiated outcome with this employer — the two
+        # numbers involved never otherwise appear together on the results screen, so the
+        # message spells both out rather than leaving the reader to guess what "the reported
+        # competing total comp" refers to.
+        issues.append(
+            f"your opening ask of ${candidate_ask:,.0f} was above your stated competing offer's "
+            f"total comp of ${total_comp:,.0f} (base + bonus + equity at that other company — "
+            f"not the negotiated outcome with this employer)"
+        )
 
     if candidate_ask <= 0:
         issues.append("candidate ask must be positive")

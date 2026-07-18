@@ -59,7 +59,7 @@ export default function Landing() {
           </div>
 
           <p className="text-xs text-ink-muted mt-10">
-            Phase 1 proof of concept — software verification only, no hardware attestation yet.
+            Every agreement is verified by secure, tamper-proof hardware — cryptographic proof neither side altered the result.
           </p>
         </div>
       </div>

@@ -50,10 +50,12 @@ def test_consistency_flags_implausible_bonus():
 
 
 def test_consistency_flags_ask_far_above_total_comp():
+    """Message is self-contained — spells out both real values, since they never otherwise
+    appear together on the results screen (see verifier.check_consistency)."""
     offer = _plausible_offer()  # total comp = 235,000
     result = verifier.check_consistency(offer, candidate_ask=1_000_000)
     assert result.verified is False
-    assert any("far above" in issue for issue in result.issues)
+    assert any("$1,000,000" in issue and "$235,000" in issue for issue in result.issues)
 
 
 def test_consistency_flags_invalid_start_date():
