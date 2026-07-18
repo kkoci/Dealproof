@@ -255,7 +255,7 @@ def test_start_agentic_via_demo_token_only_no_party_token(client):
         )
 
     assert resp.status_code == 200
-    assert resp.json()["state"] == "AGREED"
+    assert resp.json()["state"] == "PENDING_APPROVAL"  # start-agentic stops here; approval endpoints finalize it
 
 
 def test_start_agentic_demo_token_is_single_use(client):

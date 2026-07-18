@@ -117,9 +117,17 @@ def test_candidate_cannot_move_out_of_turn():
 
 
 def test_employer_accept_agrees_at_candidate_ask():
+    """An accept lands on PENDING_APPROVAL, not AGREED directly — see
+    negotiation.apply_approval_vote(). Both sides must separately approve."""
     session = _new_session(candidate_ask=185_000.0)
     negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
     negotiation.apply_move(session, actor="employer", move="accept", value=None)
+    assert session.state == "PENDING_APPROVAL"
+    assert session.agreed_price == 185_000.0
+
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    assert session.state == "PENDING_APPROVAL"  # only one side has voted so far
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
     assert session.state == "AGREED"
     assert session.agreed_price == 185_000.0
 
@@ -141,10 +149,15 @@ def test_full_revision_loop_converges_after_three_rounds():
     assert session.state == "EMPLOYER_RESPONDED"
 
     negotiation.apply_move(session, actor="candidate", move="accept", value=None)
-    assert session.state == "AGREED"
+    assert session.state == "PENDING_APPROVAL"
     assert session.agreed_price == 177_000.0
     assert session.round_number == 4
     assert len([r for r in session.history if r.move == "counter"]) >= 3
+
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    assert session.state == "AGREED"
+    assert session.agreed_price == 177_000.0
 
 
 def test_walkaway_terminates_session():
@@ -255,9 +268,28 @@ def test_e2e_demo_scenario_full_revision_loop(client):
     )
     assert r3.status_code == 200
 
-    final = client.post(
+    accept = client.post(
         f"/api/offercheck/sessions/{session_id}/candidate/move",
         json={"token": candidate_token, "move": "accept", "value": None},
+    )
+    assert accept.status_code == 200
+    accept_body = accept.json()
+    assert accept_body["state"] == "PENDING_APPROVAL"
+    assert accept_body["agreed_price"] == 177_000
+    assert accept_body["round_number"] == 4
+    assert len([h for h in accept_body["history"] if h["move"] == "counter"]) == 3
+
+    # Both sides must separately approve before the session is genuinely terminal.
+    cand_approve = client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/approval",
+        json={"token": candidate_token, "decision": "approve"},
+    )
+    assert cand_approve.status_code == 200
+    assert cand_approve.json()["state"] == "PENDING_APPROVAL"  # only one side has voted so far
+
+    final = client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/approval",
+        json={"token": employer_token, "decision": "approve"},
     )
     assert final.status_code == 200
     final_body = final.json()
@@ -312,6 +344,8 @@ def test_attested_terms_excludes_private_inputs():
     session = _new_session(candidate_ask=185_000.0)
     negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
     negotiation.apply_move(session, actor="employer", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
 
     terms = negotiation.attested_terms(session)
     serialized = str(terms)
@@ -382,7 +416,18 @@ def test_attest_and_dcap_verify_after_agreement(client):
         f"/api/offercheck/sessions/{session_id}/employer/move",
         json={"token": employer_token, "move": "accept", "value": None},
     )
-    assert move.json()["state"] == "AGREED"
+    assert move.json()["state"] == "PENDING_APPROVAL"
+
+    # Both sides must approve before the session is terminal and attestation fires.
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/approval",
+        json={"token": employer_token, "decision": "approve"},
+    )
+    approve = client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/approval",
+        json={"token": candidate_token, "decision": "approve"},
+    )
+    assert approve.json()["state"] == "AGREED"
 
     receipt = client.get(f"/api/offercheck/sessions/{session_id}/attest", params={"token": candidate_token})
     assert receipt.status_code == 200

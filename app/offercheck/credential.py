@@ -51,7 +51,10 @@ class PackageCredential:
     credential_hash: str
 
 
-_OUTCOME_BY_STATE = {"AGREED": "agreed", "WALKAWAY": "walkaway", "EXPIRED": "expired"}
+_OUTCOME_BY_STATE = {
+    "AGREED": "agreed", "WALKAWAY": "walkaway", "EXPIRED": "expired",
+    "DECLINED": "declined", "STALEMATE": "stalemate",
+}
 
 
 def _capitulation_issues(values_in_order: list[float], actor: str) -> list[str]:
@@ -79,7 +82,7 @@ def _convergence_issues(candidate_values: list[float], employer_values: list[flo
 
 
 def compute_credential(session: "Session") -> OfferVerifiedCredential:
-    if session.state not in ("AGREED", "WALKAWAY", "EXPIRED"):
+    if session.state not in _OUTCOME_BY_STATE:
         raise ValueError(f"cannot compute a credential for a non-terminal session (state={session.state})")
 
     candidate_values = [session.original_candidate_ask] + [
@@ -129,13 +132,16 @@ def _hash_credential(credential: OfferVerifiedCredential) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-_PACKAGE_OUTCOME_BY_STATE = {"AGREED": "agreed", "WALKAWAY": "walkaway", "EXPIRED": "expired"}
+_PACKAGE_OUTCOME_BY_STATE = {
+    "AGREED": "agreed", "WALKAWAY": "walkaway", "EXPIRED": "expired",
+    "DECLINED": "declined", "STALEMATE": "stalemate",
+}
 
 
 def compute_package_credential(session: "Session") -> PackageCredential:
     """Phase 2B: same capitulation/convergence discipline as compute_credential(),
     applied to total_comp_value() of each side's package history instead of a raw price."""
-    if session.package_state not in ("AGREED", "WALKAWAY", "EXPIRED"):
+    if session.package_state not in _PACKAGE_OUTCOME_BY_STATE:
         raise ValueError(f"cannot compute a credential for a non-terminal package session (state={session.package_state})")
 
     candidate_totals = [total_comp_value(session.candidate_package_ask)] + [

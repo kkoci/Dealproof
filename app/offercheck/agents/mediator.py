@@ -74,11 +74,20 @@ def build_agents(session: Session) -> tuple[CandidateAgent, EmployerAgent]:
 
 async def run_agentic_negotiation(session: Session, candidate_agent: CandidateAgent, employer_agent: EmployerAgent) -> list[dict]:
     """
-    Runs CandidateAgent vs EmployerAgent to completion (ACCEPT/WALK, or
-    max_rounds auto-expiry). Mutates `session` in place via the real state
-    machine. Returns a transcript safe to hand back to the API caller:
+    Runs CandidateAgent vs EmployerAgent to completion (ACCEPT/WALK, PENDING_APPROVAL,
+    or max_rounds auto-expiry). Mutates `session` in place via the real state machine.
+    Returns a transcript safe to hand back to the API caller:
     [{"round": int, "actor": "candidate"|"employer", "move": str, "value": float|None}, ...]
     — amounts included (this mode's contract), reasoning is not.
+
+    Deliberately stops at PENDING_APPROVAL rather than looping through it — an "accept"
+    is never the agents' decision to finalize. The human touchpoint in this vertical is
+    exactly one decision per negotiation cycle, made after the agents reach an outcome,
+    never per round: see negotiation.apply_approval_vote() and routes.py's
+    .../candidate/approval and .../employer/approval endpoints. If the humans vote to
+    reopen (request_more_rounds), a fresh call to this function (via a new
+    POST .../start-agentic) resumes agent-driven rounds — this function itself never
+    loops back into PENDING_APPROVAL a second time in the same call.
     """
     session.agentic_mode = True
     if session.agentic_mode_started_round is None:
@@ -94,7 +103,7 @@ async def run_agentic_negotiation(session: Session, candidate_agent: CandidateAg
     employer_history: list[dict] = []
     transcript: list[dict] = []
 
-    while session.state not in negotiation.TERMINAL_STATES:
+    while session.state not in negotiation.TERMINAL_STATES and session.state != "PENDING_APPROVAL":
         turn = negotiation.current_turn(session)
         round_number = session.round_number + 1
 

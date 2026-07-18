@@ -19,11 +19,15 @@ SessionState = Literal[
     "PENDING_EMPLOYER",
     "EMPLOYER_RESPONDED",
     "CANDIDATE_COUNTERED",
+    "PENDING_APPROVAL",
     "AGREED",
     "WALKAWAY",
     "EXPIRED",
+    "DECLINED",
+    "STALEMATE",
 ]
 Actor = Literal["candidate", "employer"]
+ApprovalDecision = Literal["approve", "request_more_rounds", "decline"]
 
 
 class CompetingOffer(BaseModel):
@@ -137,6 +141,16 @@ class MoveRequest(BaseModel):
     value: float | None = None  # required when move == "counter"
 
 
+class ApprovalVoteRequest(BaseModel):
+    """
+    One party's vote at the PENDING_APPROVAL checkpoint (see
+    app.offercheck.negotiation's module docstring). Same shape for the
+    package-mode counterpart endpoint — decision values are identical.
+    """
+    token: str
+    decision: ApprovalDecision
+
+
 class RoundSummary(BaseModel):
     round_number: int
     actor: Actor
@@ -236,6 +250,12 @@ class SessionView(BaseModel):
     agentic_ready: bool = False  # Phase 2A: True once both sides have sealed floor/authority_limit — booleans only, never the values
     my_agentic_sealed: bool = False  # True once the viewer's own side has sealed their floor/authority_limit — lets the UI hide its own "enable AI negotiation" prompt without exposing the other side's status
     other_agentic_sealed: bool = False  # True once the OTHER side has sealed theirs — a boolean coordination signal only (never their floor/limit value), so a viewer who hasn't sealed yet can see "the other side is already ready" instead of the two-sided agentic_ready being their only signal
+    # Approval stage (state == PENDING_APPROVAL) — see app.offercheck.negotiation's module
+    # docstring. Votes are shown cross-party once cast, same precedent as RoundSummary.move
+    # (a move/action, not a sealed number) — unlike the floor/limit/budget fields above.
+    my_approval_vote: ApprovalDecision | None = None
+    other_approval_vote: ApprovalDecision | None = None
+    extension_count: int = 0
     package_agentic_ready: bool = False  # Phase 2B: True once both sides have sealed package_ask/total_comp_floor + budget
     # Package-mode progress (Phase 2B) — a parallel channel to state/round_number/turn/history
     # above (see app.offercheck.package's module docstring for why it's parallel, not merged).
@@ -250,6 +270,10 @@ class SessionView(BaseModel):
     my_package_agentic_sealed: bool = False  # viewer's own side has sealed candidate_total_comp_floor / employer_total_comp_budget
     other_package_agentic_sealed: bool = False  # package-mode counterpart to other_agentic_sealed — the OTHER side has sealed their package floor/budget
     package_converged_hint: bool = False  # candidate/employer current packages are within 2% total comp — same threshold package_mediator uses to nudge agents toward accepting
+    # Package-mode mirror of the scalar approval-stage fields above (package_state == PENDING_APPROVAL).
+    my_package_approval_vote: ApprovalDecision | None = None
+    other_package_approval_vote: ApprovalDecision | None = None
+    package_extension_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +312,7 @@ class CredentialResponse(BaseModel):
     session_id: str
     genuine_negotiation: bool
     round_count: int
-    outcome: Literal["agreed", "walkaway", "expired"]
+    outcome: Literal["agreed", "walkaway", "expired", "declined", "stalemate"]
     issues: list[str]
     summary: str
     credential_hash: str
@@ -442,7 +466,7 @@ class PackageCredentialResponse(BaseModel):
     session_id: str
     genuine_negotiation: bool
     round_count: int
-    outcome: Literal["agreed", "walkaway", "expired"]
+    outcome: Literal["agreed", "walkaway", "expired", "declined", "stalemate"]
     issues: list[str]
     summary: str
     credential_hash: str

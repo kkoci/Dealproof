@@ -152,7 +152,12 @@ def test_full_invite_lifecycle_create_unclaimed_join_becomes_normal_session(clie
         json={"token": candidate_token, "move": "accept", "value": None},
     )
     assert move2.status_code == 200
-    assert move2.json()["state"] == "AGREED"
+    assert move2.json()["state"] == "PENDING_APPROVAL"
+
+    # Both sides approve before the session is genuinely terminal.
+    client.post(f"/api/offercheck/sessions/{session_id}/candidate/approval", json={"token": candidate_token, "decision": "approve"})
+    final = client.post(f"/api/offercheck/sessions/{session_id}/employer/approval", json={"token": employer_token, "decision": "approve"})
+    assert final.json()["state"] == "AGREED"
 
 
 def test_join_invite_twice_rejects_second_claim(client):

@@ -61,6 +61,10 @@ def _agreed_session(candidate_ask=185_000.0, employer_accept=True):
     negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
     if employer_accept:
         negotiation.apply_move(session, actor="employer", move="accept", value=None)
+        # An accept lands on PENDING_APPROVAL, not AGREED directly — both sides must
+        # separately approve (see negotiation.apply_approval_vote's module docstring).
+        negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+        negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
     return session
 
 
@@ -112,6 +116,8 @@ def test_credential_genuine_negotiation_on_clean_convergence():
     negotiation.apply_move(session, actor="candidate", move="counter", value=180_000.0)
     negotiation.apply_move(session, actor="employer", move="counter", value=177_000.0)
     negotiation.apply_move(session, actor="candidate", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
 
     cred = credential.compute_credential(session)
     assert cred.genuine_negotiation is True
@@ -128,6 +134,8 @@ def test_credential_detects_capitulation():
     # candidate capitulates from 500k to 115k in one round — an 77%+ single-round swing
     negotiation.apply_move(session, actor="candidate", move="counter", value=115_000.0)
     negotiation.apply_move(session, actor="employer", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
 
     cred = credential.compute_credential(session)
     assert cred.genuine_negotiation is False
@@ -375,6 +383,14 @@ def test_credential_endpoint_via_token_and_via_company_api_key(client):
     client.post(
         f"/api/offercheck/sessions/{session_id}/employer/move",
         json={"token": employer_token, "move": "accept", "value": None},
+    )
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/approval",
+        json={"token": employer_token, "decision": "approve"},
+    )
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/approval",
+        json={"token": candidate_token, "decision": "approve"},
     )
 
     via_token = client.get(f"/api/offercheck/sessions/{session_id}/credential", params={"token": candidate_token})

@@ -19,6 +19,8 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Literal
 
+from app.offercheck.constants import MAX_EXTENSIONS, MAX_ROUNDS
+
 if TYPE_CHECKING:
     from app.offercheck.store import Session
 
@@ -121,17 +123,26 @@ def normalize_package(raw: dict, fallback: dict) -> dict:
 # same functions since RoundEntry.value there is a float, not a package dict.
 # ---------------------------------------------------------------------------
 
-PACKAGE_TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED"}
+PACKAGE_TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED", "DECLINED", "STALEMATE"}
 
 _PACKAGE_TURN_BY_STATE = {
     "PENDING_EMPLOYER": "employer",
     "EMPLOYER_RESPONDED": "candidate",
     "CANDIDATE_COUNTERED": "employer",
 }
+# No PENDING_APPROVAL entry, same reasoning as negotiation.py's _TURN_BY_STATE.
 
 
 class PackageNotReady(Exception):
     """Raised when a session is missing the sealed package inputs this mode needs."""
+
+
+class PackageNotPendingApproval(Exception):
+    pass
+
+
+class PackageAlreadyVoted(Exception):
+    pass
 
 
 def package_current_turn(session: "Session") -> str | None:
@@ -155,7 +166,7 @@ def apply_package_move(session: "Session", actor: str, move: str, package: dict 
 
     if move == "accept":
         session.package_agreed = session.candidate_current_package if actor == "employer" else session.employer_current_package
-        session.package_state = "AGREED"
+        session.package_state = "PENDING_APPROVAL"
     elif move == "walk":
         session.package_state = "WALKAWAY"
     else:  # counter
@@ -167,6 +178,65 @@ def apply_package_move(session: "Session", actor: str, move: str, package: dict 
             session.package_state = "EMPLOYER_RESPONDED"
         if session.package_round_number >= session.max_rounds:
             session.package_state = "EXPIRED"
+
+
+def apply_package_approval_vote(session: "Session", actor: str, decision: str) -> None:
+    """Package-mode mirror of negotiation.apply_approval_vote() — same resolution rule,
+    same MAX_EXTENSIONS, over package_state/package_extension_count instead. Note:
+    session.max_rounds is the SAME field negotiation.py's scalar cap check reads — an
+    extension granted here also loosens the scalar round cap if that channel happens to
+    be independently in progress. Known coupling (both channels already share this field
+    today, see package.py's own module docstring), not newly introduced by this change;
+    not worth a second cap field for a case where a session is virtually always driven to
+    an outcome through one channel at a time."""
+    if session.package_state != "PENDING_APPROVAL":
+        raise PackageNotPendingApproval(f"package session is not awaiting approval (state {session.package_state})")
+
+    existing = session.candidate_package_approval_vote if actor == "candidate" else session.employer_package_approval_vote
+    if existing is not None:
+        raise PackageAlreadyVoted(f"{actor} has already voted this package approval cycle")
+
+    if actor == "candidate":
+        session.candidate_package_approval_vote = decision
+    else:
+        session.employer_package_approval_vote = decision
+
+    session.package_approval_history.append({"cycle": session.package_extension_count + 1, "actor": actor, "decision": decision})
+    _resolve_package_approval(session)
+
+
+def _resolve_package_approval(session: "Session") -> None:
+    cand, emp = session.candidate_package_approval_vote, session.employer_package_approval_vote
+
+    if cand == "decline" or emp == "decline":
+        session.package_state = "DECLINED"
+        session.package_agreed = None
+        return
+
+    if cand is None or emp is None:
+        return
+
+    if cand == "request_more_rounds" or emp == "request_more_rounds":
+        if session.package_extension_count >= MAX_EXTENSIONS:
+            session.package_state = "STALEMATE"
+            session.package_agreed = None
+            return
+        session.package_extension_count += 1
+        if cand == "request_more_rounds" and emp != "request_more_rounds":
+            next_actor = "employer"
+        elif emp == "request_more_rounds" and cand != "request_more_rounds":
+            next_actor = "candidate"
+        else:
+            acceptor = session.package_history[-1]["actor"] if session.package_history else "candidate"
+            next_actor = "employer" if acceptor == "candidate" else "candidate"
+        session.candidate_package_approval_vote = None
+        session.employer_package_approval_vote = None
+        session.max_rounds += MAX_ROUNDS
+        session.package_state = "EMPLOYER_RESPONDED" if next_actor == "candidate" else "CANDIDATE_COUNTERED"
+        return
+
+    # both approve
+    session.package_state = "AGREED"
 
 
 # ---------------------------------------------------------------------------

@@ -9,10 +9,9 @@ tracked as a known gap, not silently done here.
 import secrets
 from dataclasses import dataclass, field
 
+from app.offercheck.constants import MAX_ROUNDS
 from app.offercheck.credential import OfferVerifiedCredential, PackageCredential
 from app.offercheck.schemas import CompetingOffer, ConsistencyCheck
-
-MAX_ROUNDS = 5
 
 
 @dataclass
@@ -69,6 +68,18 @@ class Session:
     package_attestation: str | None = None
     package_credential: PackageCredential | None = None
     package_notified: bool = False
+    # Approval stage (see app.offercheck.negotiation's module docstring) — an "accept" lands
+    # on PENDING_APPROVAL, not directly on AGREED. Each party casts exactly one vote here;
+    # cleared back to None whenever the session reopens for another round of extension.
+    candidate_approval_vote: str | None = None  # "approve" | "request_more_rounds" | "decline"
+    employer_approval_vote: str | None = None
+    extension_count: int = 0
+    approval_history: list[dict] = field(default_factory=list)  # [{cycle, actor, decision}] — separate from RoundEntry/Move, never mixed into the negotiation history
+    # Package-mode mirror of the same approval stage.
+    candidate_package_approval_vote: str | None = None
+    employer_package_approval_vote: str | None = None
+    package_extension_count: int = 0
+    package_approval_history: list[dict] = field(default_factory=list)
 
 
 _SESSIONS: dict[str, Session] = {}

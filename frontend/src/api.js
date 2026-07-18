@@ -184,6 +184,58 @@ export function offercheckCandidateMove(sessionId, body) {
 }
 
 /**
+ * POST /api/offercheck/sessions/:id/employer/approval — vote at the PENDING_APPROVAL checkpoint
+ * @param {string} sessionId
+ * @param {object} body { token, decision: "approve" | "request_more_rounds" | "decline" }
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckEmployerApproval(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/approval`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/candidate/approval — candidate's counterpart to the above
+ * @param {string} sessionId
+ * @param {object} body { token, decision: "approve" | "request_more_rounds" | "decline" }
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckCandidateApproval(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/approval`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/employer/approval-package — package-mode counterpart
+ * @param {string} sessionId
+ * @param {object} body { token, decision: "approve" | "request_more_rounds" | "decline" }
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckEmployerApprovalPackage(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/approval-package`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/candidate/approval-package — candidate's counterpart
+ * @param {string} sessionId
+ * @param {object} body { token, decision: "approve" | "request_more_rounds" | "decline" }
+ * @returns {Promise<object>} SessionView
+ */
+export function offercheckCandidateApprovalPackage(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/approval-package`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
  * GET /api/offercheck/sessions/:id?token=... — viewer-scoped status poll
  * @param {string} sessionId
  * @param {string} token

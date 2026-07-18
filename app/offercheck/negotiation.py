@@ -7,22 +7,57 @@ be validated before trust infrastructure is added in Phase 2. Phase 2 adds
 attestation (below): the terms are hashed here, but the actual TDX quote
 request happens in routes.py, which is the only I/O boundary.
 
-States: PENDING_EMPLOYER -> EMPLOYER_RESPONDED <-> CANDIDATE_COUNTERED -> AGREED | WALKAWAY | EXPIRED
+States: PENDING_EMPLOYER -> EMPLOYER_RESPONDED <-> CANDIDATE_COUNTERED -> PENDING_APPROVAL -> AGREED
+                                                                       -> WALKAWAY | EXPIRED (direct, unaffected by the approval stage)
+                                                        PENDING_APPROVAL -> DECLINED | STALEMATE
 Turn order: employer moves first (after setting their private band), then
 alternates. Max 5 rounds; the 5th unresolved counter auto-expires the session.
+
+Approval stage: an "accept" no longer lands on AGREED directly — it lands on
+PENDING_APPROVAL, a human-only checkpoint (see apply_approval_vote()) where
+each party casts exactly one vote: "approve" | "request_more_rounds" |
+"decline". This is deliberate and intentionally the *only* human touchpoint
+in an otherwise-agentic negotiation — the agents still decide every round
+autonomously; a human only ever weighs in once, after the agents reach an
+outcome, to approve/reopen/decline it. See app.offercheck.agents.mediator's
+module docstring for why the agentic loop itself stops at PENDING_APPROVAL
+rather than voting on the human's behalf.
+
+Resolution rule, evaluated after every vote (not just once both are in):
+  - either side votes "decline"                     -> DECLINED, immediately,
+    even before the other side has voted at all. Decline is a unilateral veto,
+    never something that waits on the other party.
+  - both votes recorded, at least one "request_more_rounds", none declined
+    -> reopen: the session resumes ordinary negotiation for another round
+    budget (see MAX_EXTENSIONS), with the side that did NOT ask for more
+    rounds moving next. Exhausting MAX_EXTENSIONS without a clean double-
+    approve -> STALEMATE instead of another reopen.
+  - both votes recorded and both "approve"           -> AGREED, genuinely
+    terminal now — this is the point attestation actually fires (see
+    routes.py's new .../approval endpoints, which call _maybe_attest just
+    like every other terminal-reaching call site already does).
+This "recompute on every vote" shape is what makes the decline-always-wins /
+request_more_rounds-beats-approve precedence hold regardless of arrival
+order, without needing any actual concurrency handling — a decline is
+checked first, unconditionally, on every call, so it can never lose a race
+with a same-request "simultaneous" vote from the other side.
 """
 import hashlib
 import json
 
+from app.offercheck.constants import MAX_EXTENSIONS, MAX_ROUNDS
 from app.offercheck.store import RoundEntry, Session
 
-TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED"}
+TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED", "DECLINED", "STALEMATE"}
 
 _TURN_BY_STATE = {
     "PENDING_EMPLOYER": "employer",
     "EMPLOYER_RESPONDED": "candidate",
     "CANDIDATE_COUNTERED": "employer",
 }
+# Deliberately no PENDING_APPROVAL entry: it isn't a single-actor's-turn state — both
+# parties may vote independently, see apply_approval_vote() — so current_turn() correctly
+# returns None there, same as it does for the other terminal states.
 
 
 class OfferCheckError(Exception):
@@ -50,6 +85,14 @@ class BandNotSet(OfferCheckError):
 
 
 class InvalidMove(OfferCheckError):
+    pass
+
+
+class NotPendingApproval(OfferCheckError):
+    pass
+
+
+class AlreadyVoted(OfferCheckError):
     pass
 
 
@@ -101,7 +144,7 @@ def apply_move(session: Session, actor: str, move: str, value: float | None) -> 
 
     if move == "accept":
         session.agreed_price = session.candidate_ask if actor == "employer" else session.employer_current_offer
-        session.state = "AGREED"
+        session.state = "PENDING_APPROVAL"
     elif move == "walk":
         session.state = "WALKAWAY"
     else:  # counter
@@ -113,6 +156,68 @@ def apply_move(session: Session, actor: str, move: str, value: float | None) -> 
             session.state = "EMPLOYER_RESPONDED"
         if session.round_number >= session.max_rounds:
             session.state = "EXPIRED"
+
+
+def apply_approval_vote(session: Session, actor: str, decision: str) -> None:
+    """
+    Records one party's vote at the PENDING_APPROVAL checkpoint (see module
+    docstring for the resolution rule) and resolves the outcome immediately
+    if enough votes are in. `decision` is one of "approve" |
+    "request_more_rounds" | "decline" — validated by the request schema, not
+    re-validated here.
+    """
+    if session.state != "PENDING_APPROVAL":
+        raise NotPendingApproval(f"session is not awaiting approval (state {session.state})")
+
+    existing = session.candidate_approval_vote if actor == "candidate" else session.employer_approval_vote
+    if existing is not None:
+        raise AlreadyVoted(f"{actor} has already voted this approval cycle")
+
+    if actor == "candidate":
+        session.candidate_approval_vote = decision
+    else:
+        session.employer_approval_vote = decision
+
+    session.approval_history.append({"cycle": session.extension_count + 1, "actor": actor, "decision": decision})
+    _resolve_approval(session)
+
+
+def _resolve_approval(session: Session) -> None:
+    cand, emp = session.candidate_approval_vote, session.employer_approval_vote
+
+    if cand == "decline" or emp == "decline":
+        session.state = "DECLINED"
+        session.agreed_price = None
+        return
+
+    if cand is None or emp is None:
+        return  # only one vote in, and it wasn't a decline — wait for the other side
+
+    if cand == "request_more_rounds" or emp == "request_more_rounds":
+        if session.extension_count >= MAX_EXTENSIONS:
+            session.state = "STALEMATE"
+            session.agreed_price = None
+            return
+        session.extension_count += 1
+        # The side that did NOT ask for more rounds moves next. If both did, there's no
+        # non-requester — fall back to giving the move to whoever did *not* make the
+        # original accept (i.e. resume the alternation as if the accept had been a
+        # counter instead).
+        if cand == "request_more_rounds" and emp != "request_more_rounds":
+            next_actor = "employer"
+        elif emp == "request_more_rounds" and cand != "request_more_rounds":
+            next_actor = "candidate"
+        else:
+            acceptor = session.history[-1].actor if session.history else "candidate"
+            next_actor = "employer" if acceptor == "candidate" else "candidate"
+        session.candidate_approval_vote = None
+        session.employer_approval_vote = None
+        session.max_rounds += MAX_ROUNDS
+        session.state = "EMPLOYER_RESPONDED" if next_actor == "candidate" else "CANDIDATE_COUNTERED"
+        return
+
+    # both approve
+    session.state = "AGREED"
 
 
 # ---------------------------------------------------------------------------

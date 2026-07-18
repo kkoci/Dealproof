@@ -16,6 +16,10 @@ Endpoints:
   POST /sessions/{id}/employer/band       employer's one-time private band -> gap preview
   POST /sessions/{id}/employer/move       employer accepts / counters / walks
   POST /sessions/{id}/candidate/move      candidate accepts / counters / walks
+  POST /sessions/{id}/candidate/approval          vote at the PENDING_APPROVAL checkpoint: approve | request_more_rounds | decline
+  POST /sessions/{id}/employer/approval           employer's counterpart to the above
+  POST /sessions/{id}/candidate/approval-package  package-mode counterpart (package_state == PENDING_APPROVAL)
+  POST /sessions/{id}/employer/approval-package   employer's counterpart to the above
   PATCH /sessions/{id}/candidate/enable-agentic  seal candidate_floor any time pre-terminal (not just at creation)
   PATCH /sessions/{id}/employer/enable-agentic   seal employer_authority_limit any time pre-terminal (after band is set)
   GET  /sessions/{id}                     viewer-scoped status poll (?token=...)
@@ -58,6 +62,7 @@ from app.offercheck.schemas import (
     AgenticResult,
     AgenticRoundDetail,
     AgenticStartRequest,
+    ApprovalVoteRequest,
     AtsConnectRequest,
     AtsConnectResponse,
     AtsProvider,
@@ -171,6 +176,13 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         other_agentic_sealed=(
             session.employer_authority_limit is not None if viewer == "candidate" else session.candidate_floor is not None
         ),
+        my_approval_vote=(
+            session.candidate_approval_vote if viewer == "candidate" else session.employer_approval_vote
+        ),
+        other_approval_vote=(
+            session.employer_approval_vote if viewer == "candidate" else session.candidate_approval_vote
+        ),
+        extension_count=session.extension_count,
         package_agentic_ready=(
             session.candidate_package_ask is not None
             and session.candidate_total_comp_floor is not None
@@ -201,6 +213,13 @@ def _view_for(session: Session, viewer: str) -> SessionView:
             if viewer == "candidate"
             else session.candidate_total_comp_floor is not None
         ),
+        my_package_approval_vote=(
+            session.candidate_package_approval_vote if viewer == "candidate" else session.employer_package_approval_vote
+        ),
+        other_package_approval_vote=(
+            session.employer_package_approval_vote if viewer == "candidate" else session.candidate_package_approval_vote
+        ),
+        package_extension_count=session.package_extension_count,
         package_converged_hint=(
             session.candidate_current_package is not None
             and session.employer_current_package is not None
@@ -231,10 +250,12 @@ def _credential_response(session: Session) -> CredentialResponse | None:
 def _handle_negotiation_error(exc: negotiation.OfferCheckError) -> None:
     if isinstance(exc, negotiation.WrongTurn):
         raise HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, (negotiation.SessionTerminal, negotiation.BandAlreadySet)):
+    if isinstance(exc, (negotiation.SessionTerminal, negotiation.BandAlreadySet, negotiation.AlreadyVoted)):
         raise HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, negotiation.BandNotSet):
         raise HTTPException(status_code=412, detail=str(exc))
+    if isinstance(exc, negotiation.NotPendingApproval):
+        raise HTTPException(status_code=409, detail=str(exc))
     raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -550,6 +571,80 @@ async def candidate_move(session_id: str, body: MoveRequest) -> SessionView:
         _handle_negotiation_error(exc)
     await _maybe_attest(session)
     await _maybe_notify(session)
+    return _view_for(session, "candidate")
+
+
+@router.post("/sessions/{session_id}/employer/approval", response_model=SessionView)
+async def employer_approval(session_id: str, body: ApprovalVoteRequest) -> SessionView:
+    """
+    Employer's vote at the PENDING_APPROVAL checkpoint (see
+    app.offercheck.negotiation's module docstring for the resolution rule).
+    This is the ONE human touchpoint per negotiation cycle — even for a
+    fully agentic session, run_agentic_negotiation() stops at
+    PENDING_APPROVAL and returns without attesting; only this endpoint (and
+    its candidate counterpart) can move the session past it. Attestation
+    fires here, not in start-agentic, once the vote resolves to AGREED.
+    """
+    session = _get_session_or_404(session_id)
+    if body.token != session.employer_token:
+        raise HTTPException(status_code=403, detail="invalid employer token")
+    try:
+        negotiation.apply_approval_vote(session, actor="employer", decision=body.decision)
+    except negotiation.OfferCheckError as exc:
+        _handle_negotiation_error(exc)
+    await _maybe_attest(session)
+    await _maybe_notify(session)
+    return _view_for(session, "employer")
+
+
+@router.post("/sessions/{session_id}/candidate/approval", response_model=SessionView)
+async def candidate_approval(session_id: str, body: ApprovalVoteRequest) -> SessionView:
+    """Candidate's counterpart to employer_approval — see that docstring."""
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+    try:
+        negotiation.apply_approval_vote(session, actor="candidate", decision=body.decision)
+    except negotiation.OfferCheckError as exc:
+        _handle_negotiation_error(exc)
+    await _maybe_attest(session)
+    await _maybe_notify(session)
+    return _view_for(session, "candidate")
+
+
+@router.post("/sessions/{session_id}/employer/approval-package", response_model=SessionView)
+async def employer_approval_package(session_id: str, body: ApprovalVoteRequest) -> SessionView:
+    """
+    Package-mode counterpart to employer_approval — package negotiation's
+    first-ever human touchpoint (it was agentic-only before this stage
+    existed; deliberate, for consistency with the scalar flow, not an
+    accident). run_package_negotiation() stops at package_state ==
+    PENDING_APPROVAL the same way the scalar mediator does.
+    """
+    session = _get_session_or_404(session_id)
+    if body.token != session.employer_token:
+        raise HTTPException(status_code=403, detail="invalid employer token")
+    try:
+        package.apply_package_approval_vote(session, actor="employer", decision=body.decision)
+    except (package.PackageNotPendingApproval, package.PackageAlreadyVoted) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await _maybe_attest_package(session)
+    await _maybe_notify_package(session)
+    return _view_for(session, "employer")
+
+
+@router.post("/sessions/{session_id}/candidate/approval-package", response_model=SessionView)
+async def candidate_approval_package(session_id: str, body: ApprovalVoteRequest) -> SessionView:
+    """Candidate's counterpart to employer_approval_package — see that docstring."""
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+    try:
+        package.apply_package_approval_vote(session, actor="candidate", decision=body.decision)
+    except (package.PackageNotPendingApproval, package.PackageAlreadyVoted) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await _maybe_attest_package(session)
+    await _maybe_notify_package(session)
     return _view_for(session, "candidate")
 
 

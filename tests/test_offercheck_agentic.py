@@ -157,13 +157,20 @@ async def test_agentic_negotiation_converges_to_agreed():
          patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect):
         transcript = await mediator.run_agentic_negotiation(session, candidate_agent, employer_agent)
 
-    assert session.state == "AGREED"
+    # The agentic loop stops at PENDING_APPROVAL — it never finalizes AGREED itself, since
+    # that's the one human touchpoint (see negotiation.apply_approval_vote()).
+    assert session.state == "PENDING_APPROVAL"
     assert session.agreed_price == 177_000.0
     assert session.agentic_mode is True
     assert len(transcript) == 4
     assert transcript[0] == {"round": 1, "actor": "employer", "move": "counter", "value": 170_000.0}
     assert transcript[3]["move"] == "accept"
     assert all("reasoning" not in r for r in transcript)  # no reasoning anywhere in the returned transcript
+
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+    assert session.state == "AGREED"
+    assert session.agreed_price == 177_000.0
 
 
 @pytest.mark.asyncio
@@ -330,13 +337,21 @@ def test_start_agentic_end_to_end(client):
 
     assert resp.status_code == 200
     result = resp.json()
-    assert result["state"] == "AGREED"
+    # start-agentic stops at PENDING_APPROVAL — the human touchpoint — and does not attest yet.
+    assert result["state"] == "PENDING_APPROVAL"
     assert result["agreed_price"] == 190000
     assert len(result["transcript"]) == 1
-    assert result["attestation"].startswith("sim_quote:")
-    assert result["credential"]["genuine_negotiation"] is True
+    assert result["attestation"] is None
+    assert result["credential"] is None
     assert "155000" not in resp.text  # employer band never leaks
     assert "reasoning" not in resp.text  # never leaks to the API response either
+
+    # Both sides approve -> genuinely terminal now, attestation fires here.
+    client.post(f"/api/offercheck/sessions/{session_id}/candidate/approval", json={"token": candidate_token, "decision": "approve"})
+    final = client.post(f"/api/offercheck/sessions/{session_id}/employer/approval", json={"token": employer_token, "decision": "approve"})
+    final_body = final.json()
+    assert final_body["state"] == "AGREED"
+    assert final_body["agreed_price"] == 190000
 
 
 def test_round_summary_value_hidden_for_human_moves_exposed_after_agentic(client):
@@ -600,7 +615,7 @@ def test_post_creation_opt_in_reaches_agentic_ready_and_runs(client):
         resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic", json={"token": candidate_token})
 
     assert resp.status_code == 200
-    assert resp.json()["state"] == "AGREED"
+    assert resp.json()["state"] == "PENDING_APPROVAL"  # start-agentic stops here; approval endpoints finalize it
 
 
 def test_start_agentic_via_query_token_still_works_after_param_rename(client):
@@ -646,7 +661,7 @@ def test_start_agentic_via_query_token_still_works_after_param_rename(client):
         resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic?token={demo_token}", json={})
 
     assert resp.status_code == 200
-    assert resp.json()["state"] == "AGREED"
+    assert resp.json()["state"] == "PENDING_APPROVAL"  # start-agentic stops here; approval endpoints finalize it
 
 
 def test_start_agentic_tolerates_a_double_json_encoded_body(client):
@@ -702,4 +717,4 @@ def test_start_agentic_tolerates_a_double_json_encoded_body(client):
         )
 
     assert resp.status_code == 200
-    assert resp.json()["state"] == "AGREED"
+    assert resp.json()["state"] == "PENDING_APPROVAL"  # start-agentic stops here; approval endpoints finalize it

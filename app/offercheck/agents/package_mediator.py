@@ -17,12 +17,17 @@ import logging
 from app.offercheck import demo_auth
 from app.offercheck.agents.package_candidate_agent import PackageCandidateAgent
 from app.offercheck.agents.package_employer_agent import PackageEmployerAgent
-from app.offercheck.package import PackageNotReady, apply_package_move, is_converged, package_current_turn, total_comp_value
+from app.offercheck.package import (
+    PACKAGE_TERMINAL_STATES,
+    PackageNotReady,
+    apply_package_move,
+    is_converged,
+    package_current_turn,
+    total_comp_value,
+)
 from app.offercheck.store import Session
 
 logger = logging.getLogger(__name__)
-
-PACKAGE_TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED"}
 
 
 def _own_entry(role: str, decision: dict) -> dict:
@@ -84,16 +89,22 @@ async def run_package_negotiation(
 ) -> list[dict]:
     """
     Runs PackageCandidateAgent vs PackageEmployerAgent to completion (ACCEPT/
-    WALK, or max_rounds auto-expiry). Mutates `session` in place via
-    app.offercheck.package.apply_package_move(). Returns a transcript safe to
-    hand back to the API caller — full packages included (this mode's
-    contract), reasoning is not.
+    WALK, PENDING_APPROVAL, or max_rounds auto-expiry). Mutates `session` in
+    place via app.offercheck.package.apply_package_move(). Returns a
+    transcript safe to hand back to the API caller — full packages included
+    (this mode's contract), reasoning is not.
+
+    Same PENDING_APPROVAL stop as app.offercheck.agents.mediator.run_agentic_negotiation()
+    — see that function's docstring. Package mode's human approval endpoints are
+    .../candidate/approval-package and .../employer/approval-package (routes.py);
+    this is package mode's first-ever human touchpoint (it was agentic-only before this
+    stage existed), by deliberate design decision, not an oversight.
     """
     candidate_history: list[dict] = []
     employer_history: list[dict] = []
     transcript: list[dict] = []
 
-    while session.package_state not in PACKAGE_TERMINAL_STATES:
+    while session.package_state not in PACKAGE_TERMINAL_STATES and session.package_state != "PENDING_APPROVAL":
         turn = package_current_turn(session)
         round_number = session.package_round_number + 1
 

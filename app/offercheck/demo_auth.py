@@ -48,7 +48,12 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXPIRES_HOURS = 24.0
-SPEND_CAP_PER_SESSION = 15  # 3 full 5-round negotiations
+# Raised from 15: the approval-stage extension mechanism (negotiation.py's
+# PENDING_APPROVAL/MAX_EXTENSIONS=3) can now trigger up to 3 additional full
+# start-agentic calls on top of the original negotiation — up to 3 extensions x 5
+# rounds each = 15 more calls alone, which the old cap didn't have headroom for. 40
+# gives real headroom without removing the extension mechanism.
+SPEND_CAP_PER_SESSION = 40
 
 
 class InvalidToken(Exception):

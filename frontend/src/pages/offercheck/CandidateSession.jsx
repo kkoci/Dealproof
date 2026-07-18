@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+import { offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+
+const APPROVAL_LABEL = { approve: 'approve', request_more_rounds: 'ask for more rounds', decline: 'decline' }
+const TERMINAL_STATES = ['AGREED', 'WALKAWAY', 'EXPIRED', 'DECLINED', 'STALEMATE']
 
 const PACKAGE_TERM_LABELS = {
   base: 'Base', equity_grant: 'Equity', vesting_years: 'Vesting (yrs)', cliff_months: 'Cliff (mo)',
@@ -24,18 +27,24 @@ const STATE_LABEL = {
   PENDING_EMPLOYER: 'Waiting for the employer',
   EMPLOYER_RESPONDED: 'Your turn',
   CANDIDATE_COUNTERED: 'Waiting for the employer',
+  PENDING_APPROVAL: 'Outcome reached — your approval needed',
   AGREED: 'Agreed',
   WALKAWAY: 'Walked away',
   EXPIRED: 'Expired — no agreement reached',
+  DECLINED: 'Declined',
+  STALEMATE: 'Stalemate — no agreement reached',
 }
 
 const STATE_BADGE = {
   PENDING_EMPLOYER: 'bg-bg-elevated text-neutral',
   EMPLOYER_RESPONDED: 'bg-success-subtle text-success',
   CANDIDATE_COUNTERED: 'bg-bg-elevated text-neutral',
+  PENDING_APPROVAL: 'bg-sealed-subtle text-sealed-text',
   AGREED: 'bg-success-subtle text-success',
   WALKAWAY: 'bg-danger-subtle text-danger',
   EXPIRED: 'bg-bg-elevated text-neutral',
+  DECLINED: 'bg-danger-subtle text-danger',
+  STALEMATE: 'bg-bg-elevated text-neutral',
 }
 
 function Spinner() {
@@ -494,6 +503,79 @@ function PackageAgenticPanel({ sessionId, token, visible, view, onComplete }) {
   )
 }
 
+// The one human touchpoint per negotiation cycle: agents (or a human) reach an outcome,
+// PENDING_APPROVAL, and each side casts exactly one vote — approve, ask for more rounds, or
+// decline. Never turn-based (current_turn() returns null here), so both sides can act any time.
+function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }) {
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState('')
+
+  if (!visible) return null
+
+  const myVote = packageMode ? view.my_package_approval_vote : view.my_approval_vote
+  const otherVote = packageMode ? view.other_package_approval_vote : view.other_approval_vote
+
+  const vote = async (decision) => {
+    setErr('')
+    setSubmitting(true)
+    try {
+      if (packageMode) {
+        await offercheckCandidateApprovalPackage(sessionId, { token, decision })
+      } else {
+        await offercheckCandidateApproval(sessionId, { token, decision })
+      }
+      onVoted?.()
+    } catch (e) {
+      setErr(e.message || 'Could not record your vote')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (myVote) {
+    return (
+      <div className="mt-4 p-4 rounded-xl bg-bg-surface border border-border">
+        <p className="text-sm text-ink-primary mb-1">
+          You voted to <span className="font-semibold">{APPROVAL_LABEL[myVote]}</span>.
+        </p>
+        <p className="text-xs text-ink-muted italic">
+          {otherVote ? `The employer voted to ${APPROVAL_LABEL[otherVote]}.` : 'Waiting for the employer to respond…'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 p-4 rounded-xl bg-bg-surface border border-border space-y-3">
+      <p className="text-sm font-medium text-ink-primary">
+        {packageMode ? 'Agents reached a package agreement — your call' : 'Agents reached an outcome — your call'}
+      </p>
+      {!packageMode && view.agreed_price != null && (
+        <p className="text-xs text-ink-muted">
+          Agreed price: <span className="font-mono font-semibold text-ink-primary">${view.agreed_price.toLocaleString()}</span>
+        </p>
+      )}
+      {otherVote && (
+        <p className="text-xs text-teal-text bg-teal-subtle border border-teal-border rounded-lg px-3 py-2">
+          The employer already voted to {APPROVAL_LABEL[otherVote]}.
+        </p>
+      )}
+      {err && <p className="text-xs text-danger">{err}</p>}
+      <div className="flex gap-2">
+        <button disabled={submitting} onClick={() => vote('approve')} className="flex-1 px-3 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors">
+          Approve
+        </button>
+        <button disabled={submitting} onClick={() => vote('request_more_rounds')} className="flex-1 px-3 py-2.5 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated disabled:opacity-40 transition-colors">
+          More rounds
+        </button>
+        <button disabled={submitting} onClick={() => vote('decline')} className="flex-1 px-3 py-2.5 rounded-lg bg-danger hover:bg-danger-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors">
+          Decline
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function CandidateSession() {
   const { sessionId } = useParams()
   const [searchParams] = useSearchParams()
@@ -540,12 +622,13 @@ export default function CandidateSession() {
   // already finished, as long as package itself isn't terminal yet.
   const packageStarted = view && view.package_round_number > 0
   const packageEnabled = view && view.package_agentic_ready
-  const scalarTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.state)
-  const packageTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(view.package_state)
+  const scalarTerminal = view && TERMINAL_STATES.includes(view.state)
+  const packageTerminal = view && TERMINAL_STATES.includes(view.package_state)
   const packageActive = view && (packageStarted || (packageEnabled && scalarTerminal && !packageTerminal))
   const activeState = view && (packageActive ? view.package_state : view.state)
   const activeRound = view && (packageActive ? view.package_round_number : view.round_number)
-  const isTerminal = view && ['AGREED', 'WALKAWAY', 'EXPIRED'].includes(activeState)
+  const isTerminal = view && TERMINAL_STATES.includes(activeState)
+  const pendingApproval = view && activeState === 'PENDING_APPROVAL'
   const myTurn = view && (packageActive ? view.package_turn === 'candidate' : view.turn === 'candidate')
 
   const act = async (move, value) => {
@@ -636,11 +719,20 @@ export default function CandidateSession() {
               </div>
             )}
 
-            {!isTerminal && !myTurn && (
+            {!isTerminal && !myTurn && !pendingApproval && (
               <p className="text-xs text-ink-muted italic">Waiting for the other side to respond…</p>
             )}
 
-            {!isTerminal && myTurn && !packageActive && (
+            <ApprovalPanel
+              sessionId={sessionId}
+              token={token}
+              visible={Boolean(pendingApproval)}
+              view={view}
+              packageMode={Boolean(packageActive)}
+              onVoted={refresh}
+            />
+
+            {!isTerminal && myTurn && !packageActive && !pendingApproval && (
               <div className="space-y-3 pt-3 border-t border-border">
                 <div className="flex gap-2">
                   <input

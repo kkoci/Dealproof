@@ -193,6 +193,11 @@ def test_apply_package_move_accept_binds_agreed_package():
     offer_pkg = _package(base=185_000)
     package.apply_package_move(session, actor="employer", move="counter", package=offer_pkg)
     package.apply_package_move(session, actor="candidate", move="accept", package=None)
+    assert session.package_state == "PENDING_APPROVAL"
+    assert session.package_agreed == offer_pkg
+
+    package.apply_package_approval_vote(session, actor="candidate", decision="approve")
+    package.apply_package_approval_vote(session, actor="employer", decision="approve")
     assert session.package_state == "AGREED"
     assert session.package_agreed == offer_pkg
 
@@ -299,11 +304,17 @@ async def test_package_negotiation_converges_to_agreed():
          patch.object(candidate_agent.client.messages, "create", side_effect=cand_effect):
         transcript = await package_mediator.run_package_negotiation(session, candidate_agent, employer_agent)
 
-    assert session.package_state == "AGREED"
+    # The package mediator also stops at PENDING_APPROVAL — package mode's first human
+    # touchpoint (see app.offercheck.package.apply_package_approval_vote).
+    assert session.package_state == "PENDING_APPROVAL"
     assert session.package_agreed is not None
     assert session.package_agreed["base"] == 180_000
     assert len(transcript) == 2
     assert all("reasoning" not in r for r in transcript)
+
+    package.apply_package_approval_vote(session, actor="employer", decision="approve")
+    package.apply_package_approval_vote(session, actor="candidate", decision="approve")
+    assert session.package_state == "AGREED"
 
 
 @pytest.mark.asyncio
@@ -366,6 +377,8 @@ def test_package_credential_genuine_on_clean_convergence():
     session = _sealed_package_session()
     package.apply_package_move(session, actor="employer", move="counter", package=_package(base=180_000))
     package.apply_package_move(session, actor="candidate", move="accept", package=None)
+    package.apply_package_approval_vote(session, actor="candidate", decision="approve")
+    package.apply_package_approval_vote(session, actor="employer", decision="approve")
     cred = credential.compute_package_credential(session)
     assert cred.genuine_negotiation is True
     assert cred.outcome == "agreed"
@@ -380,6 +393,8 @@ def test_package_credential_detects_capitulation():
     # Candidate capitulates from a huge equity ask straight down to the employer's low package.
     package.apply_package_move(session, actor="candidate", move="counter", package=_package(base=180_000, equity_grant=0, signing_bonus=0))
     package.apply_package_move(session, actor="employer", move="accept", package=None)
+    package.apply_package_approval_vote(session, actor="employer", decision="approve")
+    package.apply_package_approval_vote(session, actor="candidate", decision="approve")
     cred = credential.compute_package_credential(session)
     assert cred.genuine_negotiation is False
 
@@ -468,12 +483,21 @@ def test_start_agentic_package_end_to_end(client):
 
     assert resp.status_code == 200
     result = resp.json()
-    assert result["state"] == "AGREED"
+    # start-agentic-package stops at PENDING_APPROVAL — package mode's first human touchpoint
+    # (see app.offercheck.package.apply_package_approval_vote) — and does not attest yet.
+    assert result["state"] == "PENDING_APPROVAL"
     assert result["agreed_package"]["base"] == 190000
-    assert result["credential"]["genuine_negotiation"] is True
-    assert result["attestation"].startswith("sim_quote:")
+    assert result["credential"] is None
+    assert result["attestation"] is None
     assert "155000" not in resp.text  # band never leaks
     assert "reasoning" not in resp.text
+
+    # Both sides approve -> genuinely terminal now, attestation fires here.
+    client.post(f"/api/offercheck/sessions/{session_id}/candidate/approval-package", json={"token": candidate_token, "decision": "approve"})
+    final = client.post(f"/api/offercheck/sessions/{session_id}/employer/approval-package", json={"token": employer_token, "decision": "approve"})
+    final_body = final.json()
+    assert final_body["package_state"] == "AGREED"
+    assert final_body["package_agreed_package"]["base"] == 190000
 
 
 def test_session_view_reflects_package_progress_after_agentic_run(client):
@@ -513,8 +537,9 @@ def test_session_view_reflects_package_progress_after_agentic_run(client):
     # why the frontend now checks package_round_number > 0 to decide which channel is authoritative.
     post_employer = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": employer_token}).json()
     assert post_employer["state"] == "PENDING_EMPLOYER"
-    assert post_employer["package_state"] == "AGREED"
-    assert post_employer["package_turn"] is None  # terminal
+    # start-agentic-package stops at PENDING_APPROVAL — the one human touchpoint — not AGREED directly.
+    assert post_employer["package_state"] == "PENDING_APPROVAL"
+    assert post_employer["package_turn"] is None  # no single turn during the approval vote either
     assert post_employer["package_round_number"] >= 1
     assert len(post_employer["package_history"]) == post_employer["package_round_number"]
     assert post_employer["package_agreed_package"]["base"] == 190000
@@ -526,6 +551,12 @@ def test_session_view_reflects_package_progress_after_agentic_run(client):
     post_candidate = client.get(f"/api/offercheck/sessions/{session_id}", params={"token": candidate_token}).json()
     assert post_candidate["package_state"] == post_employer["package_state"]
     assert post_candidate["package_history"] == post_employer["package_history"]
+
+    # Both sides approve -> genuinely terminal now.
+    client.post(f"/api/offercheck/sessions/{session_id}/candidate/approval-package", json={"token": candidate_token, "decision": "approve"})
+    final = client.post(f"/api/offercheck/sessions/{session_id}/employer/approval-package", json={"token": employer_token, "decision": "approve"}).json()
+    assert final["package_state"] == "AGREED"
+    assert final["package_turn"] is None  # terminal
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +690,7 @@ def test_post_creation_package_opt_in_reaches_ready_and_runs(client):
         resp = client.post(f"/api/offercheck/sessions/{session_id}/start-agentic-package", json={"token": candidate_token})
 
     assert resp.status_code == 200
-    assert resp.json()["state"] == "AGREED"
+    assert resp.json()["state"] == "PENDING_APPROVAL"  # start-agentic-package stops here; approval endpoints finalize it
 
 
 def test_package_converged_hint_reflects_current_packages(client):
@@ -708,4 +739,4 @@ def test_start_agentic_package_tolerates_a_double_json_encoded_body(client):
         )
 
     assert resp.status_code == 200
-    assert resp.json()["state"] == "AGREED"
+    assert resp.json()["state"] == "PENDING_APPROVAL"  # start-agentic-package stops here; approval endpoints finalize it
