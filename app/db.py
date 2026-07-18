@@ -320,6 +320,132 @@ async def get_corpus_by_root(corpus_root: str) -> dict | None:
     }
 
 
+async def create_dev_credentials_table() -> None:
+    """Create dev_credentials table for the devcred vertical."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dev_credentials (
+                credential_id    TEXT PRIMARY KEY,
+                developer_handle TEXT,
+                repo_corpus_root TEXT NOT NULL,
+                commit_count     INTEGER,
+                metrics_json     TEXT,
+                credential_json  TEXT,
+                tee_quote        TEXT,
+                status           TEXT DEFAULT 'pending',
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def create_dev_credential(
+    credential_id: str,
+    developer_handle: str,
+    repo_corpus_root: str,
+    commit_count: int,
+    metrics: dict,
+) -> None:
+    """Insert or replace a dev credential record. Token never passed here."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO dev_credentials "
+            "(credential_id, developer_handle, repo_corpus_root, commit_count, metrics_json, status) "
+            "VALUES (?, ?, ?, ?, ?, 'ingested')",
+            (
+                credential_id,
+                developer_handle,
+                repo_corpus_root,
+                commit_count,
+                json.dumps(metrics),
+            ),
+        )
+        await db.commit()
+
+
+async def update_dev_credential_result(
+    credential_id: str,
+    credential: dict,
+    tee_quote: str,
+) -> None:
+    """Persist the evaluated credential JSON and TDX quote. Sets status='complete'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE dev_credentials SET credential_json = ?, tee_quote = ?, status = 'complete' "
+            "WHERE credential_id = ?",
+            (json.dumps(credential), tee_quote, credential_id),
+        )
+        await db.commit()
+
+
+async def get_dev_credential(credential_id: str) -> dict | None:
+    """Fetch a dev_credential row by ID. Returns dict or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT credential_id, developer_handle, repo_corpus_root, commit_count, "
+            "metrics_json, credential_json, tee_quote, status, created_at "
+            "FROM dev_credentials WHERE credential_id = ?",
+            (credential_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "credential_id": row[0],
+        "developer_handle": row[1],
+        "repo_corpus_root": row[2],
+        "commit_count": row[3],
+        "metrics": json.loads(row[4]) if row[4] else None,
+        "credential": json.loads(row[5]) if row[5] else None,
+        "tee_quote": row[6],
+        "status": row[7],
+        "created_at": row[8],
+    }
+
+
+async def create_eval_counter_table() -> None:
+    """Create the eval_counters table if it does not exist — one row per UTC day."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS eval_counters (
+                day   TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        await db.commit()
+
+
+async def increment_daily_eval_count(day: str) -> int:
+    """Atomically increment and return today's /evaluate call count."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO eval_counters (day, count) VALUES (?, 1) "
+            "ON CONFLICT(day) DO UPDATE SET count = count + 1",
+            (day,),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT count FROM eval_counters WHERE day = ?", (day,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0]
+
+
+async def decrement_daily_eval_count(day: str) -> None:
+    """Compensate a rejected /evaluate call so it isn't counted against the daily limit."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE eval_counters SET count = count - 1 WHERE day = ?", (day,)
+        )
+        await db.commit()
+
+
 async def get_deal(deal_id: str) -> dict | None:
     """
     Fetch a deal row by ID.

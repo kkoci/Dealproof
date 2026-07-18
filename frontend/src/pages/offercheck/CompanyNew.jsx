@@ -24,6 +24,7 @@ export default function CompanyNew() {
   const [form, setForm] = useState({
     band_min: '', band_mid: '', band_max: '',
     requirements: '', employer_authority_limit: '', employer_priorities: '',
+    require_provenance_credential: false,
   })
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -83,6 +84,7 @@ export default function CompanyNew() {
         band_mid: Number(form.band_mid),
         band_max: Number(form.band_max),
         requirements: form.requirements.trim() || null,
+        require_provenance_credential: form.require_provenance_credential,
       }
       if (form.employer_authority_limit) body.employer_authority_limit = Number(form.employer_authority_limit)
       if (form.employer_priorities.trim()) body.employer_priorities = form.employer_priorities.trim()
@@ -230,7 +232,7 @@ export default function CompanyNew() {
           </div>
 
           <button
-            onClick={() => { setInvite(null); setForm({ band_min: '', band_mid: '', band_max: '', requirements: '', employer_authority_limit: '', employer_priorities: '' }) }}
+            onClick={() => { setInvite(null); setForm({ band_min: '', band_mid: '', band_max: '', requirements: '', employer_authority_limit: '', employer_priorities: '', require_provenance_credential: false }) }}
             className={`text-sm text-teal hover:text-teal-hover underline inline-block ${smallButtonClass}`}
           >
             Create another invite
@@ -276,6 +278,22 @@ export default function CompanyNew() {
               <label className={labelClass}>Band max</label>
               <input className={inputClass} type="number" min="0" value={form.band_max} onChange={update('band_max')} placeholder="195000" required />
             </div>
+          </div>
+
+          <div className="pt-2 border-t border-border">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.require_provenance_credential}
+                onChange={(e) => setForm((f) => ({ ...f, require_provenance_credential: e.target.checked }))}
+                className="mt-0.5 w-4 h-4 rounded border-border-strong text-teal focus:ring-teal/[0.12]"
+              />
+              <span className="text-xs text-ink-secondary">
+                Require a verified git-provenance credential before the candidate can respond.
+                They'll prove real engineering experience straight from their commit history —
+                no résumé needed, and we never store their GitHub token or repo names.
+              </span>
+            </label>
           </div>
 
           <p className="text-xs text-ink-muted pt-2 border-t border-border">

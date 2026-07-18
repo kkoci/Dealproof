@@ -233,6 +233,33 @@ class PackageRoundDetail(BaseModel):
     total_comp: float | None  # total_comp_value(package) — convenience for the frontend table
 
 
+class ProvenanceCredentialSummary(BaseModel):
+    """
+    Deterministic git-provenance signal (see app.offercheck.provenance) — mirrors
+    app.devcred.agents.git_inspector.GitInspectionReport's fields, minus repo/company
+    names, so it's safe to show to the counterparty like any other credential in this
+    codebase (cf. app.devcred.schemas.SeniorDevCredential).
+    """
+    seniority_signal: Literal["junior", "mid", "senior"]
+    years_active: float
+    languages_deep: list[str]
+    has_test_culture: bool
+    consistent_contribution: bool
+    avg_commit_quality: Literal["low", "medium", "high"]
+    total_commits: int
+
+
+class VerifyCredentialRequest(BaseModel):
+    token: str
+    github_token: str = Field(..., description="Read-only GitHub PAT — used in-memory only for this call, never stored")
+    repos: list[str] = Field(..., min_length=1, description="List of 'owner/repo' strings")
+
+
+class VerifyCredentialResponse(BaseModel):
+    session_id: str
+    credential: ProvenanceCredentialSummary
+
+
 class SessionView(BaseModel):
     """Viewer-scoped snapshot. Never includes the other party's raw numbers."""
     session_id: str
@@ -274,6 +301,13 @@ class SessionView(BaseModel):
     my_package_approval_vote: ApprovalDecision | None = None
     other_package_approval_vote: ApprovalDecision | None = None
     package_extension_count: int = 0
+    # Provenance credential (see app.offercheck.provenance) — visible to both viewers, unlike
+    # the sealed-value fields above: it's evidence meant to be shown, not a negotiating position.
+    # Never includes repo/company names or the candidate's GitHub token — same privacy schema
+    # discipline as app.devcred's SeniorDevCredential.
+    require_provenance_credential: bool = False
+    candidate_provenance_verified: bool = False
+    candidate_provenance_credential: ProvenanceCredentialSummary | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +408,10 @@ class EmployerInviteRequest(BaseModel):
     ats_candidate_ref: str | None = None
     employer_authority_limit: float | None = Field(default=None, gt=0, description="Sealed — only used if agentic negotiation is triggered; never returned")
     employer_priorities: str | None = None
+    require_provenance_credential: bool = Field(
+        default=False,
+        description="If true, the candidate must complete POST .../candidate/verify-credential before they can move — see app.offercheck.provenance",
+    )
 
 
 class EmployerInviteResponse(BaseModel):

@@ -43,6 +43,7 @@ Before starting any task, read in this order:
 | Persistence | SQLite via aiosqlite |
 | Smart contract | Solidity (DealProof.sol) on Sepolia — Phase 4 |
 | Frontend | React 18 + Vite 5 + Tailwind CSS |
+| Dev Credential | `app/devcred/` — GitHub API → git corpus hashing → SeniorDevCredential (TDX-attested) |
 
 ---
 
@@ -136,6 +137,7 @@ TinyCloud/feed/                 TinyCloud CLI + saved corpus (conversations.json
 TinyCloud/listen/               TinyCloud Listen backend — source of truth for data shapes
 TinyCloud/TINYCLOUD_WORKFLOW.md Auth setup, session patch, bulk download, troubleshooting
 PAYLOADS.md                    Full payload reference: deals, ingest modes, real transcript, eval corpora
+app/rate_limit.py          Shared slowapi Limiter — per-IP rate limits on paid-API endpoints
 app/dkim/verifier.py       DKIM email proof (dkimpy + DoH)
 app/memory/client.py       Contexto sidecar client (search, add, get_memory_hash)
 app/picreds/auditor.py     LLM audit: audit_agent_policy(), audit_deal_conduct()
@@ -143,7 +145,7 @@ app/picreds/constraints.py Deterministic constraint checks (no LLM) — authorit
 app/picreds/credential.py  make_credential(), hash_credentials()
 demo.py                    CLI demo — transcript + attestations + memory + πCreds + auditor + arbitrator
 memory-service/            Contexto @ekai/memory sidecar (Node.js, port 4011)
-frontend/                  React 18 + Vite 5 + Tailwind (outdated — rebuild pending)
+frontend/                  React 18 + Vite 5 + Tailwind — Offer Check UI + Dev Credential backend (see below)
 
 --- Offer Check vertical (vertical/hr-offer-check branch) — see build_spec_offer_check.md
     and offercheck_phase2_spec.md (agentic layer — different numbering scheme, see README) ---
@@ -171,6 +173,26 @@ frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotia
                                  form, same fields as CandidateNew), CandidateSession, EmployerSession (+ attestation/credential panel + agentic
                                  panel + package results table), Demo (magic-link spectator view), CompanyRegister, CompanyNew (employer-initiated
                                  invite creation + status check), Dashboard
+
+--- Dev Credential vertical (product/dev-credential branch) — merged 2026-07-18, see "Merge: Dev Credential
+    into Offer Check" below. Backend is live and mounted (app/main.py registers devcred_router); the
+    frontend pages below are NOT routed from App.jsx — Offer Check's App.jsx/NavBar/theme are what ship,
+    per the merge decision. Kept in the tree as reference pending the git-verification-step integration
+    into Offer Check's own flow (proposal pending, not yet built). ---
+app/devcred/__init__.py        Package init
+app/devcred/git_hasher.py                  hash_commit(), compute_repo_corpus_root(), extract_commit_metrics() — no LLM
+app/devcred/routes.py                      POST /api/devcred/ingest — GitHub API fetch, corpus hash, metrics; token never persisted
+app/devcred/agents/git_inspector.py        GitInspectorAgent — deterministic hard findings (years, languages_deep, test_culture, seniority_signal)
+app/devcred/agents/git_evaluator.py        GitEvaluatorAgent — LLM evaluation grounded in hard findings; seniority clamped >= hard signal
+app/devcred/schemas.py                     SeniorDevCredential + DevCredEvaluateResponse + DevCredStatusResponse
+(routes.py Phase 3)                        POST /api/devcred/{id}/evaluate + GET /api/devcred/{id}
+scripts/generate_git_fixtures.py           7 scenarios: genuine_senior/mid/junior + 3 SCAE adversarial + thin_history
+tests/test_devcred.py                      29 tests — corpus root, SCAE ×3, inspector ×4, clamp, pipeline, schema, hash
+tests/test_devcred_rate_limit.py           5 tests — /evaluate 3/hr + /ingest 10/hr (slowapi), daily 50/day hard stop, counter DB layer
+frontend/src/pages/devcred/Landing.jsx     UNROUTED — /devcred/ hero, flow diagram, privacy pills, 3-step explanation (dark/indigo theme, not reused)
+frontend/src/pages/devcred/Setup.jsx       UNROUTED — /devcred/new token input (cleared post-submit), repo selector, progress steps
+frontend/src/pages/devcred/Results.jsx     UNROUTED — /devcred/:id credential card + TrustStackBar + share/download actions
+frontend/src/components/TrustStackBar.jsx  UNROUTED — animated trust stack: TDX ENCLAVE → DCAP → REPO CORPUS → DEV CREDENTIAL
 ```
 
 ---
@@ -284,6 +306,16 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P15 | Tests — 9 new cases across `tests/test_offercheck_package.py` and `tests/test_offercheck_agentic.py` | ✅ Complete |
 | OC-P16 | Employer-initiated invites — `POST /employer/new`, `GET /employer/invite/{id}`, `POST /candidate/join/{id}` (`app/offercheck/invites.py`); `CompanyNew.jsx` + `CandidateJoin.jsx` | ✅ Complete |
 | OC-P17 | Tests — `tests/test_offercheck_invites.py` (10 tests) | ✅ Complete |
+| OC-P18 | Merge `product/dev-credential` into this branch — backend fully mounted (`app/devcred/*`, `devcred_router`), App.jsx conflict resolved in Offer Check's favor per merge decision (see "Merge: Dev Credential into Offer Check" below); devcred's own frontend pages unrouted pending the integration proposal | ✅ Complete |
+| OC-P19 | Fix devcred's `git_hasher.py`/`git_inspector.py` to iterate all branches (not just `main`), SHA-deduplicated, so feature/PR-only commits aren't missed | 🔜 Pending (plan confirmed, not yet built) |
+| OC-P20 | Fold Dev Credential's git-verification capability into Offer Check's candidate/employer flow as a pre-negotiation step, using Offer Check's own page/component patterns | 🔜 Pending (insertion point proposed, not yet built) |
+| **Dev Credential vertical** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
+| DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
+| DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | ✅ Complete |
+| DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
+| DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
+| DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | ✅ Complete, but unrouted after the merge (see OC-P18) — superseded by OC-P20's in-Offer-Check integration |
+| DC-6 | Rate limiting — slowapi 3/hr (`/evaluate`) + 10/hr (`/ingest`) per IP; daily 50/day hard stop via `eval_counters` table | ✅ Complete |
 
 ---
 
@@ -426,6 +458,36 @@ told to be transparent and price issues in proactively.
 
 DataQualityAgent is non-fatal. If it fails, `data_quality_report: null`, `quality_attested: false`,
 and agents proceed without quality context — same pattern as memory, πCreds, Auditor.
+
+---
+
+## Dev Credential Rate Limiting
+
+**SECURITY: Any endpoint that calls an external paid API (Claude, GitHub) must be
+rate-limited. This is a standing requirement** — see the same rule enforced on the
+Offer Check vertical (`vertical/hr-offer-check` branch, `app/offercheck/rate_limit.py`).
+
+`app/rate_limit.py` holds one process-wide `slowapi.Limiter` (`key_func=get_remote_address`),
+imported by `app/main.py` (wires `app.state.limiter` + `SlowAPIMiddleware` +
+`RateLimitExceeded` → 429 JSON handler) and by `app/devcred/routes.py`.
+
+| Endpoint | Limit | Reason |
+|----------|-------|--------|
+| `POST /api/devcred/{id}/evaluate` | 3/hour/IP | Calls Claude (`GitEvaluatorAgent`) — paid, primary credit-drain risk |
+| `POST /api/devcred/ingest` | 10/hour/IP | Calls GitHub API — free tier, lower priority, still rate-limited per the standing rule |
+
+**Daily hard stop, independent of the per-IP limit:** `app/db.py`'s `eval_counters` table
+(one row per UTC day) tracks total `/evaluate` calls across all callers. `evaluate_credential()`
+calls `db.increment_daily_eval_count(today)` before touching the DB record or Claude; if the
+returned count exceeds `DAILY_EVAL_LIMIT` (50, module constant in `app/devcred/routes.py`), it
+calls `db.decrement_daily_eval_count(today)` to compensate (so the rejected call isn't counted)
+and returns HTTP 503. The increment-then-compensate pattern keeps the check atomic under
+SQLite's serialized writers without a separate lock.
+
+Both route functions take a `request: Request` argument — required by slowapi's `@limiter.limit(...)`
+decorator to read `request.client.host`. Any test that calls these functions directly (not through
+`TestClient`) must construct a real `starlette.requests.Request` with a `client` tuple in its scope;
+see `_fake_request()` in `tests/test_devcred.py` / `tests/test_devcred_rate_limit.py`.
 
 ---
 

@@ -19,3 +19,5 @@ hiero_sdk_python
 # Offer Check Phase 2: offer-letter PDF upload + parsing
 pypdf==6.14.2
 python-multipart==0.0.32
+# Dev Credential: per-IP rate limiting on paid-API endpoints
+slowapi==0.1.10

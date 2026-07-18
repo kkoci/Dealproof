@@ -20,7 +20,7 @@ version: "3.9"
 services:
   app:
     build: .
-    image: kkoci/dealproof:latest
+    image: kkoci/dealproof-devcred:latest
     platform: linux/amd64
     ports:
       - "8000:8000"
@@ -40,9 +40,6 @@ services:
       - "8090:8090"
 
   memory-service:
-    build:
-      context: ./memory-service
-      dockerfile: Dockerfile
     image: kkoci/dealproof-memory:latest
     platform: linux/amd64
     ports:

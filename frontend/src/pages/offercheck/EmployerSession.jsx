@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { offercheckEmployerApproval, offercheckEmployerApprovalPackage, offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckEnableEmployerPackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
 
+const SENIORITY_LABEL = { junior: 'Junior signal', mid: 'Mid-level signal', senior: 'Senior signal' }
+
 const APPROVAL_LABEL = { approve: 'approve', request_more_rounds: 'ask for more rounds', decline: 'decline' }
 const TERMINAL_STATES = ['AGREED', 'WALKAWAY', 'EXPIRED', 'DECLINED', 'STALEMATE']
 
@@ -574,6 +576,35 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
   )
 }
 
+// Read-only status for the employer's side of app.offercheck.provenance — the candidate is
+// the only party who can trigger verification (see CandidateSession.jsx's VerifyCredentialPanel);
+// this just surfaces the outcome once it exists. Shows nothing when there's nothing to show
+// (not required, not yet verified) rather than a permanent empty placeholder.
+function ProvenanceStatusPanel({ visible, view }) {
+  if (!visible) return null
+  if (!view.require_provenance_credential && !view.candidate_provenance_verified) return null
+
+  if (view.candidate_provenance_verified) {
+    const c = view.candidate_provenance_credential
+    return (
+      <div className="mt-4 p-4 rounded-xl bg-success-subtle border border-success/30">
+        <p className="text-xs font-semibold text-success-text mb-1">✓ Candidate's git-provenance credential verified</p>
+        {c && (
+          <p className="text-xs text-ink-muted">
+            {SENIORITY_LABEL[c.seniority_signal] || c.seniority_signal} · {c.years_active}y active · {c.total_commits} commits analyzed
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 px-4 py-2.5 rounded-lg bg-sealed-subtle border border-sealed-border text-sealed-text text-xs">
+      Waiting for the candidate to verify their git-provenance credential — you required this before they can respond.
+    </div>
+  )
+}
+
 export default function EmployerSession() {
   const { sessionId } = useParams()
   const [searchParams] = useSearchParams()
@@ -819,6 +850,8 @@ export default function EmployerSession() {
             )}
           </div>
         )}
+
+        <ProvenanceStatusPanel visible={Boolean(view)} view={view} />
 
         {/* Three real states, distinct copy for each — same design as CandidateSession.jsx's
             mirror: neither sealed -> plain CTA below; other side already sealed -> nudge banner

@@ -31,15 +31,24 @@ WINDOW_SECONDS = 3600  # 1 hour
 
 SESSION_CREATE_LIMIT = 10   # new sessions per IP per hour
 AGENTIC_CALL_LIMIT = 5      # start-agentic(-package) calls per IP per hour
+PROVENANCE_VERIFY_LIMIT = 10  # candidate/verify-credential calls per IP per hour — same
+                               # order of magnitude as app.devcred's own 10/hour ingest
+                               # limiter for the identical GitHub-fetch pipeline; this
+                               # endpoint is candidate-token-gated but, per this module's
+                               # own docstring, a candidate token can be self-issued via
+                               # POST /sessions with zero credential, so it gets the same
+                               # per-IP backstop as session creation and agentic calls.
 
 _session_create_hits: dict[str, list[float]] = defaultdict(list)
 _agentic_call_hits: dict[str, list[float]] = defaultdict(list)
+_provenance_verify_hits: dict[str, list[float]] = defaultdict(list)
 
 
 def reset() -> None:
     """Test-only: clear all rate-limit state between test cases."""
     _session_create_hits.clear()
     _agentic_call_hits.clear()
+    _provenance_verify_hits.clear()
 
 
 def client_ip(request: Request) -> str:
@@ -72,3 +81,7 @@ def check_session_create(request: Request) -> None:
 
 def check_agentic_call(request: Request) -> None:
     _check(_agentic_call_hits, client_ip(request), AGENTIC_CALL_LIMIT)
+
+
+def check_provenance_verify(request: Request) -> None:
+    _check(_provenance_verify_hits, client_ip(request), PROVENANCE_VERIFY_LIMIT)

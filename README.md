@@ -267,6 +267,9 @@ tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC to
 tests/test_offercheck_package.py 35 tests — vertical/hr-offer-check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, HTTP e2e
 tests/test_offercheck_rate_limit.py 10 tests — vertical/hr-offer-check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 10 tests — vertical/hr-offer-check: employer-initiated invite lifecycle (create -> unclaimed status -> join -> normal Session), company-auth gating, double-claim rejection
+tests/test_offercheck_approval.py 29 tests — vertical/hr-offer-check: PENDING_APPROVAL both-approve/decline-wins/reopen/stalemate transitions, package-mode parity, HTTP e2e
+tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
+tests/test_devcred_rate_limit.py  5 tests — /evaluate 3/hr + /ingest 10/hr per-IP limits, daily 50/day hard stop, counter DB layer
 ```
 
 **Resilience guarantees tested explicitly:**
@@ -1140,6 +1143,17 @@ Dealproof/
 | OC-20 | Employer-initiated invites — `POST /employer/new`, `GET /employer/invite/{id}`, `POST /candidate/join/{id}` (`app/offercheck/invites.py`); frontend `CompanyNew.jsx` + `CandidateJoin.jsx` | ✅ Complete |
 | OC-21 | Tests — `tests/test_offercheck_invites.py` (10 tests) | ✅ Complete |
 | OC-8 | Real database (companies + sessions currently in-memory, lost on restart) | 🔜 Pending |
+| OC-22 | Approval stage — `PENDING_APPROVAL` checkpoint between accept and terminal `AGREED`, with reopen/decline/stalemate outcomes (`app/offercheck/negotiation.py`, `package.py`) | ✅ Complete |
+| OC-23 | Merge `product/dev-credential` — backend fully mounted, App.jsx conflict resolved in Offer Check's favor (see "Merge: Dev Credential into Offer Check" below) | ✅ Complete |
+| OC-24 | Fix `git_hasher.py`/`git_inspector.py` to iterate all branches (not just `main`), SHA-deduplicated | 🔜 Pending (plan confirmed, not yet built) |
+| OC-25 | Fold Dev Credential's git-verification capability into Offer Check's flow as a pre-negotiation step | 🔜 Pending (insertion point proposed, not yet built) |
+| **Dev Credential** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
+| DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
+| DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
+| DC-3 | SeniorDevCredential + attestation — `POST /api/devcred/{id}/evaluate` | ✅ Complete |
+| DC-4 | Synthetic fixtures (7 scenarios) + SCAE tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
+| DC-5 | Frontend — `/devcred/` landing, `/devcred/new` setup, `/devcred/:id` credential card + TrustStackBar | ✅ Complete, but unrouted after the merge — App.jsx doesn't link to these pages, see OC-23/25 |
+| DC-6 | Rate limiting — slowapi 3/hr (`/evaluate`) + 10/hr (`/ingest`) per IP; daily 50/day hard stop | ✅ Complete |
 
 > **Two build-spec documents, two numbering schemes:** `build_spec_offer_check.md`'s Phase 1/2/3
 > (OC-1 through OC-8 above) predates `offercheck_phase2_spec.md`, which restarts numbering at its own
@@ -1566,6 +1580,29 @@ is pure composition of already-shipped functions. `GET /employer/invite/{id}` is
 owning company's API key (not just the invite id), since once claimed it hands back the session's
 `employer_token`. Out of scope for this pass, flagged rather than silently dropped: invite expiry,
 an employer-side cancel action, and a "list my open invitations" view.
+
+### Approval stage (`PENDING_APPROVAL`) and the Dev Credential merge
+
+An "accept" no longer lands on `AGREED` directly — it lands on `PENDING_APPROVAL`, a human-only
+checkpoint where each party casts exactly one vote (`approve` | `request_more_rounds` | `decline`).
+This is deliberate and the *only* human touchpoint in an otherwise fully-agentic negotiation — see
+`app/offercheck/negotiation.py`'s module docstring for the full resolution rule (decline wins
+unilaterally; `request_more_rounds` reopens the session for up to `MAX_EXTENSIONS=3` more rounds;
+exhausting extensions without a clean double-approve reaches `STALEMATE` instead). Mirrored
+identically in package mode (`app/offercheck/package.py`).
+
+**Merge: Dev Credential into Offer Check.** `product/dev-credential` (a separate vertical — GitHub
+commit history analysis producing a TEE-attested "senior developer" credential) shared this repo but
+diverged from a common ancestor a month earlier. Backend isolation was clean (`app/devcred/*` never
+touches `app/offercheck/*`) and merged in fully self-contained — `app/db.py`/`app/rate_limit.py`
+additions are new tables/a new top-level module respectively, no collision with Offer Check's
+in-memory state. The one real conflict was `frontend/src/App.jsx`: both verticals independently
+redefine the root route and NavBar. Resolved in Offer Check's favor — its NavBar, root route
+(`<Landing/>` at `/`), and light/teal theme are what ship; Dev Credential's own frontend pages
+(`frontend/src/pages/devcred/*`, `TrustStackBar.jsx`) remain in the tree but are **not routed**.
+The plan going forward is to fold Dev Credential's git-verification capability into Offer Check's
+own candidate/employer flow as a pre-negotiation step (proposal pending, not yet built) rather than
+keep it as a separately-branded product — see `CLAUDE.md` for the full writeup once that lands.
 
 ---
 

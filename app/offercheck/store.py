@@ -80,6 +80,15 @@ class Session:
     employer_package_approval_vote: str | None = None
     package_extension_count: int = 0
     package_approval_history: list[dict] = field(default_factory=list)
+    # Provenance credential (see app.offercheck.provenance) — an optional, candidate-initiated,
+    # on-demand proof of real git-commit history behind their claimed experience. Set only via
+    # POST .../candidate/verify-credential; require_provenance_credential is an employer-set
+    # policy flag (currently invite-flow only, see EmployerInviteRequest) enforced as a gate in
+    # negotiation.apply_move(). Neither raw github_token nor repo/company names are ever stored
+    # here — see app.offercheck.provenance's module docstring for the privacy discipline this
+    # mirrors from app.devcred's SeniorDevCredential schema.
+    require_provenance_credential: bool = False
+    candidate_provenance_credential: dict | None = None
 
 
 _SESSIONS: dict[str, Session] = {}

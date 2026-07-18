@@ -96,6 +96,10 @@ class AlreadyVoted(OfferCheckError):
     pass
 
 
+class ProvenanceCredentialRequired(OfferCheckError):
+    pass
+
+
 def current_turn(session: Session) -> str | None:
     return _TURN_BY_STATE.get(session.state)
 
@@ -134,6 +138,15 @@ def apply_move(session: Session, actor: str, move: str, value: float | None) -> 
 
     if actor == "employer" and not session.band_set:
         raise BandNotSet("employer must submit their salary band before moving")
+
+    if (
+        actor == "candidate"
+        and session.require_provenance_credential
+        and session.candidate_provenance_credential is None
+    ):
+        raise ProvenanceCredentialRequired(
+            "employer requires a verified git-provenance credential before the candidate can move"
+        )
 
     if move == "counter" and (value is None or value <= 0):
         raise InvalidMove("a positive value is required for a counter")

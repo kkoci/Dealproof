@@ -30,6 +30,7 @@ class EmployerInvite:
     ats_candidate_ref: str | None = None
     employer_authority_limit: float | None = None
     employer_priorities: str | None = None
+    require_provenance_credential: bool = False
     status: str = PENDING
     session_id: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -52,6 +53,7 @@ def create_invite(
     ats_candidate_ref: str | None = None,
     employer_authority_limit: float | None = None,
     employer_priorities: str | None = None,
+    require_provenance_credential: bool = False,
 ) -> EmployerInvite:
     invite = EmployerInvite(
         id=secrets.token_urlsafe(12),
@@ -63,6 +65,7 @@ def create_invite(
         ats_candidate_ref=ats_candidate_ref,
         employer_authority_limit=employer_authority_limit,
         employer_priorities=employer_priorities,
+        require_provenance_credential=require_provenance_credential,
     )
     _INVITES[invite.id] = invite
     return invite

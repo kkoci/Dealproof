@@ -16,6 +16,7 @@ Endpoints:
   POST /sessions/{id}/employer/band       employer's one-time private band -> gap preview
   POST /sessions/{id}/employer/move       employer accepts / counters / walks
   POST /sessions/{id}/candidate/move      candidate accepts / counters / walks
+  POST /sessions/{id}/candidate/verify-credential  candidate proves git-commit provenance (app.offercheck.provenance); required before any candidate/move call iff the session has require_provenance_credential set
   POST /sessions/{id}/candidate/approval          vote at the PENDING_APPROVAL checkpoint: approve | request_more_rounds | decline
   POST /sessions/{id}/employer/approval           employer's counterpart to the above
   POST /sessions/{id}/candidate/approval-package  package-mode counterpart (package_state == PENDING_APPROVAL)
@@ -54,7 +55,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, demo_auth, invites, negotiation, package, parsing, rate_limit, store, verifier
+from app.offercheck import auth, billing, credential, demo_auth, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -97,8 +98,11 @@ from app.offercheck.schemas import (
     PackageAgenticResult,
     PackageCredentialResponse,
     PackageRoundDetail,
+    ProvenanceCredentialSummary,
     RoundSummary,
     SessionView,
+    VerifyCredentialRequest,
+    VerifyCredentialResponse,
     VerifyTokenResponse,
 )
 from app.offercheck.store import Session
@@ -228,6 +232,13 @@ def _view_for(session: Session, viewer: str) -> SessionView:
                 package.total_comp_value(session.employer_current_package),
             )
         ),
+        require_provenance_credential=session.require_provenance_credential,
+        candidate_provenance_verified=session.candidate_provenance_credential is not None,
+        candidate_provenance_credential=(
+            ProvenanceCredentialSummary(**session.candidate_provenance_credential)
+            if session.candidate_provenance_credential
+            else None
+        ),
     )
 
 
@@ -256,6 +267,8 @@ def _handle_negotiation_error(exc: negotiation.OfferCheckError) -> None:
         raise HTTPException(status_code=412, detail=str(exc))
     if isinstance(exc, negotiation.NotPendingApproval):
         raise HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, negotiation.ProvenanceCredentialRequired):
+        raise HTTPException(status_code=412, detail=str(exc))
     raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -415,6 +428,7 @@ async def create_employer_invite_route(
         ats_candidate_ref=body.ats_candidate_ref,
         employer_authority_limit=body.employer_authority_limit,
         employer_priorities=body.employer_priorities,
+        require_provenance_credential=body.require_provenance_credential,
     )
     return EmployerInviteResponse(
         invite_id=invite.id,
@@ -487,6 +501,7 @@ async def join_invite_route(invite_id: str, body: CandidateJoinRequest, request:
     negotiation.set_employer_band(session, invite.band_min, invite.band_mid, invite.band_max)
     session.employer_authority_limit = invite.employer_authority_limit
     session.employer_priorities = invite.employer_priorities
+    session.require_provenance_credential = invite.require_provenance_credential
 
     invites.claim_invite(invite, session.id)
 
@@ -572,6 +587,34 @@ async def candidate_move(session_id: str, body: MoveRequest) -> SessionView:
     await _maybe_attest(session)
     await _maybe_notify(session)
     return _view_for(session, "candidate")
+
+
+@router.post("/sessions/{session_id}/candidate/verify-credential", response_model=VerifyCredentialResponse)
+async def verify_credential_route(session_id: str, body: VerifyCredentialRequest, request: Request) -> VerifyCredentialResponse:
+    """
+    Candidate-initiated, on-demand proof of real git-commit history behind their
+    claimed experience — see app.offercheck.provenance for the pipeline and why it
+    deliberately reuses only app.devcred's deterministic layer, not its LLM one.
+
+    Not gated by session state or turn order — a candidate may verify before,
+    during, or after the employer sets require_provenance_credential; only
+    negotiation.apply_move()'s gate enforces the requirement, at the moment it
+    actually matters. github_token is used in-memory only for this one call and
+    never persisted, same discipline as app.devcred.routes.ingest_repos.
+    """
+    rate_limit.check_provenance_verify(request)
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+
+    for repo in body.repos:
+        if "/" not in repo or repo.startswith("/") or repo.endswith("/"):
+            raise HTTPException(status_code=400, detail=f"Invalid repo format (expected owner/repo): {repo}")
+
+    summary = await provenance.verify_git_provenance(body.github_token, body.repos)
+    session.candidate_provenance_credential = summary
+
+    return VerifyCredentialResponse(session_id=session.id, credential=ProvenanceCredentialSummary(**summary))
 
 
 @router.post("/sessions/{session_id}/employer/approval", response_model=SessionView)

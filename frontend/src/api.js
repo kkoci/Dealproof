@@ -236,6 +236,21 @@ export function offercheckCandidateApprovalPackage(sessionId, body) {
 }
 
 /**
+ * POST /api/offercheck/sessions/:id/candidate/verify-credential — candidate proves real
+ * git-commit history behind their claimed experience. github_token is used in-memory only
+ * server-side, never stored — same discipline as ingestRepos below.
+ * @param {string} sessionId
+ * @param {{ token: string, github_token: string, repos: string[] }} body
+ * @returns {Promise<object>} VerifyCredentialResponse { session_id, credential }
+ */
+export function offercheckVerifyCredential(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/verify-credential`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
  * GET /api/offercheck/sessions/:id?token=... — viewer-scoped status poll
  * @param {string} sessionId
  * @param {string} token
@@ -497,4 +512,39 @@ export function offercheckJoinInvite(inviteId, body) {
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+// ---------------------------------------------------------------------------
+// Dev Credential — /api/devcred/* (see app/devcred/routes.py)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/devcred/ingest
+ * Token is sent once and never stored server-side.
+ * @param {{ github_token: string, repos: string[], credential_id: string }} body
+ * @returns {Promise<{ credential_id, corpus_root, commit_count, repo_count, metrics_preview }>}
+ */
+export function ingestRepos(body) {
+  return request('/api/devcred/ingest', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/devcred/:id/evaluate
+ * @param {string} credentialId
+ * @returns {Promise<{ credential_id, credential, tee_quote, tee_attested }>}
+ */
+export function evaluateDevCredential(credentialId) {
+  return request(`/api/devcred/${credentialId}/evaluate`, { method: 'POST' })
+}
+
+/**
+ * GET /api/devcred/:id
+ * @param {string} credentialId
+ * @returns {Promise<{ credential_id, status, credential, tee_quote }>}
+ */
+export function getDevCredential(credentialId) {
+  return request(`/api/devcred/${credentialId}`)
 }

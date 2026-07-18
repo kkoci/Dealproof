@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+import { offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckVerifyCredential } from '../../api.js'
+
+const SENIORITY_LABEL = { junior: 'Junior signal', mid: 'Mid-level signal', senior: 'Senior signal' }
 
 const APPROVAL_LABEL = { approve: 'approve', request_more_rounds: 'ask for more rounds', decline: 'decline' }
 const TERMINAL_STATES = ['AGREED', 'WALKAWAY', 'EXPIRED', 'DECLINED', 'STALEMATE']
@@ -576,6 +578,104 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
   )
 }
 
+// Candidate-only, on-demand proof of real engineering experience via git commit history
+// (see app.offercheck.provenance). Never gated on session state — a candidate may verify
+// before, during, or after the employer requires it; only the move buttons below actually
+// enforce the requirement once it's set. Verified once, then this shows a read-only summary.
+function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified }) {
+  const [open, setOpen] = useState(false)
+  const [githubToken, setGithubToken] = useState('')
+  const [repos, setRepos] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState('')
+
+  if (!visible) return null
+
+  if (view.candidate_provenance_verified) {
+    const c = view.candidate_provenance_credential
+    return (
+      <div className="mt-4 p-4 rounded-xl bg-success-subtle border border-success/30">
+        <p className="text-xs font-semibold text-success-text mb-1">✓ Git-provenance credential verified</p>
+        {c && (
+          <p className="text-xs text-ink-muted">
+            {SENIORITY_LABEL[c.seniority_signal] || c.seniority_signal} · {c.years_active}y active · {c.total_commits} commits analyzed
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setErr('')
+    setSubmitting(true)
+    try {
+      await offercheckVerifyCredential(sessionId, {
+        token,
+        github_token: githubToken,
+        repos: repos.split(',').map((r) => r.trim()).filter(Boolean),
+      })
+      setOpen(false)
+      setGithubToken('')
+      onVerified?.()
+    } catch (e) {
+      setErr(e.message || 'Could not verify — check your token and repo names')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="mt-4">
+        {view.require_provenance_credential && (
+          <div className="mb-2 px-4 py-2.5 rounded-lg bg-sealed-subtle border border-sealed-border text-sealed-text text-xs">
+            The employer requires this before you can respond.
+          </div>
+        )}
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
+        >
+          Verify your engineering experience with GitHub
+        </button>
+        <p className="mt-1.5 text-xs text-ink-muted">
+          Prove real, hands-on experience straight from your commit history — no résumé needed. We only
+          compute a summary signal (seniority level, active years, languages); your GitHub token and
+          repo names are never stored.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-4 p-4 rounded-xl bg-bg-surface border border-border space-y-3">
+      <p className="text-sm font-medium text-ink-primary">Verify with GitHub</p>
+      <p className="text-xs text-ink-muted">
+        A read-only GitHub personal access token works best. Used once, in memory, to read your commit
+        history — never written to disk.
+      </p>
+      <div>
+        <label className={labelClass}>GitHub personal access token</label>
+        <input className={inputClass} type="password" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="ghp_…" required />
+      </div>
+      <div>
+        <label className={labelClass}>Repositories (comma-separated, owner/repo)</label>
+        <input className={inputClass} value={repos} onChange={(e) => setRepos(e.target.value)} placeholder="yourname/project-one, yourname/project-two" required />
+      </div>
+      {err && <p className="text-xs text-danger">{err}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={submitting || !githubToken || !repos} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+          {submitting ? 'Verifying…' : 'Verify'}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
 export default function CandidateSession() {
   const { sessionId } = useParams()
   const [searchParams] = useSearchParams()
@@ -733,44 +833,60 @@ export default function CandidateSession() {
             />
 
             {!isTerminal && myTurn && !packageActive && !pendingApproval && (
-              <div className="space-y-3 pt-3 border-t border-border">
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    value={counterValue}
-                    onChange={(e) => setCounterValue(e.target.value)}
-                    placeholder="New ask"
-                    className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12]"
-                  />
-                  <button
-                    disabled={acting || !counterValue}
-                    onClick={() => act('counter', Number(counterValue))}
-                    className="px-4 py-2 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated disabled:opacity-40 transition-colors"
-                  >
-                    Counter
-                  </button>
+              view.require_provenance_credential && !view.candidate_provenance_verified ? (
+                <div className="pt-3 border-t border-border">
+                  <p className="text-xs text-sealed-text bg-sealed-subtle border border-sealed-border rounded-lg px-3 py-2">
+                    The employer requires a verified git-provenance credential before you can respond — verify below.
+                  </p>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    disabled={acting}
-                    onClick={() => act('accept')}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    disabled={acting}
-                    onClick={() => act('walk')}
-                    className="flex-1 px-4 py-2.5 rounded-lg bg-danger hover:bg-danger-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors"
-                  >
-                    Walk away
-                  </button>
+              ) : (
+                <div className="space-y-3 pt-3 border-t border-border">
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      value={counterValue}
+                      onChange={(e) => setCounterValue(e.target.value)}
+                      placeholder="New ask"
+                      className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12]"
+                    />
+                    <button
+                      disabled={acting || !counterValue}
+                      onClick={() => act('counter', Number(counterValue))}
+                      className="px-4 py-2 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated disabled:opacity-40 transition-colors"
+                    >
+                      Counter
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={acting}
+                      onClick={() => act('accept')}
+                      className="flex-1 px-4 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors"
+                    >
+                      Accept
+                    </button>
+                    <button
+                      disabled={acting}
+                      onClick={() => act('walk')}
+                      className="flex-1 px-4 py-2.5 rounded-lg bg-danger hover:bg-danger-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors"
+                    >
+                      Walk away
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )
             )}
           </div>
         )}
+
+        <VerifyCredentialPanel
+          sessionId={sessionId}
+          token={token}
+          view={view}
+          visible={Boolean(view && !isTerminal)}
+          onVerified={refresh}
+        />
 
         {/* Three real states, distinct copy for each (see EnableAgenticButton/onEnabled): neither
             sealed -> plain CTA below with no extra note; other side already sealed -> nudge banner
