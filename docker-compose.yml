@@ -20,7 +20,7 @@ version: "3.9"
 services:
   app:
     build: .
-    image: kkoci/dealproof-devcred:latest
+    image: kkoci/dealproof:latest
     platform: linux/amd64
     ports:
       - "8000:8000"
