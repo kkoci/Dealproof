@@ -53,6 +53,166 @@ function Spinner() {
   return <span className="inline-block w-3.5 h-3.5 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
 }
 
+// --- One spotlighted next action + stage spine ---
+// Mirrors CandidateSession.jsx's getNextAction/getStageStatuses/StageSpine/ActionPanels exactly,
+// adapted for two real differences on this side: there's no VerifyCredentialPanel (only the
+// candidate can submit a provenance credential — this side just watches via
+// ProvenanceStatusPanel), and there's a real precondition before any of the rest of the flow
+// applies at all — the employer's band. getNextAction/getStageStatuses consume the exact same
+// isTerminal/pendingApproval/myTurn/packageActive already derived in the component; they do not
+// re-derive that logic.
+const STAGE_ORDER = ['verify', 'choose', 'negotiating', 'decision', 'proof']
+const STAGE_LABEL = {
+  verify: 'Verify',
+  choose: 'Choose mode',
+  negotiating: 'Negotiating',
+  decision: 'Decision',
+  proof: 'Proof',
+}
+
+function getNextAction(view, { isTerminal, pendingApproval, myTurn, packageActive }) {
+  if (!view) return null
+
+  if (isTerminal) return { stage: 'proof', key: 'proof' }
+  if (pendingApproval) return { stage: 'decision', key: 'approval' }
+  if (!view.band_set) return { stage: 'choose', key: 'submitBand' }
+
+  // The employer never verifies anything themselves — only the candidate can. While this
+  // requirement is outstanding, the employer's own next action is genuinely "wait," not "verify."
+  if (view.require_provenance_credential && !view.candidate_provenance_verified) {
+    return { stage: 'verify', key: 'waitingForVerify' }
+  }
+
+  // "Choose mode" only applies before the negotiation has started at all. Gating this on "have I
+  // sealed a track" alone breaks the very first manual turn: a fully-manual negotiator never
+  // seals anything, so they'd be told to "choose" forever, even mid-turn. Any round history at
+  // all — from either party — means the session is already underway.
+  const negotiationStarted = Boolean(
+    view.my_agentic_sealed || view.my_package_agentic_sealed || (view.history && view.history.length > 0)
+  )
+  if (!negotiationStarted) return { stage: 'choose', key: 'choose' }
+
+  // Both tracks seal independently and can each become "ready to run" at different times. The
+  // packageActive guard on the salary check matters for the documented edge case where the
+  // scalar track already finished and negotiation has moved onto package.
+  if (view.agentic_ready && !packageActive) return { stage: 'negotiating', key: 'runSalary' }
+  if (view.package_agentic_ready) return { stage: 'negotiating', key: 'runPackage' }
+  if (view.my_agentic_sealed && !view.agentic_ready) return { stage: 'negotiating', key: 'sealedWaitingSalary' }
+  if (view.my_package_agentic_sealed && !view.package_agentic_ready) return { stage: 'negotiating', key: 'sealedWaitingPackage' }
+  if (myTurn && !packageActive) return { stage: 'negotiating', key: 'respond' }
+  return { stage: 'negotiating', key: 'waiting' }
+}
+
+function getStageStatuses(view, nextAction) {
+  if (!nextAction) return []
+  const currentIndex = STAGE_ORDER.indexOf(nextAction.stage)
+  const verifyApplicable = Boolean(view.require_provenance_credential)
+  return STAGE_ORDER.map((key, i) => {
+    if (key === 'verify' && !verifyApplicable) return { key, status: 'skip' }
+    if (i < currentIndex) return { key, status: 'done' }
+    if (i === currentIndex) return { key, status: 'active' }
+    return { key, status: 'future' }
+  })
+}
+
+// Spatial "you are here" — read in under a second, no paragraph required. A "skip" stage (the
+// Verify step on sessions that never required it) renders visibly de-emphasized rather than
+// just unhighlighted, since it genuinely isn't part of this session's flow.
+function StageSpine({ statuses }) {
+  if (!statuses.length) return null
+  return (
+    <div className="mb-6 flex items-start">
+      {statuses.map((s, i) => (
+        <React.Fragment key={s.key}>
+          <div className="flex flex-col items-center gap-1 flex-shrink-0 w-16">
+            <div
+              className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                s.status === 'done' ? 'bg-success' :
+                s.status === 'active' ? 'bg-teal ring-4 ring-teal/20' :
+                s.status === 'skip' ? 'bg-transparent border border-dashed border-border' :
+                'bg-bg-elevated border border-border'
+              }`}
+            >
+              {s.status === 'done' && (
+                <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+            <span
+              className={`text-[10px] text-center leading-tight ${
+                s.status === 'active' ? 'font-semibold text-ink-primary' :
+                s.status === 'skip' ? 'text-ink-muted/40' :
+                s.status === 'done' ? 'text-ink-secondary' :
+                'text-ink-muted'
+              }`}
+            >
+              {STAGE_LABEL[s.key]}
+            </span>
+          </div>
+          {i < statuses.length - 1 && (
+            <div className={`flex-1 h-px mt-1.5 ${s.status === 'done' ? 'bg-success/40' : 'bg-border'}`} />
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+// Renders every action panel from ONE stable, always-mounted list, keyed and in a fixed order
+// every render. The spotlighted item gets the highlighted-card treatment; non-spotlighted
+// *collapsible* items are visually hidden (display:none) behind an "Other options" toggle.
+//
+// `collapsible` is the crucial distinction (see the regression this fixed — a real, shipped bug):
+// only an actionable, not-yet-made CHOICE (an enable-agentic CTA) is ever fine to tuck behind a
+// toggle. A PERSISTENT STATUS — ProvenanceStatusPanel's read-only text, a "waiting for the
+// candidate" confirmation, a just-finished agentic run's result — must never be hidden just
+// because something else is now the recommended next action, or it silently disappears the
+// moment getNextAction() moves on. Callers pass `collapsible: false` for every such item; those
+// always render in normal flow (optionally spotlighted, never hidden-by-default).
+//
+// Every item is unconditionally rendered every pass, in the same slot every render — only its
+// className (and an optional title paragraph in its own fixed sibling slot) changes — so a
+// component's internal state always survives regardless of which slot currently applies. See
+// CandidateSession.jsx's ActionPanels for the full reasoning; this is the same component.
+function ActionPanels({ items }) {
+  const [open, setOpen] = useState(false)
+  const otherCount = items.filter((it) => it.visible && it.collapsible && !it.isSpotlight).length
+
+  return (
+    <>
+      {items.map((it) => {
+        const hiddenBehindToggle = it.collapsible && !it.isSpotlight && !open
+        return (
+          <div
+            key={it.key}
+            className={
+              !it.visible ? 'hidden' :
+              it.isSpotlight ? 'mb-6 rounded-xl border-2 border-teal bg-bg-surface p-4' :
+              hiddenBehindToggle ? 'hidden' : 'mb-3'
+            }
+            style={it.visible && it.isSpotlight ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' } : undefined}
+          >
+            {it.visible && it.isSpotlight && it.title && (
+              <p className="text-xs font-semibold text-teal-text uppercase tracking-wide mb-3">{it.title}</p>
+            )}
+            {it.node}
+          </div>
+        )
+      })}
+      {otherCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="mb-6 text-xs font-medium text-ink-muted hover:text-ink-secondary underline underline-offset-2 transition-colors"
+        >
+          {open ? 'Hide other options' : `Other options (${otherCount})`}
+        </button>
+      )}
+    </>
+  )
+}
+
 // Pure orientation, no logic — mirrors CandidateSession.jsx's HowThisWorksStrip. A first-time
 // visitor otherwise sees the band form, status card, EnableAgenticButton,
 // EnablePackageAgenticButton, ProvenanceStatusPanel, ApprovalPanel, and AttestationPanel all with
@@ -777,6 +937,29 @@ export default function EmployerSession() {
   const myVoteForTrace = view && (packageActive ? view.my_package_approval_vote : view.my_approval_vote)
   const otherVoteForTrace = view && (packageActive ? view.other_package_approval_vote : view.other_approval_vote)
 
+  // One spotlighted next action + stage spine — both keyed off the exact derivation above,
+  // never a second simplified version of it (see getNextAction's own docstring).
+  const nextAction = getNextAction(view, { isTerminal, pendingApproval, myTurn, packageActive })
+  const stageStatuses = view ? getStageStatuses(view, nextAction) : []
+  const bandIsSpotlighted = Boolean(nextAction && nextAction.key === 'submitBand')
+  // Panels/banners that live inside the status card itself (approval, manual respond, the
+  // fallback waiting line) don't get their own spotlight wrapper — the card as a whole gets the
+  // highlighted-border treatment instead, matching CandidateSession.jsx's cardIsSpotlighted.
+  const cardIsSpotlighted = Boolean(nextAction && ['respond', 'approval', 'waiting'].includes(nextAction.key))
+
+  // Hoisted so each is the exact same expression already used as that component's own `visible`
+  // prop below — never a parallel/divergent computation, just named once and reused for both
+  // the real prop and the spotlight-vs-collapse decision.
+  const provenanceVisible = Boolean(view && (view.require_provenance_credential || view.candidate_provenance_verified))
+  const salaryChoiceVisible = Boolean(view?.band_set && !view?.my_agentic_sealed && !isTerminal)
+  const salaryNudgeVisible = Boolean(view?.band_set && !view?.my_agentic_sealed && view?.other_agentic_sealed && !isTerminal)
+  const salaryWaitingVisible = Boolean(view?.band_set && view?.my_agentic_sealed && !view?.agentic_ready && !isTerminal)
+  const packageChoiceVisible = Boolean(view?.band_set && !view?.my_package_agentic_sealed && !isTerminal)
+  const packageNudgeVisible = Boolean(view?.band_set && !view?.my_package_agentic_sealed && view?.other_package_agentic_sealed && !isTerminal)
+  const packageWaitingVisible = Boolean(view?.band_set && view?.my_package_agentic_sealed && !view?.package_agentic_ready && !isTerminal)
+  const runSalaryVisible = Boolean(view?.agentic_ready && !isTerminal)
+  const runPackageVisible = Boolean(view?.package_agentic_ready && !isTerminal)
+
   const loadDemoBand = () => {
     setBand({ band_min: '155000', band_mid: '175000', band_max: '195000' })
   }
@@ -834,12 +1017,20 @@ export default function EmployerSession() {
 
         <HowThisWorksStrip lines={HOW_THIS_WORKS_LINES} />
 
+        {view && <StageSpine statuses={stageStatuses} />}
+
         {error && (
           <div className="mb-4 px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>
         )}
 
         {view && !view.band_set && (
-          <form onSubmit={submitBand} className="p-5 rounded-xl bg-bg-surface border border-border space-y-4" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <form
+            onSubmit={submitBand}
+            className={`p-5 rounded-xl bg-bg-surface space-y-4 ${bandIsSpotlighted ? 'border-2 border-teal' : 'border border-border'}`}
+            style={bandIsSpotlighted
+              ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' }
+              : { boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}
+          >
             <div className="flex justify-end -mt-1 -mb-2">
               <button
                 type="button"
@@ -880,7 +1071,12 @@ export default function EmployerSession() {
         )}
 
         {view && view.band_set && (
-          <div className="p-5 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div
+            className={`p-5 rounded-xl bg-bg-surface ${cardIsSpotlighted ? 'border-2 border-teal' : 'border border-border'}`}
+            style={cardIsSpotlighted
+              ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' }
+              : { boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}
+          >
             <div className="flex items-center justify-between mb-4">
               <span className={`inline-block px-2.5 py-1 rounded-md text-sm font-semibold ${STATE_BADGE[activeState] || 'bg-bg-elevated text-neutral'}`}>
                 {STATE_LABEL[activeState] || activeState}
@@ -1007,70 +1203,154 @@ export default function EmployerSession() {
           </div>
         )}
 
-        <ProvenanceStatusPanel visible={Boolean(view)} view={view} />
+        {view && (() => {
+          // Each node is built exactly once, with the exact same `visible` prop the panel has
+          // always had — only how it's WRAPPED (spotlighted vs. collapsible-vs-always-shown)
+          // changes, via ActionPanels below, never a change to any visible={...} condition.
+          //
+          // ProvenanceStatusPanel is 100% persistent status (both its internal branches — waiting
+          // vs. verified — are read-only, neither is an actionable choice), so it's collapsible:
+          // false outright, no split needed. salary/package are each split into a COLLAPSIBLE
+          // actionable node (a not-yet-made choice) and a NON-collapsible persistent-status node
+          // — see ActionPanels' own docstring for why conflating the two was a shipped regression.
+          const provenanceNode = <ProvenanceStatusPanel visible={Boolean(view)} view={view} />
 
-        {/* Three real states, distinct copy for each — same design as CandidateSession.jsx's
-            mirror: neither sealed -> plain CTA below; other side already sealed -> nudge banner
-            ABOVE the CTA; I've sealed, other side hasn't -> green confirmation banner. Once both
-            are sealed, agentic_ready flips and AgenticPanel takes over with its own "both sides
-            have sealed... Let agents negotiate" copy — the transition into negotiation starting. */}
-        {view?.band_set && !view?.my_agentic_sealed && view?.other_agentic_sealed && !isTerminal && (
-          <div className="mt-4 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
-            The candidate has already enabled AI negotiation (salary) — enable yours to get started.
-          </div>
-        )}
-        <EnableAgenticButton
-          sessionId={sessionId}
-          token={token}
-          visible={Boolean(view?.band_set && !view?.my_agentic_sealed && !isTerminal)}
-          onEnabled={refresh}
-          enclaveVerified={enclaveVerified}
-          enclaveLoading={enclaveLoading}
-          enclaveError={enclaveError}
-        />
-        {view?.band_set && view?.my_agentic_sealed && !view?.agentic_ready && !isTerminal && (
-          <div className="mt-4 px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
-            <span>✓ AI negotiation enabled (salary) — waiting for the candidate to enable their side too.</span>
-          </div>
-        )}
+          const salaryChoiceNode = (
+            <>
+              {salaryNudgeVisible && (
+                <div className="mb-2 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
+                  The candidate has already enabled AI negotiation (salary) — enable yours to get started.
+                </div>
+              )}
+              <EnableAgenticButton
+                sessionId={sessionId}
+                token={token}
+                visible={salaryChoiceVisible}
+                onEnabled={refresh}
+                enclaveVerified={enclaveVerified}
+                enclaveLoading={enclaveLoading}
+                enclaveError={enclaveError}
+              />
+            </>
+          )
+          const salaryWaitingNode = salaryWaitingVisible ? (
+            <div className="px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
+              <span>✓ AI negotiation enabled (salary) — waiting for the candidate to enable their side too.</span>
+            </div>
+          ) : null
 
-        {view?.band_set && !view?.my_package_agentic_sealed && view?.other_package_agentic_sealed && !isTerminal && (
-          <div className="mt-3 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
-            The candidate has already enabled package AI negotiation — enable yours to get started.
-          </div>
-        )}
-        <EnablePackageAgenticButton
-          sessionId={sessionId}
-          token={token}
-          visible={Boolean(view?.band_set && !view?.my_package_agentic_sealed && !isTerminal)}
-          onEnabled={refresh}
-          enclaveVerified={enclaveVerified}
-          enclaveLoading={enclaveLoading}
-          enclaveError={enclaveError}
-        />
-        {view?.band_set && view?.my_package_agentic_sealed && !view?.package_agentic_ready && !isTerminal && (
-          <div className="mt-3 px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
-            <span>✓ Package AI negotiation enabled — waiting for the candidate to enable their side too.</span>
-          </div>
-        )}
+          const packageChoiceNode = (
+            <>
+              {packageNudgeVisible && (
+                <div className="mb-2 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
+                  The candidate has already enabled package AI negotiation — enable yours to get started.
+                </div>
+              )}
+              <EnablePackageAgenticButton
+                sessionId={sessionId}
+                token={token}
+                visible={packageChoiceVisible}
+                onEnabled={refresh}
+                enclaveVerified={enclaveVerified}
+                enclaveLoading={enclaveLoading}
+                enclaveError={enclaveError}
+              />
+            </>
+          )
+          const packageWaitingNode = packageWaitingVisible ? (
+            <div className="px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
+              <span>✓ Package AI negotiation enabled — waiting for the candidate to enable their side too.</span>
+            </div>
+          ) : null
 
-        <AgenticPanel
-          sessionId={sessionId}
-          token={token}
-          view={view}
-          visible={Boolean(view?.agentic_ready && !isTerminal)}
-          onComplete={refresh}
-        />
+          const runSalaryNode = (
+            <AgenticPanel sessionId={sessionId} token={token} view={view} visible={runSalaryVisible} onComplete={refresh} />
+          )
+          const runPackageNode = (
+            <PackageAgenticPanel sessionId={sessionId} token={token} view={view} visible={runPackageVisible} onComplete={refresh} />
+          )
 
-        <PackageAgenticPanel
-          sessionId={sessionId}
-          token={token}
-          view={view}
-          visible={Boolean(view?.package_agentic_ready && !isTerminal)}
-          onComplete={refresh}
-        />
+          const isChoose = nextAction?.key === 'choose'
+          const items = [
+            {
+              // Persistent status — never collapsible. Neither of ProvenanceStatusPanel's own
+              // internal branches (waiting / verified) is an actionable choice for the employer.
+              key: 'verify', node: provenanceNode, collapsible: false,
+              visible: provenanceVisible,
+              isSpotlight: nextAction?.key === 'waitingForVerify',
+              title: 'Waiting for the candidate',
+            },
+            {
+              key: 'salaryChoice', node: salaryChoiceNode, collapsible: true,
+              visible: salaryChoiceVisible,
+              isSpotlight: isChoose,
+              title: 'Do this next — choose how to negotiate',
+            },
+            {
+              key: 'salaryWaiting', node: salaryWaitingNode, collapsible: false,
+              visible: salaryWaitingVisible,
+              isSpotlight: nextAction?.key === 'sealedWaitingSalary',
+              title: 'Waiting for the candidate',
+            },
+            {
+              // No title here when spotlighted alongside salaryChoice (isChoose is their only
+              // shared trigger) — repeating "Do this next — choose how to negotiate" on both
+              // adjacent cards would just be duplicate text; the clarifying paragraph above
+              // already explains the pair.
+              key: 'packageChoice', node: packageChoiceNode, collapsible: true,
+              visible: packageChoiceVisible,
+              isSpotlight: isChoose,
+            },
+            {
+              key: 'packageWaiting', node: packageWaitingNode, collapsible: false,
+              visible: packageWaitingVisible,
+              isSpotlight: nextAction?.key === 'sealedWaitingPackage',
+              title: 'Waiting for the candidate',
+            },
+            {
+              // Non-collapsible: once an agentic run completes, its result (agreed price / round
+              // history) must persist even after pendingApproval immediately supersedes 'runSalary'
+              // as the recommended action — the same regression class as ProvenanceStatusPanel,
+              // since AgenticPanel keeps rendering its own cached result once visible flips.
+              key: 'runSalary', node: runSalaryNode, collapsible: false,
+              visible: runSalaryVisible,
+              isSpotlight: nextAction?.key === 'runSalary',
+              title: 'Do this next',
+            },
+            {
+              key: 'runPackage', node: runPackageNode, collapsible: false,
+              visible: runPackageVisible,
+              isSpotlight: nextAction?.key === 'runPackage',
+              title: 'Do this next',
+            },
+          ]
 
-        <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+          return (
+            <>
+              {/* Only shown when both choice buttons are the spotlight together — confirmed against
+                  EnablePackageAgenticButton's own visible={!isTerminal} that a track can still be
+                  added after starting the other, right up until this track's own outcome is final. */}
+              {isChoose && (
+                <p className="mb-3 text-xs text-ink-secondary">
+                  Choose one to start: salary only, or the full package (salary + equity + benefits).
+                  You can add the other track later, but only before this one finishes.
+                </p>
+              )}
+
+              <ActionPanels items={items} />
+            </>
+          )
+        })()}
+
+        <div
+          className={nextAction?.key === 'proof' ? 'rounded-xl border-2 border-teal p-4' : ''}
+          style={nextAction?.key === 'proof' ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' } : undefined}
+        >
+          {nextAction?.key === 'proof' && (
+            <p className="text-xs font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
+          )}
+          <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+        </div>
       </div>
     </div>
   )
