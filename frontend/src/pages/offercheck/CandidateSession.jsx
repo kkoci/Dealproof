@@ -70,6 +70,49 @@ function Spinner() {
   return <span className="inline-block w-3.5 h-3.5 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
 }
 
+// Pure orientation, no logic — a first-time visitor otherwise sees the status card,
+// VerifyCredentialPanel, EnableAgenticButton, EnablePackageAgenticButton, ApprovalPanel, and
+// AttestationPanel all with no explanation of order or purpose. Dismissed locally (no backend,
+// no cross-session persistence) — this is a map, not a gate: doesn't touch any panel's
+// visible={...} condition and isn't required reading to use the page.
+function HowThisWorksStrip({ lines }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <div className="mb-6 p-4 rounded-xl bg-teal-subtle border border-teal-border relative">
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        aria-label="Dismiss"
+        className="absolute top-2.5 right-2.5 w-5 h-5 flex items-center justify-center rounded-md text-teal-text/60 hover:text-teal-text hover:bg-white/50 transition-colors"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+      <p className="text-xs font-semibold text-teal-text uppercase tracking-wide mb-2 pr-6">How this works</p>
+      <ol className="space-y-1.5">
+        {lines.map((line, i) => (
+          <li key={i} className="flex items-start gap-2 text-xs text-ink-secondary leading-relaxed">
+            <span className="flex-shrink-0 w-4 h-4 rounded-full bg-white border border-teal-border text-teal-text text-[10px] font-bold flex items-center justify-center mt-0.5">
+              {i + 1}
+            </span>
+            <span>{line}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+const HOW_THIS_WORKS_LINES = [
+  "See where things stand — you'll only ever see the gap, never the other side's actual number.",
+  'Respond yourself, or let an AI agent negotiate for you using a private floor only you set.',
+  'If the employer asks for it, verify your work history first.',
+  'Once there’s an outcome, you decide: approve it, decline it, or ask for another round.',
+  'At the end, see cryptographic proof that everything ran exactly as claimed.',
+]
+
 // Small pill for the "Inside the TEE" boundary below. Landing.jsx's TrustPill (devcred vertical)
 // is styled for that page's dark theme and isn't exported anyway — this is a local equivalent
 // built from Offer Check's own light-mode success tokens (--color-success* is literally emerald,
@@ -843,6 +886,8 @@ export default function CandidateSession() {
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
       <div className="w-full max-w-lg mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Verification status</h1>
+
+        <HowThisWorksStrip lines={HOW_THIS_WORKS_LINES} />
 
         {consistency && !consistency.verified && (
           <div className="mb-4 px-3 py-2 rounded-lg bg-sealed-subtle border border-sealed-border text-sealed-text text-xs">
