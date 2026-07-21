@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useLocation, useParams, useSearchParams } from 'react-router-dom'
-import { offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckVerifyCredential } from '../../api.js'
+import { getEnclaveAttestation, offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckVerifyCredential } from '../../api.js'
 
 const SENIORITY_LABEL = { junior: 'Junior', mid: 'Mid-level', senior: 'Senior', staff: 'Staff+' }
 
@@ -68,6 +68,47 @@ const STATE_BADGE = {
 
 function Spinner() {
   return <span className="inline-block w-3.5 h-3.5 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
+}
+
+// Small pill for the "Inside the TEE" boundary below. Landing.jsx's TrustPill (devcred vertical)
+// is styled for that page's dark theme and isn't exported anyway — this is a local equivalent
+// built from Offer Check's own light-mode success tokens (--color-success* is literally emerald,
+// see tokens.css) rather than importing dark-theme classes that wouldn't read correctly here.
+function TrustPill({ children }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-success/30 text-success-text text-[10px] font-medium">
+      {children}
+    </span>
+  )
+}
+
+// Verify, then release: wraps a sensitive input (GitHub token, sealed floor/budget) with a
+// visually distinct boundary so it reads as "this goes into the attested enclave," plus the
+// specific trust pills for what's actually attested here (see candidatesession_investigated_fix.md).
+function TeeInputBoundary({ label, pills, children }) {
+  return (
+    <div className="p-3 rounded-lg bg-success-subtle border border-success/30 space-y-2.5">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span className="text-xs font-semibold text-success-text">🛡️ {label}</span>
+        <div className="flex flex-wrap gap-1.5">
+          {pills.map((p) => <TrustPill key={p}>{p}</TrustPill>)}
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// Shown inside a TeeInputBoundary while the enclave attestation is loading, or in place of it if
+// verification failed — never a silent fallback to an unverified-but-usable form.
+function EnclaveStatusNote({ loading, error }) {
+  if (!loading && !error) return null
+  return (
+    <p className={`text-xs flex items-center gap-1.5 ${error ? 'text-danger' : 'text-sealed-text'}`}>
+      {loading && <span className="inline-block w-3 h-3 border-2 border-sealed-text/60 border-t-transparent rounded-full animate-spin flex-shrink-0" />}
+      {loading ? 'Verifying enclave attestation before enabling input…' : error}
+    </p>
+  )
 }
 
 function GapMeter({ gapPct }) {
@@ -233,7 +274,7 @@ function AttestationPanel({ sessionId, token, visible }) {
   )
 }
 
-function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
+function EnableAgenticButton({ sessionId, token, visible, onEnabled, enclaveVerified, enclaveLoading, enclaveError }) {
   const [open, setOpen] = useState(false)
   const [floor, setFloor] = useState('')
   const [priorities, setPriorities] = useState('')
@@ -283,17 +324,20 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
       <p className="text-xs text-ink-muted">
         A Claude agent will negotiate on your behalf once the employer is ready too. Your floor is sealed — never shown to the employer, even to their agent.
       </p>
-      <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
-        <label className="block text-xs font-medium text-sealed-text mb-1.5">🔒 Your walk-away floor — private, only you see this</label>
-        <input className={`${inputClass} text-sealed-text`} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="175000" required />
-      </div>
+      <TeeInputBoundary label="Inside the TEE — sealed, never shown to the other side" pills={['Intel TDX', 'DCAP verified']}>
+        <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
+        <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
+          <label className="block text-xs font-medium text-sealed-text mb-1.5">🔒 Your walk-away floor — private, only you see this</label>
+          <input className={`${inputClass} text-sealed-text`} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="175000" required disabled={!enclaveVerified} />
+        </div>
+      </TeeInputBoundary>
       <div>
         <label className={labelClass}>Priorities (optional)</label>
         <input className={inputClass} value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
       </div>
       {err && <p className="text-xs text-danger">{err}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={submitting || !floor} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+        <button type="submit" disabled={submitting || !floor || !enclaveVerified} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
           {submitting ? 'Sealing…' : 'Seal & enable'}
         </button>
         <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
@@ -307,7 +351,7 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled }) {
   )
 }
 
-function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled }) {
+function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled, enclaveVerified, enclaveLoading, enclaveError }) {
   const [open, setOpen] = useState(false)
   const [floor, setFloor] = useState('')
   const [priorities, setPriorities] = useState('')
@@ -357,17 +401,20 @@ function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled }) {
       <p className="text-xs text-ink-muted">
         A Claude agent will negotiate the full compensation package on your behalf. Your floor is sealed — never shown to the employer.
       </p>
-      <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
-        <label className="block text-xs font-medium text-sealed-text mb-1.5">🔒 Your walk-away floor — total comp, private</label>
-        <input className={`${inputClass} text-sealed-text`} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="250000" required />
-      </div>
+      <TeeInputBoundary label="Inside the TEE — sealed, never shown to the other side" pills={['Intel TDX', 'DCAP verified']}>
+        <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
+        <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
+          <label className="block text-xs font-medium text-sealed-text mb-1.5">🔒 Your walk-away floor — total comp, private</label>
+          <input className={`${inputClass} text-sealed-text`} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="250000" required disabled={!enclaveVerified} />
+        </div>
+      </TeeInputBoundary>
       <div>
         <label className={labelClass}>Priorities (optional)</label>
         <input className={inputClass} value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
       </div>
       {err && <p className="text-xs text-danger">{err}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={submitting || !floor} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+        <button type="submit" disabled={submitting || !floor || !enclaveVerified} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
           {submitting ? 'Sealing…' : 'Seal & enable'}
         </button>
         <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
@@ -599,7 +646,7 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
 // (see app.offercheck.provenance). Never gated on session state — a candidate may verify
 // before, during, or after the employer requires it; only the move buttons below actually
 // enforce the requirement once it's set. Verified once, then this shows a read-only summary.
-function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified }) {
+function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, enclaveVerified, enclaveLoading, enclaveError }) {
   const [open, setOpen] = useState(false)
   const [githubToken, setGithubToken] = useState('')
   const [repos, setRepos] = useState('')
@@ -678,17 +725,20 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified }) 
         A read-only GitHub personal access token works best. Used once, in memory, to read your commit
         history — never written to disk.
       </p>
-      <div>
-        <label className={labelClass}>GitHub personal access token</label>
-        <input className={inputClass} type="password" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="ghp_…" required />
-      </div>
-      <div>
-        <label className={labelClass}>Repositories (comma-separated, owner/repo)</label>
-        <input className={inputClass} value={repos} onChange={(e) => setRepos(e.target.value)} placeholder="yourname/project-one, yourname/project-two" required />
-      </div>
+      <TeeInputBoundary label="Inside the TEE — used once, discarded after use" pills={['Intel TDX', 'DCAP verified', 'Token discarded after use']}>
+        <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
+        <div>
+          <label className={labelClass}>GitHub personal access token</label>
+          <input className={inputClass} type="password" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="ghp_…" required disabled={!enclaveVerified} />
+        </div>
+        <div>
+          <label className={labelClass}>Repositories (comma-separated, owner/repo)</label>
+          <input className={inputClass} value={repos} onChange={(e) => setRepos(e.target.value)} placeholder="yourname/project-one, yourname/project-two" required disabled={!enclaveVerified} />
+        </div>
+      </TeeInputBoundary>
       {err && <p className="text-xs text-danger">{err}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={submitting || !githubToken || !repos} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+        <button type="submit" disabled={submitting || !githubToken || !repos || !enclaveVerified} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
           {submitting ? 'Verifying…' : 'Verify'}
         </button>
         <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
@@ -712,6 +762,24 @@ export default function CandidateSession() {
   const employerLink = location.state?.employerLink
   const consistency = location.state?.consistency
   const pollRef = useRef(null)
+
+  // Verify, then release: the enclave's own attestation (not the session/negotiation
+  // receipt — that one 409s until the session is terminal, see AttestationPanel below)
+  // is fetched once up front and gates every sensitive input on this page.
+  const [enclaveAttestation, setEnclaveAttestation] = useState(null)
+  const [enclaveLoading, setEnclaveLoading] = useState(true)
+  const [enclaveError, setEnclaveError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    getEnclaveAttestation()
+      .then((data) => { if (!cancelled) setEnclaveAttestation(data) })
+      .catch((e) => { if (!cancelled) setEnclaveError(e.message || 'Enclave attestation could not be verified') })
+      .finally(() => { if (!cancelled) setEnclaveLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const enclaveVerified = Boolean(enclaveAttestation) && !enclaveError
 
   const refresh = async () => {
     try {
@@ -753,6 +821,7 @@ export default function CandidateSession() {
   const isTerminal = view && TERMINAL_STATES.includes(activeState)
   const pendingApproval = view && activeState === 'PENDING_APPROVAL'
   const myTurn = view && (packageActive ? view.package_turn === 'candidate' : view.turn === 'candidate')
+  const myVoteForTrace = view && (packageActive ? view.my_package_approval_vote : view.my_approval_vote)
 
   const act = async (move, value) => {
     setActing(true)
@@ -842,6 +911,25 @@ export default function CandidateSession() {
               </div>
             )}
 
+            {/* The human approval-gate decision, appended to the trace so it doesn't only live in
+                ApprovalPanel's own status text — a viewer scrolling the trace alone should be able
+                to see their own final call, not just a list of agent moves that can look unresolved.
+                Only the viewer's own vote is shown here; the other party's vote is already surfaced
+                by ApprovalPanel itself, so repeating it here would be redundant. */}
+            {myVoteForTrace && (
+              <div className="mb-4 flex justify-end">
+                <div className="max-w-[80%] px-3 py-1.5 rounded-lg text-xs bg-sealed-subtle border border-sealed-border text-sealed-text">
+                  <div className="flex items-center justify-between gap-3 mb-0.5">
+                    <span className="font-medium">You</span>
+                    <span className="text-[10px] text-ink-muted">your decision</span>
+                  </div>
+                  <div className="font-mono uppercase font-semibold">
+                    {APPROVAL_LABEL[myVoteForTrace]}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {!isTerminal && !myTurn && !pendingApproval && (
               <p className="text-xs text-ink-muted italic">Waiting for the other side to respond…</p>
             )}
@@ -909,6 +997,9 @@ export default function CandidateSession() {
           view={view}
           visible={Boolean(view && !isTerminal)}
           onVerified={refresh}
+          enclaveVerified={enclaveVerified}
+          enclaveLoading={enclaveLoading}
+          enclaveError={enclaveError}
         />
 
         {/* Three real states, distinct copy for each (see EnableAgenticButton/onEnabled): neither
@@ -927,6 +1018,9 @@ export default function CandidateSession() {
           token={token}
           visible={Boolean(view && !view.my_agentic_sealed && !isTerminal)}
           onEnabled={refresh}
+          enclaveVerified={enclaveVerified}
+          enclaveLoading={enclaveLoading}
+          enclaveError={enclaveError}
         />
         {view && view.my_agentic_sealed && !view.agentic_ready && !isTerminal && (
           <div className="mt-4 px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
@@ -944,6 +1038,9 @@ export default function CandidateSession() {
           token={token}
           visible={Boolean(view && !view.my_package_agentic_sealed && !isTerminal)}
           onEnabled={refresh}
+          enclaveVerified={enclaveVerified}
+          enclaveLoading={enclaveLoading}
+          enclaveError={enclaveError}
         />
         {view && view.my_package_agentic_sealed && !view.package_agentic_ready && !isTerminal && (
           <div className="mt-3 px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">

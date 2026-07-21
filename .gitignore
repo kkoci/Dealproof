@@ -60,6 +60,7 @@ app/api/TRANSCRIPT_INGEST_PROPOSAL.md
 tinycloud-sidecar/
 
 # Project-specific docs (internal planning)
+candidatesession_investigated_fix.md
 devcred_attestation_ux_fix.md
 build_spec_agent_rail.md
 offercheck_colour_system_v3.md
