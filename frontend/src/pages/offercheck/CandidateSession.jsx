@@ -822,6 +822,7 @@ export default function CandidateSession() {
   const pendingApproval = view && activeState === 'PENDING_APPROVAL'
   const myTurn = view && (packageActive ? view.package_turn === 'candidate' : view.turn === 'candidate')
   const myVoteForTrace = view && (packageActive ? view.my_package_approval_vote : view.my_approval_vote)
+  const otherVoteForTrace = view && (packageActive ? view.other_package_approval_vote : view.other_approval_vote)
 
   const act = async (move, value) => {
     setActing(true)
@@ -925,6 +926,24 @@ export default function CandidateSession() {
                   </div>
                   <div className="font-mono uppercase font-semibold">
                     {APPROVAL_LABEL[myVoteForTrace]}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Only reachable via a one-sided decline (see negotiation.py::_resolve_approval —
+                a decline resolves the session immediately without waiting for the other vote), so
+                the viewer here never got a turn to approve/decline. Without this, the trace would
+                just stop after the last agent move with no acknowledgement the session is over. */}
+            {!myVoteForTrace && otherVoteForTrace && isTerminal && (
+              <div className="mb-4 flex justify-start">
+                <div className="max-w-[80%] px-3 py-1.5 rounded-lg text-xs bg-bg-elevated border border-border text-ink-primary">
+                  <div className="flex items-center justify-between gap-3 mb-0.5">
+                    <span className="font-medium">Employer</span>
+                    <span className="text-[10px] text-ink-muted">ended it before your vote</span>
+                  </div>
+                  <div className="font-mono uppercase font-semibold">
+                    {APPROVAL_LABEL[otherVoteForTrace]}
                   </div>
                 </div>
               </div>
