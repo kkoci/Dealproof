@@ -60,6 +60,15 @@ export function getHealth() {
 }
 
 /**
+ * GET /api/attest — current DCAP quote for the running enclave.
+ * The first call a client makes before sending any sensitive payload.
+ * @returns {Promise<{ quote: string, mrenclave: string | null, timestamp: number }>}
+ */
+export function getEnclaveAttestation() {
+  return request('/api/attest')
+}
+
+/**
  * POST /api/deals/run — create and negotiate in one call
  * @param {object} body
  * @returns {Promise<DealResult>}
