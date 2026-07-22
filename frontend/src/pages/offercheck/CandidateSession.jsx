@@ -140,7 +140,7 @@ function StageSpine({ statuses }) {
     <div className="mb-6 flex items-start">
       {statuses.map((s, i) => (
         <React.Fragment key={s.key}>
-          <div className="flex flex-col items-center gap-1 flex-shrink-0 w-16">
+          <div className="flex flex-col items-center gap-1 flex-shrink-0 w-20">
             <div
               className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${
                 s.status === 'done' ? 'bg-success' :
@@ -156,7 +156,7 @@ function StageSpine({ statuses }) {
               )}
             </div>
             <span
-              className={`text-[10px] text-center leading-tight ${
+              className={`text-xs text-center leading-tight ${
                 s.status === 'active' ? 'font-semibold text-ink-primary' :
                 s.status === 'skip' ? 'text-ink-muted/40' :
                 s.status === 'done' ? 'text-ink-secondary' :
@@ -204,13 +204,13 @@ function ActionPanels({ items }) {
             key={it.key}
             className={
               !it.visible ? 'hidden' :
-              it.isSpotlight ? 'mb-6 rounded-xl border-2 border-teal bg-bg-surface p-4' :
+              it.isSpotlight ? 'mb-6 rounded-xl border-2 border-teal bg-bg-surface p-5' :
               hiddenBehindToggle ? 'hidden' : 'mb-3'
             }
             style={it.visible && it.isSpotlight ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' } : undefined}
           >
             {it.visible && it.isSpotlight && it.title && (
-              <p className="text-xs font-semibold text-teal-text uppercase tracking-wide mb-3">{it.title}</p>
+              <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">{it.title}</p>
             )}
             {it.node}
           </div>
@@ -238,7 +238,7 @@ function HowThisWorksStrip({ lines }) {
   const [dismissed, setDismissed] = useState(false)
   if (dismissed) return null
   return (
-    <div className="mb-6 p-4 rounded-xl bg-teal-subtle border border-teal-border relative">
+    <div className="mb-6 p-5 rounded-xl bg-teal-subtle border border-teal-border relative" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
       <button
         type="button"
         onClick={() => setDismissed(true)}
@@ -249,7 +249,7 @@ function HowThisWorksStrip({ lines }) {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      <p className="text-xs font-semibold text-teal-text uppercase tracking-wide mb-2 pr-6">How this works</p>
+      <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-2 pr-6">How this works</p>
       <ol className="space-y-1.5">
         {lines.map((line, i) => (
           <li key={i} className="flex items-start gap-2 text-xs text-ink-secondary leading-relaxed">
@@ -442,7 +442,7 @@ function AttestationPanel({ sessionId, token, visible }) {
   if (!visible) return null
 
   return (
-    <div className="mt-4 p-4 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+    <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
       {receipt ? (
         <>
           {receipt.tee_attested ? (
@@ -521,7 +521,7 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled, enclaveVeri
   }
 
   return (
-    <form onSubmit={submit} className="mt-4 p-4 rounded-xl bg-bg-surface border border-border space-y-3">
+    <form onSubmit={submit} className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
       <p className="text-sm font-medium text-ink-primary">Enable AI negotiation</p>
       <p className="text-xs text-ink-muted">
         A Claude agent will negotiate on your behalf once the employer is ready too. Your floor is sealed — never shown to the employer, even to their agent.
@@ -598,7 +598,7 @@ function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled, encl
   }
 
   return (
-    <form onSubmit={submit} className="mt-3 p-4 rounded-xl bg-bg-surface border border-border space-y-3">
+    <form onSubmit={submit} className="mt-3 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
       <p className="text-sm font-medium text-ink-primary">Enable AI negotiation (full package)</p>
       <p className="text-xs text-ink-muted">
         A Claude agent will negotiate the full compensation package on your behalf. Your floor is sealed — never shown to the employer.
@@ -652,7 +652,7 @@ function AgenticPanel({ sessionId, token, visible, view, onComplete }) {
   }
 
   return (
-    <div className="mt-4 p-4 rounded-xl bg-teal-subtle border border-teal-border">
+    <div className="mt-4 p-5 rounded-xl bg-teal-subtle border border-teal-border">
       {!result && (
         <>
           <p className="text-sm font-medium text-ink-primary mb-1">Let AI agents negotiate</p>
@@ -719,7 +719,7 @@ function PackageAgenticPanel({ sessionId, token, visible, view, onComplete }) {
   }
 
   return (
-    <div className="mt-4 p-4 rounded-xl bg-teal-subtle border border-teal-border">
+    <div className="mt-4 p-5 rounded-xl bg-teal-subtle border border-teal-border">
       {!result && (
         <>
           <p className="text-sm font-medium text-ink-primary mb-1">Let AI agents negotiate the full package</p>
@@ -802,7 +802,7 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
 
   if (myVote) {
     return (
-      <div className="mt-4 p-4 rounded-xl bg-bg-surface border border-border">
+      <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border">
         <p className="text-sm text-ink-primary mb-1">
           You voted to <span className="font-semibold">{APPROVAL_LABEL[myVote]}</span>.
         </p>
@@ -814,7 +814,7 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
   }
 
   return (
-    <div className="mt-4 p-4 rounded-xl bg-bg-surface border border-border space-y-3">
+    <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
       <p className="text-sm font-medium text-ink-primary">
         {packageMode ? 'Agents reached a package agreement — your call' : 'Agents reached an outcome — your call'}
       </p>
@@ -860,7 +860,7 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, en
   if (view.candidate_provenance_verified) {
     const c = view.candidate_provenance_credential
     return (
-      <div className="mt-4 p-4 rounded-xl bg-success-subtle border border-success/30">
+      <div className="mt-4 p-5 rounded-xl bg-success-subtle border border-success/30">
         <p className="text-xs font-semibold text-success-text mb-1">✓ Git-provenance credential verified</p>
         {c && (
           <>
@@ -921,7 +921,7 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, en
   }
 
   return (
-    <form onSubmit={submit} className="mt-4 p-4 rounded-xl bg-bg-surface border border-border space-y-3">
+    <form onSubmit={submit} className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
       <p className="text-sm font-medium text-ink-primary">Verify with GitHub</p>
       <p className="text-xs text-ink-muted">
         A read-only GitHub personal access token works best. Used once, in memory, to read your commit
@@ -1073,7 +1073,7 @@ export default function CandidateSession() {
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-      <div className="w-full max-w-lg mx-auto">
+      <div className="w-full max-w-3xl mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Verification status</h1>
 
         <HowThisWorksStrip lines={HOW_THIS_WORKS_LINES} />
@@ -1112,7 +1112,7 @@ export default function CandidateSession() {
 
         {view && (
           <div
-            className={`p-5 rounded-xl bg-bg-surface ${cardIsSpotlighted ? 'border-2 border-teal' : 'border border-border'}`}
+            className={`p-6 rounded-xl bg-bg-surface ${cardIsSpotlighted ? 'border-2 border-teal' : 'border border-border'}`}
             style={cardIsSpotlighted
               ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' }
               : { boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}
@@ -1419,11 +1419,11 @@ export default function CandidateSession() {
         })()}
 
         <div
-          className={nextAction?.key === 'proof' ? 'rounded-xl border-2 border-teal p-4' : ''}
+          className={nextAction?.key === 'proof' ? 'rounded-xl border-2 border-teal p-5' : ''}
           style={nextAction?.key === 'proof' ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' } : undefined}
         >
           {nextAction?.key === 'proof' && (
-            <p className="text-xs font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
+            <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
           )}
           <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
         </div>

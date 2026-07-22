@@ -114,7 +114,7 @@ export default function CompanyNew() {
   if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-md mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold text-ink-primary mb-2">Start a negotiation</h1>
           <p className="text-sm text-ink-muted mb-6">Paste your company API key to open an invite.</p>
           <form onSubmit={handleUseKey} className="flex gap-2 mb-4">
@@ -142,7 +142,7 @@ export default function CompanyNew() {
   if (keyStatus === 'checking') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-md mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <p className="text-sm text-ink-muted">Checking your key…</p>
         </div>
       </div>
@@ -152,7 +152,7 @@ export default function CompanyNew() {
   if (keyStatus === 'unregistered') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-md mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold text-ink-primary mb-2">No company registered yet</h1>
           <p className="text-sm text-ink-muted mb-6">
             This server instance has no record of that key — register to get started.
@@ -177,7 +177,7 @@ export default function CompanyNew() {
     const joinUrl = `${window.location.origin}${invite.candidate_join_link}`
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-lg mx-auto animate-rise-in">
+        <div className="w-full max-w-3xl mx-auto animate-rise-in">
           <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Invite created</h1>
           <p className="text-sm text-ink-muted mb-2">
             Send this link to the candidate. Their raw numbers stay private — you'll only ever see a gap percentage.
@@ -250,7 +250,7 @@ export default function CompanyNew() {
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-      <div className="w-full max-w-lg mx-auto">
+      <div className="w-full max-w-3xl mx-auto">
         <div className="flex items-start justify-between gap-3 mb-2">
           <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary">Start a negotiation</h1>
           <button
