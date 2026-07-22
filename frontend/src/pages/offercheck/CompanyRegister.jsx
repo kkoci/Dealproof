@@ -40,7 +40,7 @@ export default function CompanyRegister() {
   if (result) {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-lg mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">You're registered</h1>
           <p className="text-sm text-sealed-text mb-6">
             🔒 Save this API key now — it's shown exactly once and cannot be recovered.
@@ -88,7 +88,7 @@ export default function CompanyRegister() {
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-      <div className="w-full max-w-lg mx-auto">
+      <div className="w-full max-w-3xl mx-auto">
         <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Register your company</h1>
         <p className="text-sm text-ink-muted mb-8">
           Get an API key for bulk verification and the TA dashboard.

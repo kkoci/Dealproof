@@ -85,7 +85,7 @@ export default function Dashboard() {
   if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-md mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold text-ink-primary mb-2">Company dashboard</h1>
           <p className="text-sm text-ink-muted mb-6">Paste your API key to view your verifications.</p>
           <form onSubmit={handleUseKey} className="flex gap-2 mb-4">
@@ -113,7 +113,7 @@ export default function Dashboard() {
   if (keyStatus === 'checking') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-md mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <p className="text-sm text-ink-muted">Checking your key…</p>
         </div>
       </div>
@@ -123,7 +123,7 @@ export default function Dashboard() {
   if (keyStatus === 'unregistered') {
     return (
       <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-md mx-auto">
+        <div className="w-full max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold text-ink-primary mb-2">No company registered yet</h1>
           <p className="text-sm text-ink-muted mb-6">
             This server instance has no record of that key — register to get started.

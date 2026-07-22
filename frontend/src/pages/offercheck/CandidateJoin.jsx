@@ -108,7 +108,7 @@ export default function CandidateJoin() {
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-      <div className="w-full max-w-lg mx-auto">
+      <div className="w-full max-w-3xl mx-auto">
         <div className="flex items-start justify-between gap-3 mb-2">
           <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary">You've been invited to negotiate</h1>
           <button
