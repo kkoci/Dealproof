@@ -171,8 +171,9 @@ app/offercheck/routes.py      POST /api/offercheck/sessions, /parse-offer-letter
                                PATCH /sessions/{id}/candidate/enable-agentic, /sessions/{id}/employer/enable-agentic
 frontend/src/pages/offercheck/  Landing, CandidateNew (+ PDF upload + AI-negotiation floor + package terms), CandidateJoin (employer-invite claim
                                  form, same fields as CandidateNew), CandidateSession, EmployerSession (+ attestation/credential panel + agentic
-                                 panel + package results table), Demo (magic-link spectator view), CompanyRegister, CompanyNew (employer-initiated
-                                 invite creation + status check), Dashboard
+                                 panel + package results table + attestation-first input gating + stage spine/spotlighted-next-action via
+                                 getNextAction()/ActionPanels, see "Offer Check Session UX" below), Demo (magic-link spectator view), CompanyRegister,
+                                 CompanyNew (employer-initiated invite creation + status check), Dashboard — all page wrappers max-w-3xl
 
 --- Dev Credential vertical (product/dev-credential branch) — merged 2026-07-18, see "Merge: Dev Credential
     into Offer Check" below. Backend is live and mounted (app/main.py registers devcred_router); the
@@ -190,7 +191,9 @@ scripts/generate_git_fixtures.py           7 scenarios: genuine_senior/mid/junio
 tests/test_devcred.py                      29 tests — corpus root, SCAE ×3, inspector ×4, clamp, pipeline, schema, hash
 tests/test_devcred_rate_limit.py           5 tests — /evaluate 3/hr + /ingest 10/hr (slowapi), daily 50/day hard stop, counter DB layer
 frontend/src/pages/devcred/Landing.jsx     UNROUTED — /devcred/ hero, flow diagram, privacy pills, 3-step explanation (dark/indigo theme, not reused)
-frontend/src/pages/devcred/Setup.jsx       UNROUTED — /devcred/new token input (cleared post-submit), repo selector, progress steps
+frontend/src/pages/devcred/Setup.jsx       UNROUTED — /devcred/new token input (cleared post-submit), repo selector, progress steps, attestation-first
+                                            input gating (GET /api/attest via getEnclaveAttestation()) + redpill.ai-style Verification Center,
+                                            see "Offer Check Session UX" below
 frontend/src/pages/devcred/Results.jsx     UNROUTED — /devcred/:id credential card + TrustStackBar + share/download actions
 frontend/src/components/TrustStackBar.jsx  UNROUTED — animated trust stack: TDX ENCLAVE → DCAP → REPO CORPUS → DEV CREDENTIAL
 ```
@@ -309,12 +312,15 @@ Run tests: `pytest tests/ -v` (no Docker, no tappd required)
 | OC-P18 | Merge `product/dev-credential` into this branch — backend fully mounted (`app/devcred/*`, `devcred_router`), App.jsx conflict resolved in Offer Check's favor per merge decision (see "Merge: Dev Credential into Offer Check" below); devcred's own frontend pages unrouted pending the integration proposal | ✅ Complete |
 | OC-P19 | Fix devcred's `git_hasher.py`/`git_inspector.py` to iterate all branches (not just `main`), SHA-deduplicated, so feature/PR-only commits aren't missed | 🔜 Pending (plan confirmed, not yet built) |
 | OC-P20 | Fold Dev Credential's git-verification capability into Offer Check's candidate/employer flow as a pre-negotiation step, using Offer Check's own page/component patterns | 🔜 Pending (insertion point proposed, not yet built) |
+| OC-P21 | Attestation-first input gating (`GET /api/attest` via `getEnclaveAttestation()`) on CandidateSession/EmployerSession's sensitive inputs; human decision trace bubble + one-sided-decline fallback bubble in the round history | ✅ Complete |
+| OC-P22 | `HowThisWorksStrip`; stage spine + spotlighted next action (`getNextAction()`/`getStageStatuses()`/`StageSpine`/`ActionPanels`) replacing "show every applicable panel at once"; fixed a persistent-status-vs-actionable-choice collapse regression (verified-credential summary + agentic run results) found immediately after shipping — see "Offer Check Session UX" below | ✅ Complete |
+| OC-P23 | Container width normalization — every Offer Check page wrapper (session views, invite/join flows, company auth, dashboard, demo) to `max-w-3xl`, up from `max-w-lg`/`max-w-md` | ✅ Complete |
 | **Dev Credential vertical** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (GitInspectorAgent deterministic + GitEvaluatorAgent LLM) | ✅ Complete |
 | DC-3 | SeniorDevCredential schema + `POST /api/devcred/{id}/evaluate` + TDX attestation | ✅ Complete |
 | DC-4 | Synthetic fixtures + SCAE adversarial tests — `tests/test_devcred.py` (29 tests) | ✅ Complete |
-| DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL | ✅ Complete, but unrouted after the merge (see OC-P18) — superseded by OC-P20's in-Offer-Check integration |
+| DC-5 | Frontend `/devcred/` pages — credential card + trust stack + shareable URL; `Setup.jsx` gained attestation-first input gating + a Verification Center first, then the same pattern was ported to OC-P21's CandidateSession/EmployerSession work | ✅ Complete, but unrouted after the merge (see OC-P18) — superseded by OC-P20's in-Offer-Check integration |
 | DC-6 | Rate limiting — slowapi 3/hr (`/evaluate`) + 10/hr (`/ingest`) per IP; daily 50/day hard stop via `eval_counters` table | ✅ Complete |
 
 ---
@@ -1046,6 +1052,97 @@ view. `GET /company/sessions` already lists claimed sessions once they exist; th
 way to see *unclaimed* invites in the dashboard UI (the API (`GET /employer/invite/{id}`) supports
 checking one invite at a time, given its id — `CompanyNew.jsx` uses exactly that after creating an
 invite). Flagging these as real gaps, not silently dropped, if a future pass wants them.
+
+---
+
+## Offer Check Session UX — Attestation-First Gating, Human Decision Trace, Stage Spine, Spotlighted Next Action, Width Normalization
+
+Five passes, requested and built in sequence. All frontend-only — confirmed via `git diff --stat`
+after every single one of them that nothing under `app/` changed; every fix consumed endpoints and
+`SessionView` fields that already existed.
+
+**Attestation-first input gating**, ported from the "verify, then release" TEE UX pattern first
+built for Dev Credential's `Setup.jsx` (DC-5). Both `CandidateSession.jsx` and `EmployerSession.jsx`
+fetch `GET /api/attest` once on mount and disable every sensitive input (GitHub token, sealed
+floor/authority-limit/budget) until it resolves, wrapped in an emerald "Inside the TEE" boundary
+with `Intel TDX`/`DCAP verified` pills (`TeeInputBoundary`, `EnclaveStatusNote`, duplicated per file
+per this vertical's established mirroring convention). **This deliberately does not reuse
+`offercheckGetAttestation(sessionId, token)`** — that endpoint 409s until the session is terminal
+(see "Offer Check Architecture" above), so gating a pre-negotiation input on it would permanently
+lock the form before the negotiation that would resolve it has even happened. `getEnclaveAttestation()`
+(`api.js`) wraps the *enclave-level* `GET /api/attest` instead — the same call core DealProof's own
+docstring already calls "the first call a client makes... before sending any sensitive payload." The
+existing post-terminal `AttestationPanel` (the session/negotiation receipt) is untouched.
+
+Devcred's `Setup.jsx` got the same gating plus a redpill.ai-style **Verification Center**: a
+collapsed `✓ TDX Verified` pill expands into an attestor row, three claim rows, an expandable raw-
+evidence section (quote hex / MRENCLAVE / timestamp / a copy-pasteable curl command, all sourced
+from `GET /api/attest`'s existing response shape — no backend change needed), and a "Verify Again"
+button that re-fires the same call.
+
+**Human decision trace.** `RoundHistory`'s chat-bubble trace used to end on the last agent move with
+no acknowledgement of the human approval-gate outcome. Both files now append a "You · your decision"
+bubble (amber, visually distinct from the teal/grey agent-move bubbles) once the viewer's own
+`my_approval_vote`/`my_package_approval_vote` is set, plus a second, neutral-grey fallback bubble for
+the case where the *other* party's unilateral decline resolved the session before the viewer ever
+got a turn to vote. `negotiation.py::_resolve_approval()` short-circuits straight to `DECLINED` on a
+single decline vote without waiting for the other side — confirmed via a live `TestClient` run
+against the real backend (both parties' `SessionView` inspected directly), not assumed, before
+either bubble shipped.
+
+**`HowThisWorksStrip`** — a dismissible, jargon-free 5-line orientation strip at the top of each
+page, local `useState` only, no persistence. Purely additive: doesn't touch panel order, copy
+elsewhere on the page, or any `visible` condition.
+
+**Stage spine + spotlighted next action** (`getNextAction()` / `getStageStatuses()` / `StageSpine` /
+`ActionPanels`) replaced "show every applicable panel at once" with three complementary mechanisms:
+a 5-stage tracker (`Verify → Choose mode → Negotiating → Decision → Proof`, with a "skip" visual
+state for sessions where Verify never applies), one spotlighted recommended action, and an "Other
+options" disclosure for everything else currently visible. **`getNextAction()` consumes the
+component's own already-derived `isTerminal`/`pendingApproval`/`myTurn`/`packageActive` — it must
+never re-derive that logic**, or the spotlight can silently disagree with which panels are actually
+shown per the real `packageActive` hand-off rules. Its priority order was simulated against concrete
+state objects (not just read) before shipping, which caught a real bug: gating "choose a negotiation
+mode" on "have I sealed a track" alone meant a fully-manual respondent got told to "choose" forever,
+even mid-turn, since a manual negotiator never seals anything — fixed by gating on
+`negotiationStarted` (any round history at all, from either party) instead.
+
+`ActionPanels` renders every item from **one stable, always-mounted, keyed list — never
+conditionally re-parented between a spotlight wrapper and a collapsed section.** An earlier draft
+did the latter; React remounts a component whose position in the tree changes between renders,
+which would have silently discarded an in-progress typed floor value the instant a background poll
+(every 1.5s) changed the recommendation. Only `className` (and an optional title in its own fixed
+sibling slot) changes between spotlighted / collapsed-behind-toggle / hidden.
+
+**Regression, caught and fixed after shipping — `collapsible` is a required field on every
+`ActionPanels` item, not optional.** The first version hid *any* non-spotlighted item behind the
+"Other options" toggle by default, with no distinction between an unresolved choice and a completed
+status — so the verified-GitHub-credential summary (and the employer's read-only
+`ProvenanceStatusPanel`) vanished the instant `getNextAction()` recommended something else. Verifying
+the bug report's own diagnosis before patching also caught a second, unreported instance of the same
+class: `AgenticPanel`/`PackageAgenticPanel`'s post-run result would have disappeared the moment
+`pendingApproval` superseded `runSalary`/`runPackage` as the priority — i.e., right when the user
+most needs to see the negotiated outcome before approving it. Fixed by splitting every item that has
+both an actionable and a persistent-status sub-state (verify form vs. verified summary; an
+enable-agentic CTA vs. its "waiting for the other side" banner) into two separate `ActionPanels`
+entries — only the actionable one is ever `collapsible: true`.
+
+**Container width.** Every Offer Check page wrapper (`CandidateSession`, `EmployerSession`,
+`CompanyNew`, `CompanyRegister`, `CandidateNew`, `CandidateJoin`, `Dashboard`'s three pre-auth gate
+states, `Demo`) is `max-w-3xl` (768px), up from `max-w-lg`/`max-w-md` (512px/448px) — per
+`docs/design/luxe/SKILL.md`'s own dashboard-vs-prose content-width guidance. `Landing.jsx`'s hero
+paragraph keeps its own `max-w-lg` — that's a prose-measure line-length constraint inside an already-
+narrower centered marketing layout, not a page wrapper, and was confirmed as such by reading the
+surrounding JSX (not assumed) before being left alone.
+
+**Not verified in a live browser** for any of this — no Playwright/chromium available in this dev
+environment, and installing one mid-task was judged a disproportionate detour. Verified instead via:
+production build cleanliness (`npm run build`) after every change, `getNextAction()` priority-logic
+simulation against concrete state objects covering every documented scenario plus edge cases found
+along the way, and real backend `TestClient` calls to confirm `SessionView` field names/shapes
+(`history[].actor`, `require_provenance_credential`, `my_agentic_sealed`, etc.) actually match what
+the frontend reads. An actual cold click-through (Tina's original office-hours suggestion) is still
+recommended before Demo Day.
 
 ---
 
