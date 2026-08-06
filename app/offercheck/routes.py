@@ -522,12 +522,18 @@ async def join_invite_route(invite_id: str, body: CandidateJoinRequest, request:
 
 
 @router.post("/parse-offer-letter", response_model=OfferLetterExtraction)
-async def parse_offer_letter_route(file: UploadFile = File(...)) -> OfferLetterExtraction:
+async def parse_offer_letter_route(request: Request, file: UploadFile = File(...)) -> OfferLetterExtraction:
     """
     Best-effort PDF -> draft field extraction. Never persisted, never bound to
     a session — the candidate reviews/corrects the result client-side, then
     POSTs the (possibly edited) fields to /sessions like any other submission.
+
+    Unauthenticated by design (there's no session or party token yet at this
+    point in the flow) and makes a paid Claude call — rate-limited per IP
+    for the same reason start-agentic and verify-credential are; see
+    rate_limit.check_parse_offer_letter.
     """
+    rate_limit.check_parse_offer_letter(request)
     pdf_bytes = await file.read()
     try:
         data = await parsing.parse_offer_letter(pdf_bytes)
@@ -564,7 +570,13 @@ async def submit_employer_band(session_id: str, body: EmployerBandRequest) -> Em
 
 
 @router.post("/sessions/{session_id}/employer/move", response_model=SessionView)
-async def employer_move(session_id: str, body: MoveRequest) -> SessionView:
+async def employer_move(session_id: str, body: MoveRequest, request: Request) -> SessionView:
+    """
+    No Claude cost, but a party-token holder scripting this endpoint can
+    instant-burn rounds to force a premature EXPIRED — rate-limited per IP
+    as a griefing backstop; see rate_limit.check_move.
+    """
+    rate_limit.check_move(request)
     session = _get_session_or_404(session_id)
     if body.token != session.employer_token:
         raise HTTPException(status_code=403, detail="invalid employer token")
@@ -578,7 +590,9 @@ async def employer_move(session_id: str, body: MoveRequest) -> SessionView:
 
 
 @router.post("/sessions/{session_id}/candidate/move", response_model=SessionView)
-async def candidate_move(session_id: str, body: MoveRequest) -> SessionView:
+async def candidate_move(session_id: str, body: MoveRequest, request: Request) -> SessionView:
+    """See employer_move's docstring — same griefing-backstop rationale."""
+    rate_limit.check_move(request)
     session = _get_session_or_404(session_id)
     if body.token != session.candidate_token:
         raise HTTPException(status_code=403, detail="invalid candidate token")
@@ -868,7 +882,11 @@ async def get_credential_route(
 
 
 @router.post("/company/register", response_model=CompanyRegisterResponse, status_code=201)
-async def register_company_route(body: CompanyRegisterRequest) -> CompanyRegisterResponse:
+async def register_company_route(body: CompanyRegisterRequest, request: Request) -> CompanyRegisterResponse:
+    """Unauthenticated signup endpoint (no API key exists yet) — rate-limited per IP
+    to bound unauthenticated growth of auth.py's in-memory Company store; see
+    rate_limit.check_company_register."""
+    rate_limit.check_company_register(request)
     company, raw_key = auth.register_company(body.name)
     plan = billing.recommend_plan(body.hires_per_year)
     company.plan = plan
@@ -893,8 +911,14 @@ async def connect_ats_route(
 @router.post("/company/verify/bulk", response_model=BulkVerifyResponse)
 async def bulk_verify_route(
     body: BulkVerifyRequest,
+    request: Request,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> BulkVerifyResponse:
+    """Can create up to 50 sessions in one call (BulkVerifyRequest.max_length) — rate-limited
+    per IP on call count, not session count, since scaling against SESSION_CREATE_LIMIT's
+    10/hour would make a single legitimate 50-candidate bulk call impossible; see
+    rate_limit.check_bulk_verify."""
+    rate_limit.check_bulk_verify(request)
     company = _require_company(x_api_key)
     results = []
     for item in body.verifications:

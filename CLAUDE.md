@@ -254,7 +254,7 @@ tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, bill
 tests/test_offercheck_agentic.py 25  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, query-token param rename regression, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 43  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, PATCH enable-agentic-package endpoints, converged_hint field, HTTP e2e
-tests/test_offercheck_rate_limit.py 10  Offer Check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
+tests/test_offercheck_rate_limit.py 23  Offer Check: per-IP limits (session-create, agentic-call, provenance-verify, parse-offer-letter, move, company-register, bulk-verify), X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 12  Offer Check: employer-initiated invite lifecycle (create → unclaimed status → join → normal Session),
                                       company-auth gating, double-claim rejection, sealed agentic floor pass-through
 ```
@@ -885,6 +885,41 @@ Every existing offercheck test file's `autouse=True` state-reset fixture now als
 `rate_limit.reset()` — without it, tests within the same pytest process share rate-limit buckets
 (TestClient requests all appear to originate from the same host) and unrelated tests start failing
 with 429s once the shared budget is exhausted.
+
+**Pre-Twitter-launch pass found two more gaps in the same class**, both fixed the same way (a new
+bucket + a `rate_limit.check_*` call as the first line of the handler):
+
+- `POST /parse-offer-letter` (`PARSE_OFFER_LETTER_LIMIT = 3`) — this endpoint has **no auth
+  whatsoever**, not even a party token (it isn't bound to a session yet, per its own docstring), and
+  makes a real Claude call via `parsing.parse_offer_letter`. It was the single highest-priority gap
+  found in this pass — same bug class as the `arcid2` drain this whole rate-limit module exists to
+  prevent, but with an even lower bar (zero credential of any kind, not even a self-issued token).
+- `candidate_move` / `employer_move` (`MOVE_LIMIT = 20`) — no Claude cost, so this is a griefing
+  backstop, not a spend backstop: a party-token holder could otherwise script instant round-burning
+  to force a session to premature `EXPIRED` before the other side ever gets to respond. Looser limit
+  than the Claude-calling buckets on purpose — two humans sharing one IP genuinely exchanging 5
+  rounds is normal traffic that must not 429.
+
+**A third item from that same pass — re-confirming two *earlier*-flagged endpoints — turned out to
+have never actually been fixed, not regressed:** `register_company_route` and `bulk_verify_route`
+had zero `rate_limit.check_*` calls (confirmed by grepping every call site in `routes.py`, and by
+`git log --all --grep` turning up no prior commit touching either). Both closed the same way:
+
+- `POST /company/register` (`COMPANY_REGISTER_LIMIT = 5`) — unauthenticated by design (it's the
+  signup endpoint, no API key exists yet to gate on), but was completely uncapped: unlimited
+  signups grow `auth.py`'s in-memory `Company` store without bound, and each signup mints a fresh
+  API key that unlocks the endpoint below.
+- `POST /company/verify/bulk` (`BULK_VERIFY_LIMIT = 3`) — creates up to 50 sessions per call
+  (`BulkVerifyRequest.max_length`) and never touched `SESSION_CREATE_LIMIT`'s bucket at all, so
+  repeated calls had no backstop whatsoever. Deliberately a **call-count** bucket, not scaled
+  per-session-created: reusing the 10/hour `SESSION_CREATE_LIMIT` bucket per session would make a
+  single legitimate 50-candidate bulk call impossible on its own. This bucket instead caps repeated
+  *calls* (worst case ~150 sessions/hour/IP), independent of the plain `/sessions` bucket.
+
+Still open, not yet done: confirming live (not just via code read) that Phala's ingress actually
+sets `X-Forwarded-For` — the existing docstring caveat above is unverified against a real
+deployment; and confirming the Anthropic API key itself has a console-level spend cap set, which is
+the backstop of last resort regardless of any bug in this file.
 
 ---
 

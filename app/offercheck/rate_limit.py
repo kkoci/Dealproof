@@ -42,10 +42,39 @@ PROVENANCE_VERIFY_LIMIT = 3   # candidate/verify-credential calls per IP per hou
                                # be self-issued via POST /sessions with zero credential, so it
                                # gets the same per-IP backstop as session creation and agentic
                                # calls.
+PARSE_OFFER_LETTER_LIMIT = 3  # /parse-offer-letter calls per IP per hour — this endpoint has
+                               # NO auth at all (not even a party token — it isn't bound to a
+                               # session yet), so it's the least-gated Claude-calling endpoint
+                               # in this vertical. Matches PROVENANCE_VERIFY_LIMIT: single paid
+                               # Claude call per hit, same cost profile.
+MOVE_LIMIT = 20              # candidate/move + employer/move calls per IP per hour — no Claude
+                               # cost here, so this is a griefing backstop (a party-token holder
+                               # scripting instant round-burning to force premature expiry), not
+                               # a spend backstop. Looser than the Claude-calling limits above
+                               # since 5 legitimate rounds of back-and-forth between two humans
+                               # sharing one NAT/IP is a real scenario this must not block.
+COMPANY_REGISTER_LIMIT = 5   # /company/register calls per IP per hour — unauthenticated by
+                               # design (it's the signup endpoint, there's no API key yet), so
+                               # it had zero backstop before this. No Claude cost, but unlimited
+                               # signups grow auth.py's in-memory Company store without bound and
+                               # each one mints a fresh API key that unlocks bulk_verify below.
+BULK_VERIFY_LIMIT = 3        # /company/verify/bulk calls per IP per hour — deliberately a
+                               # call-count bucket, NOT scaled per session created. Each call can
+                               # create up to 50 sessions (BulkVerifyRequest.max_length), so
+                               # reusing SESSION_CREATE_LIMIT's 10/hour bucket per-session would
+                               # make a single legitimate 50-candidate bulk call impossible. This
+                               # bucket instead caps repeated bulk calls (worst case ~150
+                               # sessions/hour/IP) independent of the plain /sessions bucket,
+                               # closing "many session/token pairs with zero backstop" without
+                               # breaking the documented "up to 50 per call" feature.
 
 _session_create_hits: dict[str, list[float]] = defaultdict(list)
 _agentic_call_hits: dict[str, list[float]] = defaultdict(list)
 _provenance_verify_hits: dict[str, list[float]] = defaultdict(list)
+_parse_offer_letter_hits: dict[str, list[float]] = defaultdict(list)
+_move_hits: dict[str, list[float]] = defaultdict(list)
+_company_register_hits: dict[str, list[float]] = defaultdict(list)
+_bulk_verify_hits: dict[str, list[float]] = defaultdict(list)
 
 
 def reset() -> None:
@@ -53,6 +82,10 @@ def reset() -> None:
     _session_create_hits.clear()
     _agentic_call_hits.clear()
     _provenance_verify_hits.clear()
+    _parse_offer_letter_hits.clear()
+    _move_hits.clear()
+    _company_register_hits.clear()
+    _bulk_verify_hits.clear()
 
 
 def client_ip(request: Request) -> str:
@@ -89,3 +122,19 @@ def check_agentic_call(request: Request) -> None:
 
 def check_provenance_verify(request: Request) -> None:
     _check(_provenance_verify_hits, client_ip(request), PROVENANCE_VERIFY_LIMIT)
+
+
+def check_parse_offer_letter(request: Request) -> None:
+    _check(_parse_offer_letter_hits, client_ip(request), PARSE_OFFER_LETTER_LIMIT)
+
+
+def check_move(request: Request) -> None:
+    _check(_move_hits, client_ip(request), MOVE_LIMIT)
+
+
+def check_company_register(request: Request) -> None:
+    _check(_company_register_hits, client_ip(request), COMPANY_REGISTER_LIMIT)
+
+
+def check_bulk_verify(request: Request) -> None:
+    _check(_bulk_verify_hits, client_ip(request), BULK_VERIFY_LIMIT)
