@@ -299,6 +299,7 @@ async def _maybe_attest(session: Session) -> None:
             role=session.competing_offer.role,
             level=None,
             location=market_data.DEFAULT_LOCATION,
+            currency=market_data.DEFAULT_CURRENCY,
         )
         session.market_percentile = negotiation.market_percentile(session, market_range)
     terms = negotiation.attested_terms(session, credential_hash=session.credential.credential_hash)

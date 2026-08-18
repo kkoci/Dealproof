@@ -518,7 +518,7 @@ def test_market_percentile_none_in_attested_terms_when_never_computed():
 
 
 # ---------------------------------------------------------------------------
-# market comparator — integrations.market_data.fetch_market_range (external HTTP)
+# market comparator — integrations.market_data (BLS + ONS, external HTTP)
 # ---------------------------------------------------------------------------
 
 def _mock_market_httpx_client(json_response: dict | None = None, raises: Exception | None = None):
@@ -531,6 +531,7 @@ def _mock_market_httpx_client(json_response: dict | None = None, raises: Excepti
 
     mock_client = AsyncMock()
     mock_client.get.return_value = mock_response
+    mock_client.post.return_value = mock_response
 
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=mock_client)
@@ -538,60 +539,168 @@ def _mock_market_httpx_client(json_response: dict | None = None, raises: Excepti
     return ctx
 
 
+def _bls_response(p25=150_000, p50=180_000, p75=210_000):
+    """BLS timeseries API shape — only the last 2 chars of each seriesID (the
+    datatype code) and each series' first `data` entry matter to the parser."""
+    return {
+        "status": "REQUEST_SUCCEEDED",
+        "Results": {
+            "series": [
+                {"seriesID": "FAKESERIES10", "data": [{"year": "2024", "period": "A01", "value": str(p25)}]},
+                {"seriesID": "FAKESERIES12", "data": [{"year": "2024", "period": "A01", "value": str(p50)}]},
+                {"seriesID": "FAKESERIES14", "data": [{"year": "2024", "period": "A01", "value": str(p75)}]},
+            ]
+        },
+    }
+
+
+def _ons_response(p25=90_000, p50=110_000, p75=140_000):
+    return {
+        "observations": [
+            {"dimensions": {"statistics": {"label": "25th percentile"}}, "observation": str(p25)},
+            {"dimensions": {"statistics": {"label": "Median"}}, "observation": str(p50)},
+            {"dimensions": {"statistics": {"label": "75th percentile"}}, "observation": str(p75)},
+        ]
+    }
+
+
+# --- BLS ---------------------------------------------------------------
+
 @pytest.mark.asyncio
-async def test_fetch_market_range_returns_none_when_not_configured():
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", ""):
-        result = await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
+async def test_fetch_market_range_bls_returns_none_for_unmapped_role():
+    result = await market_data.fetch_market_range_bls("Underwater Basket Weaver", "United States")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_market_range_returns_range_when_configured():
-    mock_ctx = _mock_market_httpx_client({"percentile_25": 150_000, "percentile_50": 180_000, "percentile_75": 210_000})
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", "pk_test_fake"), \
-         patch("httpx.AsyncClient", return_value=mock_ctx):
-        result = await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
-    assert result == MarketRange(p25=150_000.0, p50=180_000.0, p75=210_000.0)
+async def test_fetch_market_range_bls_returns_range_for_mapped_role():
+    mock_ctx = _mock_market_httpx_client(_bls_response(150_000, 180_000, 210_000))
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await market_data.fetch_market_range_bls("Senior Software Engineer", "United States")
+    assert result == MarketRange(p25=150_000.0, p50=180_000.0, p75=210_000.0, source="bls", currency="USD")
 
 
 @pytest.mark.asyncio
-async def test_fetch_market_range_returns_none_on_http_error_without_raising():
+async def test_fetch_market_range_bls_returns_none_on_http_error_without_raising():
     """A failed/errored external fetch never raises — it degrades to None."""
     mock_ctx = _mock_market_httpx_client(raises=Exception("boom"))
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", "pk_test_fake"), \
-         patch("httpx.AsyncClient", return_value=mock_ctx):
-        result = await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await market_data.fetch_market_range_bls("Senior Software Engineer", "United States")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_market_range_returns_none_on_malformed_response():
-    mock_ctx = _mock_market_httpx_client({"unexpected": "shape"})
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", "pk_test_fake"), \
-         patch("httpx.AsyncClient", return_value=mock_ctx):
-        result = await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
+async def test_fetch_market_range_bls_returns_none_on_malformed_response():
+    mock_ctx = _mock_market_httpx_client({"status": "REQUEST_NOT_PROCESSED", "Results": {}})
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await market_data.fetch_market_range_bls("Senior Software Engineer", "United States")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_market_range_caches_result_and_does_not_refetch():
-    mock_ctx = _mock_market_httpx_client({"percentile_25": 150_000, "percentile_50": 180_000, "percentile_75": 210_000})
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", "pk_test_fake"), \
+async def test_fetch_market_range_bls_includes_registration_key_only_when_configured():
+    mock_ctx = _mock_market_httpx_client(_bls_response())
+    with patch("app.offercheck.integrations.market_data.settings.bls_api_key", "fake-reg-key"), \
          patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
-        first = await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
-        second = await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
+        await market_data.fetch_market_range_bls("Senior Software Engineer", "United States")
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.post.call_args
+    assert kwargs["json"]["registrationkey"] == "fake-reg-key"
+
+    market_data.reset_cache()
+    mock_ctx2 = _mock_market_httpx_client(_bls_response())
+    with patch("app.offercheck.integrations.market_data.settings.bls_api_key", ""), \
+         patch("httpx.AsyncClient", return_value=mock_ctx2) as mock_cls2:
+        await market_data.fetch_market_range_bls("Senior Software Engineer", "United States")
+    _, kwargs2 = mock_cls2.return_value.__aenter__.return_value.post.call_args
+    assert "registrationkey" not in kwargs2["json"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_bls_caches_result_and_does_not_refetch():
+    mock_ctx = _mock_market_httpx_client(_bls_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        first = await market_data.fetch_market_range_bls("Senior Software Engineer", "United States")
+        second = await market_data.fetch_market_range_bls("  senior software engineer  ", "united states")
     assert first == second
     mock_cls.assert_called_once()  # only one real HTTP client constructed — second call hit the cache
 
 
+# --- ONS ---------------------------------------------------------------
+
 @pytest.mark.asyncio
-async def test_fetch_market_range_cache_is_case_and_whitespace_insensitive():
-    mock_ctx = _mock_market_httpx_client({"percentile_25": 150_000, "percentile_50": 180_000, "percentile_75": 210_000})
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", "pk_test_fake"), \
-         patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
-        await market_data.fetch_market_range("Senior Software Engineer", None, "United States")
-        await market_data.fetch_market_range("  senior software engineer  ", None, "united states")
+async def test_fetch_market_range_ons_returns_none_for_unmapped_role():
+    result = await market_data.fetch_market_range_ons("Underwater Basket Weaver", "United Kingdom")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_returns_range_for_mapped_role():
+    mock_ctx = _mock_market_httpx_client(_ons_response(90_000, 110_000, 140_000))
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await market_data.fetch_market_range_ons("Senior Software Engineer", "United Kingdom")
+    assert result == MarketRange(p25=90_000.0, p50=110_000.0, p75=140_000.0, source="ons", currency="GBP")
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_returns_none_on_http_error_without_raising():
+    mock_ctx = _mock_market_httpx_client(raises=Exception("boom"))
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await market_data.fetch_market_range_ons("Senior Software Engineer", "United Kingdom")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_returns_none_on_malformed_response():
+    mock_ctx = _mock_market_httpx_client({"unexpected": "shape"})
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
+        result = await market_data.fetch_market_range_ons("Senior Software Engineer", "United Kingdom")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_caches_result_and_does_not_refetch():
+    mock_ctx = _mock_market_httpx_client(_ons_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        first = await market_data.fetch_market_range_ons("Senior Software Engineer", "United Kingdom")
+        second = await market_data.fetch_market_range_ons("Senior Software Engineer", "United Kingdom")
+    assert first == second
     mock_cls.assert_called_once()
+
+
+# --- source selection (top-level fetch_market_range) --------------------
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_selects_bls_for_usd():
+    with patch("app.offercheck.integrations.market_data.fetch_market_range_bls", new_callable=AsyncMock) as mock_bls, \
+         patch("app.offercheck.integrations.market_data.fetch_market_range_ons", new_callable=AsyncMock) as mock_ons:
+        mock_bls.return_value = MarketRange(p25=1, p50=2, p75=3, source="bls", currency="USD")
+        result = await market_data.fetch_market_range("Senior Software Engineer", None, "United States", currency="USD")
+    mock_bls.assert_called_once_with("Senior Software Engineer", "United States")
+    mock_ons.assert_not_called()
+    assert result.source == "bls"
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_selects_ons_for_gbp():
+    with patch("app.offercheck.integrations.market_data.fetch_market_range_bls", new_callable=AsyncMock) as mock_bls, \
+         patch("app.offercheck.integrations.market_data.fetch_market_range_ons", new_callable=AsyncMock) as mock_ons:
+        mock_ons.return_value = MarketRange(p25=1, p50=2, p75=3, source="ons", currency="GBP")
+        result = await market_data.fetch_market_range("Senior Software Engineer", None, "United Kingdom", currency="GBP")
+    mock_ons.assert_called_once_with("Senior Software Engineer", "United Kingdom")
+    mock_bls.assert_not_called()
+    assert result.source == "ons"
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_defaults_to_bls_when_currency_unspecified():
+    """No currency signal on Session today (see module docstring) — the default param
+    is what every real caller in routes.py actually exercises right now."""
+    with patch("app.offercheck.integrations.market_data.fetch_market_range_bls", new_callable=AsyncMock) as mock_bls, \
+         patch("app.offercheck.integrations.market_data.fetch_market_range_ons", new_callable=AsyncMock) as mock_ons:
+        mock_bls.return_value = MarketRange(p25=1, p50=2, p75=3, source="bls", currency="USD")
+        await market_data.fetch_market_range("Senior Software Engineer", None, market_data.DEFAULT_LOCATION)
+    mock_bls.assert_called_once()
+    mock_ons.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -617,9 +726,8 @@ def test_e2e_agreed_session_persists_market_percentile_from_configured_source(cl
         json={"employer_token": employer_token, "band_min": 155_000, "band_mid": 175_000, "band_max": 195_000},
     )
 
-    mock_ctx = _mock_market_httpx_client({"percentile_25": 150_000, "percentile_50": 180_000, "percentile_75": 210_000})
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", "pk_test_fake"), \
-         patch("httpx.AsyncClient", return_value=mock_ctx):
+    mock_ctx = _mock_market_httpx_client(_bls_response(150_000, 180_000, 210_000))
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         accept = client.post(
             f"/api/offercheck/sessions/{session_id}/employer/move",
             json={"token": employer_token, "move": "accept"},
@@ -645,14 +753,17 @@ def test_e2e_agreed_session_persists_market_percentile_from_configured_source(cl
     assert receipt.json()["market_percentile"] == pytest.approx(expected)
 
 
-def test_e2e_agreed_session_market_percentile_none_when_source_unconfigured(client):
-    """The core promise: an unconfigured/unavailable market data source never blocks
-    the session from reaching AGREED — it just leaves market_percentile null."""
+def test_e2e_agreed_session_market_percentile_none_when_role_unmapped(client):
+    """The core promise: a source that can't answer (here: no SOC-code mapping for the
+    role) never blocks the session from reaching AGREED — it just leaves
+    market_percentile null. No httpx patch needed — BLS/ONS bail out before any HTTP
+    call for an unmapped role, so this also implicitly proves no real network call
+    is attempted for a role our lookup table doesn't cover."""
     submit = client.post(
         "/api/offercheck/sessions",
         json={
             "competing_offer": {
-                "company": "Stripe", "role": "Senior Software Engineer", "base_salary": 165_000,
+                "company": "Stripe", "role": "Underwater Basket Weaver", "base_salary": 165_000,
                 "equity_value": 40_000, "bonus": 15_000, "start_date": "2026-09-01",
             },
             "candidate_ask": 185_000,
@@ -666,24 +777,23 @@ def test_e2e_agreed_session_market_percentile_none_when_source_unconfigured(clie
         json={"employer_token": employer_token, "band_min": 155_000, "band_mid": 175_000, "band_max": 195_000},
     )
 
-    with patch("app.offercheck.integrations.market_data.settings.market_data_api_key", ""):
-        accept = client.post(
-            f"/api/offercheck/sessions/{session_id}/employer/move",
-            json={"token": employer_token, "move": "accept"},
-        )
-        client.post(
-            f"/api/offercheck/sessions/{session_id}/employer/approval",
-            json={"token": employer_token, "decision": "approve"},
-        )
-        approve = client.post(
-            f"/api/offercheck/sessions/{session_id}/candidate/approval",
-            json={"token": candidate_token, "decision": "approve"},
-        )
+    accept = client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/move",
+        json={"token": employer_token, "move": "accept"},
+    )
+    client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/approval",
+        json={"token": employer_token, "decision": "approve"},
+    )
+    approve = client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/approval",
+        json={"token": candidate_token, "decision": "approve"},
+    )
 
     assert accept.status_code == 200
     assert approve.status_code == 200
     view = approve.json()
-    assert view["state"] == "AGREED"  # never blocked by the missing market data source
+    assert view["state"] == "AGREED"  # never blocked by the unmapped/unavailable market data source
     assert view["agreed_price"] == 185_000.0
     assert view["market_percentile"] is None
 

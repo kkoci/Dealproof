@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     stripe_api_key: str = ""       # STRIPE_API_KEY — unset => billing.record_verification_usage() no-ops
 
     # Offer Check: external market-data comparator (app/offercheck/integrations/market_data.py)
-    market_data_api_key: str = ""  # MARKET_DATA_API_KEY — PayScale Compensation API key; unset => fetch_market_range() always returns None
+    # BLS OEWS (US): optional registration key for higher API rate limits — unauthenticated
+    # requests work too, just at a lower quota. ONS ASHE (UK) needs no key at all.
+    bls_api_key: str = ""  # BLS_API_KEY — optional; unset => fetch_market_range_bls() still works, unauthenticated-tier limits apply
 
     # Offer Check magic-link auth — gates every Claude-calling offercheck endpoint (see app/offercheck/demo_auth.py)
     offercheck_secret_key: str = ""       # OFFERCHECK_SECRET_KEY — HMAC signing key; app refuses to start without it

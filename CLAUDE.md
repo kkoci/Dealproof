@@ -159,7 +159,7 @@ app/offercheck/credential.py  OfferVerifiedCredential + PackageCredential — de
 app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
 app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub),
-                               market_data.py (external market-comparator fetch — PayScale, cached, never raises)
+                               market_data.py (external market-comparator fetch — BLS OEWS (US) + ONS ASHE (UK), cached, never raises)
 app/offercheck/package.py     Phase 2B: OfferPackage math (total_comp_value, hard clamps, is_converged) + a parallel package state machine (apply_package_move, package_current_turn) — can't share app/offercheck/negotiation.py's scalar apply_move()
 app/offercheck/agents/        candidate_agent.py, employer_agent.py (mirror app/agents/buyer.py, seller.py) + mediator.py (mirrors app/agents/negotiation.py);
                                package_candidate_agent.py, package_employer_agent.py, package_mediator.py (Phase 2B counterparts, package-shaped I/O)
@@ -228,7 +228,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (403 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+## Test Suite (411 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
 
 The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
 assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
@@ -250,8 +250,9 @@ tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
-tests/test_offercheck.py     48   Offer Check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer delta /
-                                  final_gap_pct, external market comparator / market_percentile — fetch mocked, never-raises, HTTP e2e wiring), PDF parsing, HTTP e2e
+tests/test_offercheck.py     56   Offer Check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer delta /
+                                  final_gap_pct, external market comparator / market_percentile via BLS + ONS — fetch mocked, source-selection,
+                                  unmapped-role and HTTP-error fallback, never-raises, HTTP e2e wiring), PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
 tests/test_offercheck_agentic.py 25  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, query-token param rename regression, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
@@ -634,35 +635,70 @@ employer's own starting position, not whether the final number is reasonable by 
 `market_percentile` adds that missing *absolute* anchor: where `agreed_price` lands (0-100) against
 real third-party salary comparators the negotiating agent never had access to or control over.
 
-Data source: **PayScale's Compensation API** (role/title + location salary percentiles), following
+Data sources: **BLS OEWS** (US, Bureau of Labor Statistics' Occupational Employment and Wage
+Statistics survey) for USD offers and **ONS ASHE** (UK, Office for National Statistics' Annual
+Survey of Hours and Earnings) for GBP offers — free and public with no sales process, following
 this repo's established external-integration convention (`app/offercheck/integrations/greenhouse.py`
 / `lever.py` / `billing.py` — implement the vendor's documented REST shape via `httpx` directly, no
-vendor SDK). Considered and rejected: levels.fyi (no official public/documented API — only unofficial
-scrapers, the same "no generic public endpoint" problem `workday.py` already declined to build
-against) and a UK ONS/ASHE dataset (genuinely free and public, but occupation-code + region granular
-rather than job-title granular, and GBP/UK-only — a poor fit for the USD/US-tech offers every example
-in this codebase uses). Like Stripe/Greenhouse/Lever, PayScale's Compensation API is commercial/
-sales-gated (not simple self-serve signup) and this request shape has **not** been exercised against
-a live account in this environment — confirm against current PayScale docs before relying on it in
-production. Configured via `MARKET_DATA_API_KEY` (`app/config.py`); unset means
-`fetch_market_range()` always returns `None` — no code path requires it.
+vendor SDK). This replaces an earlier **PayScale**-based implementation from an initial pass: PayScale
+turned out to be enterprise/sales-gated with no self-serve API access at all, so it was never actually
+viable to integrate — fully removed, no PayScale code remains. levels.fyi was reconsidered and rejected
+again for the same reason as before: no official public/documented API, only unofficial scrapers, the
+same "no generic public endpoint" problem `workday.py` already declined to build against.
 
-`fetch_market_range(role, level, location)` never raises (unconfigured key, unmatched role, timeout,
-malformed response all degrade to `None`) and caches in-memory per `(role, level, location)`, since
-the same combination repeats across sessions and this is a network call kept off the hot path — it's
-called at most once per session, in `routes.py::_maybe_attest`, only when `session.state == "AGREED"`
-(never on every round). `negotiation.market_percentile(session, market_range)` stays a separate, pure,
-synchronous function — piecewise-linear between the fetched p25/p50/p75, clamped to `[0, 100]` beyond
-that range — so the placement math is unit-testable with zero I/O; the fetch and the calculation are
-two different concerns on purpose. Offer Check doesn't currently capture candidate/role location
-anywhere (`CompetingOffer` has no location field), so the fetch falls back to
-`market_data.DEFAULT_LOCATION` ("United States") — a known limitation, not silently glossed over.
+**Accepted tradeoff, stated plainly:** both BLS and ONS are occupation-code + region granular, not
+job-title + seniority-level granular. "Senior Backend Engineer" maps to the same bucket as any other
+software-development role at any seniority — the wage *percentile* still carries real signal, but this
+is coarser than a paid, job-title-precise source would be. `fetch_market_range`'s signature and
+`MarketRange`'s shape are deliberately unchanged from the PayScale version specifically so a more
+granular paid source can be swapped in later without touching `negotiation.py`/`schemas.py`/
+`routes.py` at all — those layers only ever see the derived percentile, never which source or exact
+API answered the call.
 
-**A failed or unconfigured market-data lookup degrades gracefully by design — the session still
+**Source selection is currency-based** (`fetch_market_range(role, level, location, currency)`):
+`currency == "GBP"` → ONS, anything else (including the default `"USD"`) → BLS. `level` is accepted
+for signature stability but not used for occupation-code selection — neither survey's SOC taxonomy is
+seniority-stratified; seniority differences show up in the wage percentile spread itself, not in which
+occupation bucket a role maps to. **Offer Check doesn't currently capture currency or location
+anywhere on `CompetingOffer`/`Session`** (same known gap as the previous pass), so in practice every
+real caller today passes the module's `DEFAULT_LOCATION`/`DEFAULT_CURRENCY` ("United States"/"USD")
+and **BLS is the only source actually reached in production** until that's added — ONS is fully
+implemented and tested, just currently unreached by any real session. Both source functions also only
+ever query a *national* aggregate area code today (`0000000` for BLS, `K02000001` for ONS), for the
+same reason: no real location signal exists yet to route to a specific metro/region.
+
+Occupation-code mapping (`_map_role_to_bls_soc` / `_map_role_to_ons_soc`): both surveys use an SOC
+(Standard Occupational Classification) code, but **US SOC and UK SOC are different taxonomies that
+happen to share an acronym** — the two lookup tables are independent and their codes are not
+interchangeable. Both are small, deliberately non-exhaustive keyword tables covering common tech
+roles; anything unmapped returns `None`, which propagates out as `market_percentile: None` exactly
+like any other lookup failure. Confirm both tables against the current BLS SOC (bls.gov/soc) and ONS
+SOC (ons.gov.uk) indexes before relying on them in production — some mappings are approximations
+(e.g. "product manager" has no dedicated BLS code).
+
+Like Stripe/Greenhouse/Lever/the PayScale version this replaces, the exact BLS/ONS request-response
+shapes below have **not** been exercised against a live query in this environment — BLS's OEWS
+series-ID construction and per-percentile datatype codes, and ONS's dataset/dimension-label shape,
+should both be confirmed against current developer docs (bls.gov/developers,
+bls.gov/help/hlpforma.htm#OE, api.ons.gov.uk) before relying on this in production. Configured via
+`BLS_API_KEY` (`app/config.py`, optional — BLS's public API works unauthenticated at a lower rate
+limit; ONS needs no key at all).
+
+`fetch_market_range_bls(role, location)` / `fetch_market_range_ons(role, location)` never raise
+(unmapped role, no network access, timeout, malformed response all degrade to `None`) and each cache
+in-memory, keyed by `(source, role, location)` in one shared cache, since the same combination
+repeats across sessions and this is a network call kept off the hot path — called at most once per
+session, in `routes.py::_maybe_attest`, only when `session.state == "AGREED"` (never on every round).
+`negotiation.market_percentile(session, market_range)` stays a separate, pure, synchronous function —
+piecewise-linear between the fetched p25/p50/p75, clamped to `[0, 100]` beyond that range — so the
+placement math is unit-testable with zero I/O; the fetch and the calculation are two different
+concerns on purpose, and this function needed no changes at all for the PayScale→BLS/ONS swap.
+
+**A failed or unmapped market-data lookup degrades gracefully by design — the session still
 reaches `AGREED` and still attests normally; `market_percentile` is just `None`.** This is the same
 non-fatal resilience pattern as memory/πCreds/Auditor/Arbitrator/DKIM elsewhere in this repo, applied
 here for the first time to something that isn't even part of the negotiation itself — a lookup failure
-here can *never* block or fail a negotiation, by construction (`fetch_market_range` has no raising
+here can *never* block or fail a negotiation, by construction (neither fetch function has a raising
 code path at all, not even one `_maybe_attest` needs to catch).
 
 `session.market_percentile` is persisted on `Session` (unlike `final_gap_pct`, which is cheap enough
@@ -671,9 +707,9 @@ it requires that async network fetch — there's no synchronous way to get a fre
 time, so the computed percentile is stored once, at the `AGREED` transition, and read directly
 thereafter (including by `attested_terms()`, which reads `session.market_percentile` rather than
 calling `market_percentile()` again — it has no `MarketRange` to pass and must stay I/O-free). Only
-the derived percentile is ever attested or exposed — the raw fetched `p25/p50/p75` range is never
-persisted on `Session` at all, same privacy discipline as `opening_employer_offer` never appearing in
-`attested_terms()` raw.
+the derived percentile is ever attested or exposed — the raw fetched `p25/p50/p75` range (and which
+source/currency answered) is never persisted on `Session` at all, same privacy discipline as
+`opening_employer_offer` never appearing in `attested_terms()` raw.
 
 **PDF parsing (Phase 2) is a draft prefill, not a data source:** `POST /parse-offer-letter` returns
 `ExtractedOfferFields` (schemas.py) — a deliberately *unvalidated* shape (`base_salary` can be `0`)

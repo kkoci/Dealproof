@@ -260,8 +260,8 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
-tests/test_offercheck.py         48 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer
-                                              delta / final_gap_pct, external market comparator / market_percentile), PDF parsing, HTTP e2e
+tests/test_offercheck.py         56 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer
+                                              delta / final_gap_pct, external market comparator / market_percentile via BLS + ONS), PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
 tests/test_offercheck_agentic.py 24 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value exposure boundary, PATCH enable-agentic endpoints, HTTP e2e
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
@@ -1149,7 +1149,7 @@ Dealproof/
 | OC-24 | Fix `git_hasher.py`/`git_inspector.py` to iterate all branches (not just `main`), SHA-deduplicated | 🔜 Pending (plan confirmed, not yet built) |
 | OC-25 | Fold Dev Credential's git-verification capability into Offer Check's flow as a pre-negotiation step | 🔜 Pending (insertion point proposed, not yet built) |
 | OC-26 | Opening-offer delta tracking — `Session.opening_employer_offer` (snapshotted once, on the employer's first counter) + `negotiation.final_gap_pct()`, folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
-| OC-27 | External market comparator — `app/offercheck/integrations/market_data.py` (PayScale Compensation API, cached, never raises) + `negotiation.market_percentile()`, fetched once at `AGREED` (`routes.py::_maybe_attest`), folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
+| OC-27 | External market comparator — `app/offercheck/integrations/market_data.py` (BLS OEWS (US) + ONS ASHE (UK), free/public, cached, never raises; replaces an earlier PayScale attempt — sales-gated, not viable) + `negotiation.market_percentile()`, fetched once at `AGREED` (`routes.py::_maybe_attest`), folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
 | **Dev Credential** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
@@ -1226,14 +1226,19 @@ itself stays private, same as the band.
 The payload also includes `market_percentile` — where `agreed_price` lands (0-100) against real
 third-party salary comparators, an *absolute* external anchor complementing `final_gap_pct`'s
 *relative* one (did the number move vs. is the number sane by an outside standard). Fetched once, at
-the `AGREED` transition, from PayScale's Compensation API (`app/offercheck/integrations/market_data.py`
-— see that module's docstring for why PayScale over levels.fyi/ONS, and CLAUDE.md's Offer Check
-Architecture section for the full design rationale); requires `MARKET_DATA_API_KEY`. The lookup is
-strictly best-effort and **never blocks a negotiation**: unconfigured, unmatched, rate-limited, or
-timed-out all degrade to `market_percentile: None` while the session still reaches `AGREED` and still
-attests normally — same non-fatal resilience pattern as memory/πCreds/Auditor/DKIM elsewhere in this
-repo. As with `opening_employer_offer`, only the derived percentile is attested — the raw fetched
-salary range is never persisted or exposed.
+the `AGREED` transition, from **BLS OEWS** (US, free/public) for USD offers or **ONS ASHE** (UK,
+free/public) for GBP offers (`app/offercheck/integrations/market_data.py` — see that module's
+docstring for the full source-selection/occupation-mapping design, and CLAUDE.md's Offer Check
+Architecture section for the complete rationale). This replaces an earlier PayScale-based
+implementation from a prior pass — PayScale turned out to be enterprise/sales-gated with no self-serve
+API, so it wasn't actually viable to integrate; fully removed. Optional `BLS_API_KEY` for a higher BLS
+rate limit; ONS needs no key. **Accepted, stated-plainly tradeoff:** both sources are occupation-code
++ region granular, not job-title + seniority-level granular — coarser than a paid source would be, but
+free, public, and real. The lookup is strictly best-effort and **never blocks a negotiation**:
+unmapped role, no network access, rate-limited, or timed-out all degrade to `market_percentile: None`
+while the session still reaches `AGREED` and still attests normally — same non-fatal resilience
+pattern as memory/πCreds/Auditor/DKIM elsewhere in this repo. As with `opening_employer_offer`, only
+the derived percentile is attested — the raw fetched salary range is never persisted or exposed.
 
 Frontend: `/offercheck` (landing), `/offercheck/new` (candidate submit + PDF upload), `/offercheck/candidate/:id`,
 `/offercheck/employer/:id` — each session page shows an attestation receipt panel once the session closes.
