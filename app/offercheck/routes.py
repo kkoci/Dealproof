@@ -57,7 +57,7 @@ from fastapi import APIRouter, File, Header, HTTPException, Query, Request, Uplo
 from app.config import settings
 from app.offercheck import auth, billing, credential, demo_auth, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
-from app.offercheck.integrations import greenhouse, lever, workday
+from app.offercheck.integrations import greenhouse, lever, market_data, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
 from app.offercheck.schemas import (
     AgenticResult,
@@ -173,6 +173,7 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         consistency=session.consistency,
         agreed_price=session.agreed_price,
         final_gap_pct=negotiation.final_gap_pct(session),
+        market_percentile=session.market_percentile,
         my_current_value=my_value,
         agentic_ready=session.candidate_floor is not None and session.employer_authority_limit is not None,
         my_agentic_sealed=(
@@ -279,10 +280,27 @@ async def _maybe_attest(session: Session) -> None:
     and produce a TDX quote binding the outcome + credential hash + hashes of
     the private inputs. Runs at most once per session — idempotent so callers
     don't need to track whether attestation already ran.
+
+    On AGREED specifically, also fetches the external market comparator
+    (app.offercheck.integrations.market_data) and stores the derived
+    percentile — the one network call in this function, made at most once
+    per session since the whole block is already guarded by the
+    `session.attestation is not None` idempotency check above. A failed or
+    unconfigured lookup (fetch_market_range never raises — see that
+    function's own docstring) just leaves session.market_percentile at its
+    default None; the session still reaches AGREED and still attests
+    normally either way.
     """
     if session.state not in negotiation.TERMINAL_STATES or session.attestation is not None:
         return
     session.credential = credential.compute_credential(session)
+    if session.state == "AGREED":
+        market_range = await market_data.fetch_market_range(
+            role=session.competing_offer.role,
+            level=None,
+            location=market_data.DEFAULT_LOCATION,
+        )
+        session.market_percentile = negotiation.market_percentile(session, market_range)
     terms = negotiation.attested_terms(session, credential_hash=session.credential.credential_hash)
     session.attestation = await sign_result(terms)
 
@@ -836,6 +854,7 @@ async def get_attestation_receipt(session_id: str, token: str) -> AttestationRec
         round_number=session.round_number,
         agreed_price=session.agreed_price,
         final_gap_pct=negotiation.final_gap_pct(session),
+        market_percentile=session.market_percentile,
         competing_offer_hash=negotiation.competing_offer_hash(session),
         employer_band_hash=negotiation.employer_band_hash(session),
         credential_hash=session.credential.credential_hash if session.credential else None,
@@ -1106,6 +1125,7 @@ async def start_agentic_route(
         state=session.state,
         agreed_price=session.agreed_price,
         final_gap_pct=negotiation.final_gap_pct(session),
+        market_percentile=session.market_percentile,
         round_number=session.round_number,
         transcript=[AgenticRoundDetail(**r) for r in transcript],
         attestation=session.attestation,

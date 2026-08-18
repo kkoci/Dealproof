@@ -169,6 +169,7 @@ class AttestationReceipt(BaseModel):
     round_number: int
     agreed_price: float | None
     final_gap_pct: float | None = None  # agreed_price vs. the employer's opening counter — see negotiation.final_gap_pct
+    market_percentile: float | None = None  # agreed_price vs. external market comparators — see negotiation.market_percentile
     competing_offer_hash: str
     employer_band_hash: str | None
     credential_hash: str | None = None  # Phase 3: OfferVerifiedCredential hash, folded into this same quote
@@ -285,6 +286,7 @@ class SessionView(BaseModel):
     consistency: ConsistencyCheck
     agreed_price: float | None = None
     final_gap_pct: float | None = None  # agreed_price vs. the employer's opening counter — see negotiation.final_gap_pct
+    market_percentile: float | None = None  # agreed_price vs. external market comparators — see negotiation.market_percentile
     # Only populated for the viewer's own side:
     my_current_value: float | None = None
     agentic_ready: bool = False  # Phase 2A: True once both sides have sealed floor/authority_limit — booleans only, never the values
@@ -484,6 +486,7 @@ class AgenticResult(BaseModel):
     state: SessionState
     agreed_price: float | None
     final_gap_pct: float | None = None  # agreed_price vs. the employer's opening counter — see negotiation.final_gap_pct
+    market_percentile: float | None = None  # agreed_price vs. external market comparators — see negotiation.market_percentile
     round_number: int
     transcript: list[AgenticRoundDetail]
     attestation: str | None

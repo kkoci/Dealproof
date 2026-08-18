@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Offer Check Phase 3: billing (per-verification / monthly SaaS pricing)
     stripe_api_key: str = ""       # STRIPE_API_KEY — unset => billing.record_verification_usage() no-ops
 
+    # Offer Check: external market-data comparator (app/offercheck/integrations/market_data.py)
+    market_data_api_key: str = ""  # MARKET_DATA_API_KEY — PayScale Compensation API key; unset => fetch_market_range() always returns None
+
     # Offer Check magic-link auth — gates every Claude-calling offercheck endpoint (see app/offercheck/demo_auth.py)
     offercheck_secret_key: str = ""       # OFFERCHECK_SECRET_KEY — HMAC signing key; app refuses to start without it
     offercheck_api_key: str = ""          # OFFERCHECK_API_KEY — separate Anthropic key for offercheck; falls back to anthropic_api_key if unset

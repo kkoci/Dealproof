@@ -46,6 +46,7 @@ import hashlib
 import json
 
 from app.offercheck.constants import MAX_EXTENSIONS, MAX_ROUNDS
+from app.offercheck.integrations.market_data import MarketRange
 from app.offercheck.store import RoundEntry, Session
 
 TERMINAL_STATES = {"AGREED", "WALKAWAY", "EXPIRED", "DECLINED", "STALEMATE"}
@@ -125,6 +126,43 @@ def final_gap_pct(session: Session) -> float | None:
     if session.agreed_price is None or session.opening_employer_offer is None:
         return None
     return (session.agreed_price - session.opening_employer_offer) / session.opening_employer_offer * 100
+
+
+def market_percentile(session: Session, market_range: MarketRange | None) -> float | None:
+    """
+    Where agreed_price lands (0-100) within an external market comparator —
+    an absolute anchor, complementing final_gap_pct's relative one (see that
+    function's docstring). Unlike final_gap_pct, this can't be computed
+    on-demand from session state alone: market_range comes from a network
+    fetch (app.offercheck.integrations.market_data.fetch_market_range),
+    called once at AGREED (see routes.py::_maybe_attest) — this function
+    stays pure and synchronous, taking the already-fetched range as a
+    parameter rather than fetching it itself, so it can be unit-tested and
+    reasoned about with zero I/O.
+
+    None if market_range is None (lookup failed, unconfigured, or unmatched
+    role/location — see fetch_market_range's own resilience contract) or the
+    session never actually reached an agreed_price.
+
+    Piecewise-linear between p25/p50/p75, clamped to [0, 100] beyond the
+    fetched range (an offer far outside p25-p75 is still "very low"/"very
+    high", not an undefined value) and falling back to 50.0 ("at market") on
+    a degenerate zero-width range rather than dividing by zero.
+    """
+    if session.agreed_price is None or market_range is None:
+        return None
+
+    price = session.agreed_price
+    p25, p50, p75 = market_range.p25, market_range.p50, market_range.p75
+
+    if price <= p50:
+        span = p50 - p25
+        pct = 50.0 if span == 0 else 25.0 + 25.0 * (price - p25) / span
+    else:
+        span = p75 - p50
+        pct = 50.0 if span == 0 else 50.0 + 25.0 * (price - p50) / span
+
+    return max(0.0, min(100.0, pct))
 
 
 def set_employer_band(session: Session, band_min: float, band_mid: float, band_max: float) -> float:
@@ -286,6 +324,16 @@ def attested_terms(session: Session, credential_hash: str | None = None) -> dict
     routes.py before signing so the conduct credential is itself covered by
     the same TDX quote — mirroring core DealProof's Step P (πCreds) landing
     in report_data before the final Step A re-attest.
+
+    market_percentile reads session.market_percentile directly rather than
+    calling market_percentile(session, ...) here — by the time this function
+    runs (routes.py::_maybe_attest, after the AGREED-transition fetch), the
+    value is already computed and persisted; attested_terms() has no
+    MarketRange to pass and must not trigger a fetch of its own (this stays
+    a pure, I/O-free function like the rest of this module). Only the derived
+    percentile is included — the raw fetched range is never persisted on
+    Session at all, same discipline as opening_employer_offer never appearing
+    here raw, only via final_gap_pct.
     """
     terms = {
         "session_id": session.id,
@@ -293,6 +341,7 @@ def attested_terms(session: Session, credential_hash: str | None = None) -> dict
         "round_number": session.round_number,
         "agreed_price": session.agreed_price,
         "final_gap_pct": final_gap_pct(session),
+        "market_percentile": session.market_percentile,
         "consistency_verified": session.consistency.verified,
         "competing_offer_hash": competing_offer_hash(session),
         "employer_band_hash": employer_band_hash(session),

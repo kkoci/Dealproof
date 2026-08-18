@@ -41,6 +41,7 @@ class Session:
     employer_current_offer: float | None = None
     opening_employer_offer: float | None = None  # employer's first-ever counter value, snapshotted once — see negotiation.final_gap_pct
     agreed_price: float | None = None
+    market_percentile: float | None = None  # computed once at AGREED (routes.py::_maybe_attest) — see negotiation.market_percentile; requires an async fetch, so unlike final_gap_pct it can't be recomputed live on every read
     history: list[RoundEntry] = field(default_factory=list)
     attestation: str | None = None
     credential: OfferVerifiedCredential | None = None
