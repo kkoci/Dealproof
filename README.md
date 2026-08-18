@@ -260,7 +260,7 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
-tests/test_offercheck.py         29 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
+tests/test_offercheck.py         34 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer delta / final_gap_pct), PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
 tests/test_offercheck_agentic.py 24 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value exposure boundary, PATCH enable-agentic endpoints, HTTP e2e
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
@@ -1147,6 +1147,7 @@ Dealproof/
 | OC-23 | Merge `product/dev-credential` — backend fully mounted, App.jsx conflict resolved in Offer Check's favor (see "Merge: Dev Credential into Offer Check" below) | ✅ Complete |
 | OC-24 | Fix `git_hasher.py`/`git_inspector.py` to iterate all branches (not just `main`), SHA-deduplicated | 🔜 Pending (plan confirmed, not yet built) |
 | OC-25 | Fold Dev Credential's git-verification capability into Offer Check's flow as a pre-negotiation step | 🔜 Pending (insertion point proposed, not yet built) |
+| OC-26 | Opening-offer delta tracking — `Session.opening_employer_offer` (snapshotted once, on the employer's first counter) + `negotiation.final_gap_pct()`, folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
 | **Dev Credential** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
@@ -1212,7 +1213,13 @@ State machine: `PENDING_EMPLOYER → EMPLOYER_RESPONDED ⇄ CANDIDATE_COUNTERED 
 transition, `app/offercheck/routes.py::_maybe_attest` calls `app/tee/attestation.sign_result()` (the
 same core DealProof function) over a payload that includes the disclosed outcome (state, round count,
 agreed price) plus SHA-256 hashes of the private competing-offer and employer-band inputs — never the
-raw private numbers themselves.
+raw private numbers themselves. The payload also includes `final_gap_pct` — how far `agreed_price`
+moved from `opening_employer_offer`, the employer's first counter (snapshotted once in `apply_move()`
+and never overwritten). It's an external anchor the candidate never controls, unlike a self-reported
+outcome — same "gap against something neither side fully controls" idea as `band_gap_pct`/`live_gap_pct`,
+just persisted past the round it's computed in and folded into the attested quote. `None` if the
+session never reached both a real employer counter and an agreement; the raw `opening_employer_offer`
+itself stays private, same as the band.
 
 Frontend: `/offercheck` (landing), `/offercheck/new` (candidate submit + PDF upload), `/offercheck/candidate/:id`,
 `/offercheck/employer/:id` — each session page shows an attestation receipt panel once the session closes.

@@ -172,6 +172,7 @@ def _view_for(session: Session, viewer: str) -> SessionView:
         ],
         consistency=session.consistency,
         agreed_price=session.agreed_price,
+        final_gap_pct=negotiation.final_gap_pct(session),
         my_current_value=my_value,
         agentic_ready=session.candidate_floor is not None and session.employer_authority_limit is not None,
         my_agentic_sealed=(
@@ -834,6 +835,7 @@ async def get_attestation_receipt(session_id: str, token: str) -> AttestationRec
         state=session.state,
         round_number=session.round_number,
         agreed_price=session.agreed_price,
+        final_gap_pct=negotiation.final_gap_pct(session),
         competing_offer_hash=negotiation.competing_offer_hash(session),
         employer_band_hash=negotiation.employer_band_hash(session),
         credential_hash=session.credential.credential_hash if session.credential else None,
@@ -1103,6 +1105,7 @@ async def start_agentic_route(
         session_id=session.id,
         state=session.state,
         agreed_price=session.agreed_price,
+        final_gap_pct=negotiation.final_gap_pct(session),
         round_number=session.round_number,
         transcript=[AgenticRoundDetail(**r) for r in transcript],
         attestation=session.attestation,

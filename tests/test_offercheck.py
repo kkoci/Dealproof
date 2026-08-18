@@ -360,6 +360,86 @@ def test_attested_terms_excludes_private_inputs():
     assert terms["employer_band_hash"] == negotiation.employer_band_hash(session)
 
 
+def test_opening_employer_offer_set_once_on_first_counter():
+    """opening_employer_offer snapshots the employer's FIRST counter and never
+    changes on later employer counters — the external anchor final_gap_pct is
+    measured against."""
+    session = _new_session(candidate_ask=185_000.0)
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    assert session.opening_employer_offer is None
+
+    negotiation.apply_move(session, actor="employer", move="counter", value=170_000.0)
+    assert session.opening_employer_offer == 170_000.0
+
+    negotiation.apply_move(session, actor="candidate", move="counter", value=180_000.0)
+    negotiation.apply_move(session, actor="employer", move="counter", value=177_000.0)
+    assert session.opening_employer_offer == 170_000.0  # unchanged by the second employer counter
+    assert session.employer_current_offer == 177_000.0
+
+
+def test_final_gap_pct_correct_for_agreed_session():
+    session = _new_session(candidate_ask=185_000.0)
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    negotiation.apply_move(session, actor="employer", move="counter", value=170_000.0)
+    negotiation.apply_move(session, actor="candidate", move="counter", value=180_000.0)
+    negotiation.apply_move(session, actor="employer", move="counter", value=177_000.0)
+    negotiation.apply_move(session, actor="candidate", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+
+    assert session.state == "AGREED"
+    assert session.agreed_price == 177_000.0
+    assert session.opening_employer_offer == 170_000.0
+    expected = (177_000.0 - 170_000.0) / 170_000.0 * 100
+    assert negotiation.final_gap_pct(session) == pytest.approx(expected)
+
+
+def test_final_gap_pct_none_when_session_never_agrees():
+    session = _new_session()
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    negotiation.apply_move(session, actor="employer", move="counter", value=170_000.0)
+    negotiation.apply_move(session, actor="candidate", move="counter", value=180_000.0)
+    negotiation.apply_move(session, actor="employer", move="walk", value=None)
+
+    assert session.state == "WALKAWAY"
+    assert session.agreed_price is None
+    assert session.opening_employer_offer == 170_000.0  # was set before the walk
+    assert negotiation.final_gap_pct(session) is None
+
+
+def test_final_gap_pct_none_when_employer_never_countered():
+    """Employer's first move is an immediate accept — opening_employer_offer
+    stays None even though the session goes on to reach AGREED."""
+    session = _new_session(candidate_ask=185_000.0)
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    negotiation.apply_move(session, actor="employer", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+
+    assert session.state == "AGREED"
+    assert session.agreed_price == 185_000.0
+    assert session.opening_employer_offer is None
+    assert negotiation.final_gap_pct(session) is None
+
+
+def test_final_gap_pct_included_in_attested_terms():
+    session = _new_session(candidate_ask=185_000.0)
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+    negotiation.apply_move(session, actor="employer", move="counter", value=170_000.0)
+    negotiation.apply_move(session, actor="candidate", move="counter", value=180_000.0)
+    negotiation.apply_move(session, actor="employer", move="counter", value=177_000.0)
+    negotiation.apply_move(session, actor="candidate", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+
+    terms = negotiation.attested_terms(session)
+    expected = negotiation.final_gap_pct(session)
+    assert terms["final_gap_pct"] == pytest.approx(expected)
+    # the raw opening offer stays private, same discipline as band_min/band_mid above —
+    # only the derived percentage is attested, never the number it was computed from
+    assert "170000" not in str({k: v for k, v in terms.items() if k != "final_gap_pct"})
+
+
 def test_competing_offer_hash_deterministic_and_sensitive():
     session_a = _new_session(candidate_ask=185_000.0)
     session_b = _new_session(candidate_ask=185_000.0)

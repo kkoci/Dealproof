@@ -151,7 +151,7 @@ frontend/                  React 18 + Vite 5 + Tailwind — Offer Check UI + Dev
     and offercheck_phase2_spec.md (agentic layer — different numbering scheme, see README) ---
 app/offercheck/schemas.py     CompetingOffer, ConsistencyCheck, SessionView, AttestationReceipt, DcapVerification, OfferLetterExtraction, Company/Bulk/Credential/Agentic schemas, EmployerInvite* / CandidateJoinRequest schemas
 app/offercheck/verifier.py    check_consistency() — software-only plausibility check, no LLM/TEE
-app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash()
+app/offercheck/negotiation.py Pure state machine + attestation hashing: apply_move(), attested_terms(), competing_offer_hash(), final_gap_pct()
 app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opaque tokens) — company_id/credential/attestation/candidate_floor/employer_authority_limit fields
 app/offercheck/invites.py     EmployerInvite in-memory store — employer-initiated negotiation, pending until a candidate claims it (see "Employer-Initiated Invites" below)
 app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
@@ -227,7 +227,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (288 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+## Test Suite (387 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
 
 The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
 assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
@@ -249,7 +249,7 @@ tests/test_e2e.py            13   Full HTTP stack end-to-end (TestClient + mocks
 tests/test_contract.py        8   Phase 4 escrow: create/complete/refund
 tests/test_data_credential.py 7   Transcript hasher + DataCredentialAgent + ingest + credential endpoints
 tests/test_data_quality.py   13   DataQualityAgent: happy path, failure path, hash determinism, agent injection, schema
-tests/test_offercheck.py     29   Offer Check: consistency checks, revision-loop state machine, privacy, attestation, PDF parsing, HTTP e2e
+tests/test_offercheck.py     34   Offer Check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer delta / final_gap_pct), PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, billing, ATS integrations, bulk verify, webhooks, HTTP e2e
 tests/test_offercheck_agentic.py 25  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, query-token param rename regression, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
@@ -610,6 +610,19 @@ already-mutually-known outcome (`state`, `round_number`, `agreed_price`) appears
 `GET /sessions/{id}/attest` and `/dcap-verify` (the latter reusing `app/tee/dcap.parse_tdx_quote`
 verbatim) both 409 until the session is terminal, and accept either party's token — the receipt is
 identical regardless of viewer once the outcome is closed.
+
+**Opening-offer delta tracking (`final_gap_pct`):** `band_gap_pct()`/`live_gap_pct()` already measure
+the candidate's ask against the employer's *private* band and *current* offer, but neither survives
+past the round it's computed in, and neither is attested — a verifier reading `attested_terms()` sees
+`agreed_price` in isolation, with no sense of how much movement it represents. `final_gap_pct(session)`
+closes that gap against a genuine external anchor: `session.opening_employer_offer`, snapshotted once
+in `apply_move()` on the employer's *first* counter and never overwritten afterward (an employer who
+accepts immediately, without ever countering, leaves it `None`). Deliberately anchored on the
+employer's opening position rather than a self-reported outcome — the candidate agent never controls
+what the employer opens with. `(agreed_price - opening_employer_offer) / opening_employer_offer * 100`,
+`None` if the session never reached a real employer counter or never reached `agreed_price`. Only the
+computed percentage is folded into `attested_terms()` — the raw `opening_employer_offer` stays private,
+same discipline as `competing_offer_hash`/`employer_band_hash` never exposing raw band numbers.
 
 **PDF parsing (Phase 2) is a draft prefill, not a data source:** `POST /parse-offer-letter` returns
 `ExtractedOfferFields` (schemas.py) — a deliberately *unvalidated* shape (`base_salary` can be `0`)

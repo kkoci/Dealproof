@@ -114,6 +114,19 @@ def live_gap_pct(session: Session) -> float | None:
     return (session.candidate_ask - session.employer_current_offer) / session.employer_current_offer * 100
 
 
+def final_gap_pct(session: Session) -> float | None:
+    """
+    How far the agreed price moved from the employer's opening counter —
+    an external anchor the candidate agent never controls, unlike a
+    self-reported success metric. None until both an agreement exists and
+    the employer actually countered at least once (an immediate employer
+    accept never sets opening_employer_offer, see apply_move).
+    """
+    if session.agreed_price is None or session.opening_employer_offer is None:
+        return None
+    return (session.agreed_price - session.opening_employer_offer) / session.opening_employer_offer * 100
+
+
 def set_employer_band(session: Session, band_min: float, band_mid: float, band_max: float) -> float:
     """Stores the employer's private band and returns the one-time gap preview."""
     if session.state != "PENDING_EMPLOYER":
@@ -165,6 +178,8 @@ def apply_move(session: Session, actor: str, move: str, value: float | None) -> 
             session.candidate_ask = value
             session.state = "CANDIDATE_COUNTERED"
         else:
+            if session.opening_employer_offer is None:
+                session.opening_employer_offer = value
             session.employer_current_offer = value
             session.state = "EMPLOYER_RESPONDED"
         if session.round_number >= session.max_rounds:
@@ -277,6 +292,7 @@ def attested_terms(session: Session, credential_hash: str | None = None) -> dict
         "state": session.state,
         "round_number": session.round_number,
         "agreed_price": session.agreed_price,
+        "final_gap_pct": final_gap_pct(session),
         "consistency_verified": session.consistency.verified,
         "competing_offer_hash": competing_offer_hash(session),
         "employer_band_hash": employer_band_hash(session),

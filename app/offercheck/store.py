@@ -39,6 +39,7 @@ class Session:
     band_max: float | None = None
     band_set: bool = False
     employer_current_offer: float | None = None
+    opening_employer_offer: float | None = None  # employer's first-ever counter value, snapshotted once — see negotiation.final_gap_pct
     agreed_price: float | None = None
     history: list[RoundEntry] = field(default_factory=list)
     attestation: str | None = None
