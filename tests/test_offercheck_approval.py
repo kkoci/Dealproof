@@ -156,6 +156,68 @@ def test_reopen_gives_the_next_move_to_the_other_non_requester_side_too():
     assert negotiation.current_turn(session) == "candidate"
 
 
+def test_opening_employer_offer_survives_a_reopen_untouched():
+    """A reopen (request_more_rounds) resets votes/turn/max_rounds but must NOT reset or
+    re-snapshot opening_employer_offer — it stays pinned to the employer's true first
+    counter even if the employer counters again, at a different value, after reopening."""
+    session = _new_session(candidate_ask=185_000.0)
+    negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
+
+    negotiation.apply_move(session, actor="employer", move="counter", value=170_000.0)
+    assert session.opening_employer_offer == 170_000.0
+
+    negotiation.apply_move(session, actor="candidate", move="counter", value=180_000.0)
+    negotiation.apply_move(session, actor="employer", move="accept", value=None)
+    assert session.state == "PENDING_APPROVAL"
+
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="request_more_rounds")
+    assert session.state == "CANDIDATE_COUNTERED"  # reopened; employer (non-requester) moves next
+    assert session.opening_employer_offer == 170_000.0  # untouched by the reopen itself
+
+    # Employer counters again post-reopen, at a DIFFERENT value than their original opening —
+    # this must not overwrite opening_employer_offer, since it isn't their FIRST counter.
+    negotiation.apply_move(session, actor="employer", move="counter", value=172_000.0)
+    assert session.opening_employer_offer == 170_000.0
+    assert session.employer_current_offer == 172_000.0
+
+    negotiation.apply_move(session, actor="candidate", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+
+    assert session.state == "AGREED"
+    assert session.agreed_price == 172_000.0
+    assert session.opening_employer_offer == 170_000.0  # still the original anchor, not the reopened value
+    expected = (172_000.0 - 170_000.0) / 170_000.0 * 100
+    assert negotiation.final_gap_pct(session) == pytest.approx(expected)
+    assert negotiation.attested_terms(session)["final_gap_pct"] == pytest.approx(expected)
+
+
+def test_opening_employer_offer_set_by_first_real_counter_even_after_an_immediate_accept():
+    """Employer's first move is an immediate accept (no counter at all) -> opening_employer_offer
+    stays None. If the session later reopens and the employer counters for the first time ever,
+    THAT becomes the anchor — there was no earlier counter to have captured instead."""
+    session = _accepted_session(actor="employer")  # employer's only move so far was "accept"
+    assert session.opening_employer_offer is None
+
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="request_more_rounds")
+    assert negotiation.current_turn(session) == "employer"
+    assert session.opening_employer_offer is None  # still never countered
+
+    negotiation.apply_move(session, actor="employer", move="counter", value=180_000.0)
+    assert session.opening_employer_offer == 180_000.0  # first-ever employer counter, captured now
+
+    negotiation.apply_move(session, actor="candidate", move="accept", value=None)
+    negotiation.apply_approval_vote(session, actor="employer", decision="approve")
+    negotiation.apply_approval_vote(session, actor="candidate", decision="approve")
+
+    assert session.state == "AGREED"
+    assert session.agreed_price == 180_000.0
+    assert session.opening_employer_offer == 180_000.0
+    assert negotiation.final_gap_pct(session) == pytest.approx(0.0)
+
+
 def test_extension_cap_exhausted_reaches_stalemate():
     session = _accepted_session()
     for _ in range(negotiation.MAX_EXTENSIONS):

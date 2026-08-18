@@ -227,7 +227,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (387 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+## Test Suite (389 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
 
 The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
 assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
@@ -257,6 +257,8 @@ tests/test_offercheck_package.py 43  Offer Check: total_comp formula, hard clamp
 tests/test_offercheck_rate_limit.py 23  Offer Check: per-IP limits (session-create, agentic-call, provenance-verify, parse-offer-letter, move, company-register, bulk-verify), X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 12  Offer Check: employer-initiated invite lifecycle (create → unclaimed status → join → normal Session),
                                       company-auth gating, double-claim rejection, sealed agentic floor pass-through
+tests/test_offercheck_approval.py 31  Offer Check: PENDING_APPROVAL resolution rule (both-approve/decline-wins/reopen/stalemate),
+                                      reopen turn-assignment, opening_employer_offer survives a reopen untouched, package-mode parity, HTTP e2e
 ```
 
 **Resilience guarantees:**
