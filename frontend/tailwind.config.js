@@ -7,9 +7,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Offer Check colour system v3 (offercheck_colour_system_v3.md) — all values are CSS
-        // custom properties from src/styles/tokens.css, derived from the two logo anchors
-        // (teal #0D9488, navy #0F172A). Light mode only, no dark variant.
+        // Offer Check colour system v4 — "Ledger & Instrument" (src/styles/tokens.css). All values
+        // are CSS custom properties; key names are unchanged from v3 so every existing className in
+        // this vertical keeps resolving — only the underlying hexes moved. Light mode only, no dark
+        // variant (a deliberate product decision, not an oversight — see tokens.css header comment).
         bg: {
           primary: 'var(--color-bg-primary)',
           surface: 'var(--color-bg-surface)',
@@ -36,6 +37,7 @@ export default {
         },
         sealed: {
           DEFAULT: 'var(--color-sealed)',
+          hover: 'var(--color-sealed-hover)',
           subtle: 'var(--color-sealed-subtle)',
           border: 'var(--color-sealed-border)',
           text: 'var(--color-sealed-text)',
@@ -66,6 +68,26 @@ export default {
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
+      },
+      // Type scale — see the v4 design plan. Two roles (Inter for display/body, JetBrains Mono for
+      // data), differentiated by size/weight, not a third face. `hero` is the one size reserved for
+      // the gap-percentage/balance-meter reading — the product's actual mechanic gets the biggest
+      // number on the page, not a generic page title.
+      fontSize: {
+        hero: ['2.5rem', { lineHeight: '1.05', letterSpacing: '-0.01em', fontWeight: '600' }],
+        'hero-sm': ['2rem', { lineHeight: '1.05', letterSpacing: '-0.01em', fontWeight: '600' }],
+        'data-label': ['0.6875rem', { lineHeight: '1.3', letterSpacing: '0.06em', fontWeight: '500' }],
+        'data-value': ['0.8125rem', { lineHeight: '1.3', letterSpacing: '-0.01em', fontWeight: '500' }],
+        micro: ['0.6875rem', { lineHeight: '1.3', letterSpacing: '0.02em', fontWeight: '400' }],
+      },
+      // Elevation — a real 2-step scale (card / elevated) replacing the single inline boxShadow
+      // string previously copy-pasted on every card, plus one ceremonial treatment (`seal`) reserved
+      // for the attestation/proof block, the one place this system allows itself to feel heavier
+      // than its calm baseline. All ink-tinted (rgba on the text-primary hue), not neutral black.
+      boxShadow: {
+        card: '0 0 0 1px rgba(19,31,27,0.04), 0 1px 3px rgba(19,31,27,0.06)',
+        elevated: '0 0 0 1px rgba(19,31,27,0.05), 0 4px 16px rgba(19,31,27,0.08), 0 12px 32px rgba(19,31,27,0.06)',
+        seal: '0 0 0 1px rgba(19,31,27,0.06), inset 0 1px 0 rgba(255,255,255,0.6), inset 0 -1px 0 rgba(19,31,27,0.04), 0 6px 20px rgba(19,31,27,0.07)',
       },
       animation: {
         'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',

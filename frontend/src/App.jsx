@@ -9,6 +9,8 @@ import CompanyRegister from './pages/offercheck/CompanyRegister.jsx'
 import CompanyNew from './pages/offercheck/CompanyNew.jsx'
 import Dashboard from './pages/offercheck/Dashboard.jsx'
 import Demo from './pages/offercheck/Demo.jsx'
+import Button from './components/offercheck/Button.jsx'
+import { ArrowRightIcon } from './components/offercheck/icons.jsx'
 import logo from './assets/icon.svg'
 
 // Company mode = the company-auth surfaces (register, invite creation, dashboard itself).
@@ -21,14 +23,11 @@ function isCompanyMode(pathname) {
 function NavBar() {
   const { pathname } = useLocation()
   return (
-    <nav
-      className="fixed top-0 left-0 right-0 z-50 bg-bg-surface border-b border-border"
-      style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}
-    >
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-bg-surface border-b border-border shadow-card">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
-          <Link to="/" className="flex items-center gap-2 group">
-            <img src={logo} alt="Offer Check" className="h-6 w-6" />
+          <Link to="/" className="flex items-center gap-2 focus-ring rounded-md">
+            <img src={logo} alt="" className="h-6 w-6" />
             <span className="text-ink-primary font-semibold tracking-tight">
               Offer Check
             </span>
@@ -38,7 +37,7 @@ function NavBar() {
             {isCompanyMode(pathname) && (
               <Link
                 to="/offercheck/dashboard"
-                className="px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors"
+                className="focus-ring px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors"
               >
                 Dashboard
               </Link>
@@ -47,12 +46,10 @@ function NavBar() {
               href={`${import.meta.env.VITE_BACKEND_URL || 'https://d31d2a226327eaf1da3c400fc137f21639555cf8-8000.dstack-pha-prod5.phala.network'}/docs`}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors flex items-center gap-1.5"
+              className="focus-ring px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors flex items-center gap-1.5"
             >
-              API Docs
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-              </svg>
+              API docs
+              <ArrowRightIcon size={12} className="-rotate-45" />
             </a>
           </div>
         </div>
@@ -65,14 +62,9 @@ function NotFound() {
   const navigate = useNavigate()
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-      <h1 className="text-4xl font-bold text-ink-primary">404</h1>
-      <p className="text-ink-secondary">Page not found.</p>
-      <button
-        onClick={() => navigate('/')}
-        className="px-4 py-2 bg-teal hover:bg-teal-hover text-white rounded-lg transition-colors"
-      >
-        Go Home
-      </button>
+      <h1 className="text-hero text-ink-primary">404</h1>
+      <p className="text-ink-secondary">We couldn't find that page.</p>
+      <Button onClick={() => navigate('/')}>Go home</Button>
     </div>
   )
 }

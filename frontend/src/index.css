@@ -8,10 +8,43 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     background-color: var(--color-bg-primary);
     color: var(--color-text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 
   * {
     box-sizing: border-box;
+  }
+
+  /* luxe SKILL.md "Focus" — box-shadow ring (respects border-radius), never the default outline;
+     nulled here only because every radiused surface below replaces it with the ring. Plain text
+     links with no radius (e.g. underlined inline links) keep a visible 2px outline instead. */
+  *:focus {
+    outline: none;
+  }
+  *:focus-visible {
+    outline: 2px solid var(--color-teal);
+    outline-offset: 2px;
+  }
+  .focus-ring:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--color-teal-border);
+    border-color: var(--color-teal);
+  }
+
+  /* Never the default OS highlight — a neutral ink tint, not a tint of the accent (matches luxe's
+     "restyle selection, don't tint it with the accent" guidance). */
+  ::selection {
+    background: rgba(19, 31, 27, 0.14);
+    color: var(--color-text-primary);
+  }
+
+  /* Data typography — tabular figures wherever a number needs to hold its column/width steady
+     (round counters, percentages, hashes). Apply alongside font-mono, not instead of it. */
+  .tnum {
+    font-feature-settings: 'tnum' 1;
+    font-variant-numeric: tabular-nums;
   }
 }
 

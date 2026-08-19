@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { offercheckCheckCompanyKey, offercheckConnectAts, offercheckListCompanySessions } from '../../api.js'
+import PageShell from '../../components/offercheck/PageShell.jsx'
+import Card from '../../components/offercheck/Card.jsx'
+import Button from '../../components/offercheck/Button.jsx'
+import Badge from '../../components/offercheck/Badge.jsx'
+import { Input, Select } from '../../components/offercheck/Input.jsx'
 
 const STATE_LABEL = {
   PENDING_EMPLOYER: 'Awaiting band',
@@ -11,10 +16,13 @@ const STATE_LABEL = {
   EXPIRED: 'Expired',
 }
 
-const STATE_COLOR = {
-  AGREED: 'text-success',
-  WALKAWAY: 'text-danger',
-  EXPIRED: 'text-ink-muted',
+const STATE_TONE = {
+  PENDING_EMPLOYER: 'sealed',
+  EMPLOYER_RESPONDED: 'teal',
+  CANDIDATE_COUNTERED: 'teal',
+  AGREED: 'success',
+  WALKAWAY: 'danger',
+  EXPIRED: 'neutral',
 }
 
 export default function Dashboard() {
@@ -84,142 +92,108 @@ export default function Dashboard() {
 
   if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
-      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-3xl mx-auto">
-          <h1 className="text-2xl font-bold text-ink-primary mb-2">Company dashboard</h1>
-          <p className="text-sm text-ink-muted mb-6">Paste your API key to view your verifications.</p>
-          <form onSubmit={handleUseKey} className="flex gap-2 mb-4">
-            <input
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              placeholder="oc_..."
-              className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm font-mono focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12]"
-            />
-            <button type="submit" className="px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-medium transition-colors">
-              Go
-            </button>
-          </form>
-          {keyStatus === 'malformed' && (
-            <p className="text-xs text-danger mb-4">That doesn't look like a valid API key — check for typos.</p>
-          )}
-          <Link to="/offercheck/company/register" className="text-sm text-teal hover:text-teal-hover underline">
-            Don't have a key? Register your company
-          </Link>
-        </div>
-      </div>
+      <PageShell>
+        <h1 className="text-hero-sm text-ink-primary mb-2">Company dashboard</h1>
+        <p className="text-sm text-ink-muted mb-6">Paste your API key to view your verifications.</p>
+        <form onSubmit={handleUseKey} className="flex gap-2 mb-4">
+          <Input mono value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder="oc_..." className="flex-1 min-w-0" />
+          <Button type="submit">Go</Button>
+        </form>
+        {keyStatus === 'malformed' && (
+          <p className="text-xs text-danger mb-4">That doesn't look like a valid API key — check for typos.</p>
+        )}
+        <Link to="/offercheck/company/register" className="focus-ring rounded text-sm text-teal hover:text-teal-hover underline">
+          Don't have a key? Register your company
+        </Link>
+      </PageShell>
     )
   }
 
   if (keyStatus === 'checking') {
     return (
-      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-3xl mx-auto">
-          <p className="text-sm text-ink-muted">Checking your key…</p>
-        </div>
-      </div>
+      <PageShell>
+        <p className="text-sm text-ink-muted">Checking your key…</p>
+      </PageShell>
     )
   }
 
   if (keyStatus === 'unregistered') {
     return (
-      <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-        <div className="w-full max-w-3xl mx-auto">
-          <h1 className="text-2xl font-bold text-ink-primary mb-2">No company registered yet</h1>
-          <p className="text-sm text-ink-muted mb-6">
-            This server instance has no record of that key — register to get started.
-          </p>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/offercheck/company/register"
-              className="px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-medium transition-colors"
-            >
-              Register your company
-            </Link>
-            <button onClick={useDifferentKey} className="text-xs text-ink-muted hover:text-ink-secondary">
-              Use a different key
-            </button>
-          </div>
+      <PageShell>
+        <h1 className="text-hero-sm text-ink-primary mb-2">No company registered yet</h1>
+        <p className="text-sm text-ink-muted mb-6">
+          This server instance has no record of that key — register to get started.
+        </p>
+        <div className="flex items-center gap-4">
+          <Button as={Link} to="/offercheck/company/register">Register your company</Button>
+          <button onClick={useDifferentKey} className="focus-ring rounded text-xs text-ink-muted hover:text-ink-secondary">
+            Use a different key
+          </button>
         </div>
-      </div>
+      </PageShell>
     )
   }
 
   return (
-    <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-      <div className="w-full max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-ink-primary">Company dashboard</h1>
-          <div className="flex items-center gap-4">
-            <Link to="/offercheck/company/new" className="text-xs text-teal hover:text-teal-hover font-medium">
-              + Start a negotiation
-            </Link>
-            <button onClick={useDifferentKey} className="text-xs text-ink-muted hover:text-ink-secondary">
-              Use a different key
-            </button>
-          </div>
-        </div>
-
-        <div className="mb-6 p-4 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-          <p className="text-sm font-medium text-ink-primary mb-3">Connect an ATS</p>
-          <form onSubmit={handleConnectAts} className="flex flex-col sm:flex-row gap-2">
-            <select
-              value={atsProvider}
-              onChange={(e) => setAtsProvider(e.target.value)}
-              className="px-3 py-2 rounded-lg bg-bg-input border border-border text-ink-primary text-sm focus:outline-none focus:border-teal"
-            >
-              <option value="greenhouse">Greenhouse</option>
-              <option value="lever">Lever</option>
-              <option value="workday">Workday</option>
-            </select>
-            <input
-              value={atsKey}
-              onChange={(e) => setAtsKey(e.target.value)}
-              placeholder="ATS API key"
-              className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12]"
-            />
-            <button type="submit" className="px-4 py-2 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary hover:bg-bg-elevated text-sm font-medium transition-colors">
-              Connect
-            </button>
-          </form>
-          {atsStatus && <p className="text-xs text-ink-muted mt-2">{atsStatus}</p>}
-        </div>
-
-        {error && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>
-        )}
-
-        <div className="rounded-xl bg-bg-surface border border-border overflow-hidden" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <span className="text-sm font-medium text-ink-primary">Verifications ({sessions?.length ?? 0})</span>
-            <button onClick={() => refresh(apiKey)} className="text-xs text-teal hover:text-teal-hover">Refresh</button>
-          </div>
-          {sessions && sessions.length === 0 && (
-            <p className="px-4 py-6 text-sm text-ink-muted italic">No verifications yet.</p>
-          )}
-          {sessions?.map((s) => (
-            <div key={s.session_id} className="px-4 py-3 border-b border-border last:border-b-0 flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <p className={`text-sm font-medium ${STATE_COLOR[s.state] || 'text-ink-secondary'}`}>
-                  {STATE_LABEL[s.state] || s.state}
-                </p>
-                <p className="text-xs text-ink-muted font-mono truncate">{s.session_id}</p>
-              </div>
-              <div className="flex items-center gap-4 shrink-0">
-                {s.gap_pct != null && (
-                  <span className="text-xs font-mono text-ink-secondary">{s.gap_pct > 0 ? '+' : ''}{s.gap_pct.toFixed(1)}%</span>
-                )}
-                <span className="text-xs text-ink-muted">round {s.round_number}</span>
-                <a
-                  href={s.employer_link}
-                  className="text-xs text-teal hover:text-teal-hover underline"
-                >
-                  Open
-                </a>
-              </div>
-            </div>
-          ))}
+    <PageShell>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-hero-sm text-ink-primary">Company dashboard</h1>
+        <div className="flex items-center gap-4">
+          <Link to="/offercheck/company/new" className="focus-ring rounded text-xs text-teal hover:text-teal-hover font-medium">
+            + Start a negotiation
+          </Link>
+          <button onClick={useDifferentKey} className="focus-ring rounded text-xs text-ink-muted hover:text-ink-secondary">
+            Use a different key
+          </button>
         </div>
       </div>
-    </div>
+
+      <Card padding="sm" className="mb-6">
+        <p className="text-sm font-medium text-ink-primary mb-3">Connect an ATS</p>
+        <form onSubmit={handleConnectAts} className="flex flex-col sm:flex-row gap-2">
+          <Select value={atsProvider} onChange={(e) => setAtsProvider(e.target.value)} className="sm:w-44">
+            <option value="greenhouse">Greenhouse</option>
+            <option value="lever">Lever</option>
+            <option value="workday">Workday</option>
+          </Select>
+          <Input value={atsKey} onChange={(e) => setAtsKey(e.target.value)} placeholder="ATS API key" className="flex-1 min-w-0" />
+          <Button type="submit" variant="secondary">Connect</Button>
+        </form>
+        {atsStatus && <p className="text-xs text-ink-muted mt-2">{atsStatus}</p>}
+      </Card>
+
+      {error && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>
+      )}
+
+      <Card padding="none" className="overflow-hidden">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <span className="text-sm font-medium text-ink-primary">Verifications ({sessions?.length ?? 0})</span>
+          <button onClick={() => refresh(apiKey)} className="focus-ring rounded text-xs text-teal hover:text-teal-hover">Refresh</button>
+        </div>
+        {sessions && sessions.length === 0 && (
+          <p className="px-4 py-6 text-sm text-ink-muted italic">No verifications yet.</p>
+        )}
+        {sessions?.map((s) => (
+          <div key={s.session_id} className="px-4 py-3 border-b border-border last:border-b-0 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <Badge tone={STATE_TONE[s.state] || 'neutral'} className="mb-1">
+                {STATE_LABEL[s.state] || s.state}
+              </Badge>
+              <p className="text-xs text-ink-muted font-mono tnum truncate">{s.session_id}</p>
+            </div>
+            <div className="flex items-center gap-4 shrink-0">
+              {s.gap_pct != null && (
+                <span className="text-xs font-mono tnum text-ink-secondary">{s.gap_pct > 0 ? '+' : ''}{s.gap_pct.toFixed(1)}%</span>
+              )}
+              <span className="text-xs text-ink-muted">round {s.round_number}</span>
+              <a href={s.employer_link} className="focus-ring rounded text-xs text-teal hover:text-teal-hover underline">
+                Open
+              </a>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </PageShell>
   )
 }

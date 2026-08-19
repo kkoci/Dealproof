@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { getEnclaveAttestation, offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckFileCandidateDispute, offercheckGetAttestation, offercheckGetCredential, offercheckGetDisputes, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckUpdateCandidateDisputeStatus, offercheckVerifyCredential } from '../../api.js'
+import PageShell from '../../components/offercheck/PageShell.jsx'
+import Card from '../../components/offercheck/Card.jsx'
+import Button from '../../components/offercheck/Button.jsx'
+import Badge from '../../components/offercheck/Badge.jsx'
+import BalanceMeter from '../../components/offercheck/BalanceMeter.jsx'
+import { SealMark } from '../../components/offercheck/Seal.jsx'
+import { FieldLabel, Input, Textarea } from '../../components/offercheck/Input.jsx'
+import { LockIcon, SealIcon, CheckIcon, CloseIcon } from '../../components/offercheck/icons.jsx'
 
 const SENIORITY_LABEL = { junior: 'Junior', mid: 'Mid-level', senior: 'Senior', staff: 'Staff+' }
 
@@ -43,11 +51,11 @@ const POLL_MS = 1500
 const DISPUTE_EVIDENCE_MAX_LENGTH = 1000 // app.offercheck.disputes.EVIDENCE_MAX_LENGTH
 const DISPUTE_TYPE_LABEL = { process: 'Process', outcome: 'Outcome' }
 const DISPUTE_STATUS_LABEL = { OPEN: 'Open', UNDER_REVIEW: 'Under review', RESOLVED: 'Resolved', DISMISSED: 'Dismissed' }
-const DISPUTE_STATUS_BADGE = {
-  OPEN: 'bg-sealed-subtle text-sealed-text',
-  UNDER_REVIEW: 'bg-teal-subtle text-teal-text',
-  RESOLVED: 'bg-success-subtle text-success-text',
-  DISMISSED: 'bg-bg-elevated text-neutral',
+const DISPUTE_STATUS_TONE = {
+  OPEN: 'sealed',
+  UNDER_REVIEW: 'teal',
+  RESOLVED: 'success',
+  DISMISSED: 'neutral',
 }
 // app.offercheck.disputes._VALID_TRANSITIONS: OPEN -> {UNDER_REVIEW, DISMISSED}, UNDER_REVIEW ->
 // {RESOLVED, DISMISSED}; RESOLVED/DISMISSED are terminal (no further transitions offered).
@@ -76,10 +84,6 @@ function formatTimestamp(iso) {
   }
 }
 
-const inputClass =
-  'w-full px-3 py-2.5 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12] transition-all'
-const labelClass = 'block text-xs font-medium text-ink-secondary mb-1.5'
-
 const STATE_LABEL = {
   PENDING_EMPLOYER: 'Waiting for the employer',
   EMPLOYER_RESPONDED: 'Your turn',
@@ -92,20 +96,16 @@ const STATE_LABEL = {
   STALEMATE: 'Stalemate — no agreement reached',
 }
 
-const STATE_BADGE = {
-  PENDING_EMPLOYER: 'bg-bg-elevated text-neutral',
-  EMPLOYER_RESPONDED: 'bg-success-subtle text-success',
-  CANDIDATE_COUNTERED: 'bg-bg-elevated text-neutral',
-  PENDING_APPROVAL: 'bg-sealed-subtle text-sealed-text',
-  AGREED: 'bg-success-subtle text-success',
-  WALKAWAY: 'bg-danger-subtle text-danger',
-  EXPIRED: 'bg-bg-elevated text-neutral',
-  DECLINED: 'bg-danger-subtle text-danger',
-  STALEMATE: 'bg-bg-elevated text-neutral',
-}
-
-function Spinner() {
-  return <span className="inline-block w-3.5 h-3.5 border-2 border-white/60 border-t-transparent rounded-full animate-spin" />
+const STATE_TONE = {
+  PENDING_EMPLOYER: 'neutral',
+  EMPLOYER_RESPONDED: 'success',
+  CANDIDATE_COUNTERED: 'neutral',
+  PENDING_APPROVAL: 'sealed',
+  AGREED: 'success',
+  WALKAWAY: 'danger',
+  EXPIRED: 'neutral',
+  DECLINED: 'danger',
+  STALEMATE: 'neutral',
 }
 
 // --- One spotlighted next action + stage spine ---
@@ -195,11 +195,7 @@ function StageSpine({ statuses }) {
                 'bg-bg-elevated border border-border'
               }`}
             >
-              {s.status === 'done' && (
-                <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              )}
+              {s.status === 'done' && <CheckIcon size={9} className="text-white" />}
               {/* Deliberately a dash, not a checkmark — this stage happened but didn't conclude
                   with an outcome, distinct from 'done'. Amber, not red: honest, not alarming. */}
               {s.status === 'unresolved' && (
@@ -253,20 +249,17 @@ function ActionPanels({ items }) {
     <>
       {items.map((it) => {
         const hiddenBehindToggle = it.collapsible && !it.isSpotlight && !open
+        if (!it.visible || hiddenBehindToggle) {
+          return <div key={it.key} className="hidden">{it.node}</div>
+        }
         return (
-          <div
-            key={it.key}
-            className={
-              !it.visible ? 'hidden' :
-              it.isSpotlight ? 'mb-6 rounded-xl border-2 border-teal bg-bg-surface p-5' :
-              hiddenBehindToggle ? 'hidden' : 'mb-3'
-            }
-            style={it.visible && it.isSpotlight ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' } : undefined}
-          >
-            {it.visible && it.isSpotlight && it.title && (
-              <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">{it.title}</p>
-            )}
-            {it.node}
+          <div key={it.key} className={it.isSpotlight ? 'mb-6' : 'mb-3'}>
+            {it.isSpotlight ? (
+              <Card emphasis="spotlight" padding="lg">
+                {it.title && <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">{it.title}</p>}
+                {it.node}
+              </Card>
+            ) : it.node}
           </div>
         )
       })}
@@ -274,7 +267,7 @@ function ActionPanels({ items }) {
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="mb-6 text-xs font-medium text-ink-muted hover:text-ink-secondary underline underline-offset-2 transition-colors"
+          className="focus-ring rounded mb-6 text-xs font-medium text-ink-muted hover:text-ink-secondary underline underline-offset-2 transition-colors"
         >
           {open ? 'Hide other options' : `Other options (${otherCount})`}
         </button>
@@ -292,16 +285,14 @@ function HowThisWorksStrip({ lines }) {
   const [dismissed, setDismissed] = useState(false)
   if (dismissed) return null
   return (
-    <div className="mb-6 p-5 rounded-xl bg-teal-subtle border border-teal-border relative" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+    <Card padding="lg" className="mb-6 !bg-teal-subtle !border-teal-border relative">
       <button
         type="button"
         onClick={() => setDismissed(true)}
         aria-label="Dismiss"
-        className="absolute top-2.5 right-2.5 w-5 h-5 flex items-center justify-center rounded-md text-teal-text/60 hover:text-teal-text hover:bg-white/50 transition-colors"
+        className="focus-ring absolute top-2.5 right-2.5 w-5 h-5 flex items-center justify-center rounded-md text-teal-text/60 hover:text-teal-text hover:bg-white/50 transition-colors"
       >
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <CloseIcon size={13} />
       </button>
       <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-2 pr-6">How this works</p>
       <ol className="space-y-1.5">
@@ -314,7 +305,7 @@ function HowThisWorksStrip({ lines }) {
           </li>
         ))}
       </ol>
-    </div>
+    </Card>
   )
 }
 
@@ -345,7 +336,10 @@ function TeeInputBoundary({ label, pills, children }) {
   return (
     <div className="p-3 rounded-lg bg-success-subtle border border-success/30 space-y-2.5">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <span className="text-xs font-semibold text-success-text">🛡️ {label}</span>
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-success-text">
+          <LockIcon size={13} />
+          {label}
+        </span>
         <div className="flex flex-wrap gap-1.5">
           {pills.map((p) => <TrustPill key={p}>{p}</TrustPill>)}
         </div>
@@ -364,35 +358,6 @@ function EnclaveStatusNote({ loading, error }) {
       {loading && <span className="inline-block w-3 h-3 border-2 border-sealed-text/60 border-t-transparent rounded-full animate-spin flex-shrink-0" />}
       {loading ? 'Verifying enclave attestation before enabling input…' : error}
     </p>
-  )
-}
-
-function GapMeter({ gapPct }) {
-  if (gapPct === null || gapPct === undefined) return null
-  const abs = Math.abs(gapPct)
-  const color = abs > 5 ? 'text-gap-large' : abs > 2 ? 'text-gap-closing' : 'text-gap-zero'
-  const fill = abs > 5 ? 'bg-gap-large' : abs > 2 ? 'bg-gap-closing' : 'bg-gap-zero'
-  const clamped = Math.max(-50, Math.min(50, gapPct))
-  const pos = ((clamped + 50) / 100) * 100
-  return (
-    <div className="mb-6">
-      <div className="flex items-baseline justify-between mb-1.5">
-        <span className="text-xs text-ink-muted">Gap to employer's current position</span>
-        <span className={`font-mono font-bold text-3xl ${color}`}>
-          {gapPct > 0 ? '+' : ''}{gapPct.toFixed(1)}%
-        </span>
-      </div>
-      <div className="relative h-1.5 rounded-full bg-border">
-        <div
-          className={`absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full ${fill}`}
-          style={{ left: `${Math.min(50, pos)}%`, width: `${Math.abs(pos - 50)}%` }}
-        />
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white shadow shadow-black/20 border border-border-strong"
-          style={{ left: `calc(${pos}% - 6px)` }}
-        />
-      </div>
-    </div>
   )
 }
 
@@ -418,7 +383,7 @@ function RoundHistory({ history, myActor }) {
                 <span className="font-medium">{h.actor === 'employer' ? 'Employer' : 'Candidate'}</span>
                 <span className="text-[10px] text-ink-muted">Round {h.round_number}</span>
               </div>
-              <div className="font-mono uppercase font-semibold">
+              <div className="font-mono tnum uppercase font-semibold">
                 {h.move}{h.value != null ? ` $${h.value.toLocaleString()}` : ''}
               </div>
             </div>
@@ -442,7 +407,7 @@ function PackageRoundHistory({ history }) {
             <th className="text-left font-medium py-1 px-1">Term</th>
             {history.map((r) => (
               <th key={r.round} className="text-right font-medium py-1 px-1">
-                R{r.round} {r.actor === 'employer' ? '🏢' : '🧑'}
+                R{r.round} <span className="text-[9px] uppercase text-ink-muted">{r.actor === 'employer' ? 'Emp' : 'Cand'}</span>
               </th>
             ))}
           </tr>
@@ -456,7 +421,7 @@ function PackageRoundHistory({ history }) {
                 {values.map((v, i) => {
                   const changed = i > 0 && values[i - 1] != null && v !== values[i - 1]
                   return (
-                    <td key={i} className={`text-right py-1 px-1 font-mono ${changed ? 'text-teal font-semibold' : 'text-ink-primary'}`}>
+                    <td key={i} className={`text-right py-1 px-1 font-mono tnum ${changed ? 'text-teal font-semibold' : 'text-ink-primary'}`}>
                       {formatPackageValue(field, v)}
                     </td>
                   )
@@ -467,7 +432,7 @@ function PackageRoundHistory({ history }) {
           <tr className="border-t border-border">
             <td className="py-1 px-1 text-ink-secondary font-medium">Total comp</td>
             {history.map((r) => (
-              <td key={r.round} className="text-right py-1 px-1 font-mono text-ink-primary font-semibold">
+              <td key={r.round} className="text-right py-1 px-1 font-mono tnum text-ink-primary font-semibold">
                 {r.total_comp != null ? `$${Math.round(r.total_comp).toLocaleString()}` : '—'}
               </td>
             ))}
@@ -491,9 +456,9 @@ function AttestedMetrics({ finalGapPct, marketPercentile }) {
         className="px-3 py-2 rounded-lg bg-bg-elevated border border-border"
         title="How far the final price moved from the employer's very first counter-offer — an anchor the negotiating agent never controlled."
       >
-        <p className="text-[10px] uppercase tracking-wide text-ink-muted mb-0.5">Movement from opening offer</p>
+        <p className="text-data-label uppercase text-ink-muted mb-0.5">Movement from opening offer</p>
         {finalGapPct != null ? (
-          <p className="text-sm font-mono font-semibold text-ink-primary">
+          <p className="text-sm font-mono tnum font-semibold text-ink-primary">
             {finalGapPct > 0 ? '+' : ''}{finalGapPct.toFixed(1)}% from opening offer
           </p>
         ) : (
@@ -504,9 +469,9 @@ function AttestedMetrics({ finalGapPct, marketPercentile }) {
         className="px-3 py-2 rounded-lg bg-bg-elevated border border-border"
         title="Where the agreed price falls against real external salary data for this role — an independent market comparator, computed once when the session agreed."
       >
-        <p className="text-[10px] uppercase tracking-wide text-ink-muted mb-0.5">Market comparator</p>
+        <p className="text-data-label uppercase text-ink-muted mb-0.5">Market comparator</p>
         {marketPercentile != null ? (
-          <p className="text-sm font-mono font-semibold text-ink-primary">{ordinal(marketPercentile)} percentile</p>
+          <p className="text-sm font-mono tnum font-semibold text-ink-primary">{ordinal(marketPercentile)} percentile</p>
         ) : (
           <p className="text-xs text-ink-muted italic">Market data unavailable for this role</p>
         )}
@@ -550,9 +515,9 @@ function DisputeRow({ sessionId, token, myActor, dispute, onChanged }) {
           <span className="text-ink-muted text-xs">·</span>
           <span className="text-xs text-ink-muted">filed by {dispute.filed_by === myActor ? 'you' : dispute.filed_by === 'employer' ? 'employer' : 'candidate'}</span>
         </div>
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${DISPUTE_STATUS_BADGE[dispute.status] || 'bg-bg-elevated text-neutral'}`}>
+        <Badge tone={DISPUTE_STATUS_TONE[dispute.status] || 'neutral'}>
           {DISPUTE_STATUS_LABEL[dispute.status] || dispute.status}
-        </span>
+        </Badge>
       </div>
 
       {dispute.referenced_field && (
@@ -572,8 +537,8 @@ function DisputeRow({ sessionId, token, myActor, dispute, onChanged }) {
 
       {nextOptions.length > 0 && (
         <div className="pt-2 border-t border-border space-y-2">
-          <input
-            className={`${inputClass} text-xs py-1.5`}
+          <Input
+            className="!text-xs !py-1.5"
             placeholder="Optional note…"
             value={note}
             maxLength={DISPUTE_EVIDENCE_MAX_LENGTH}
@@ -581,21 +546,16 @@ function DisputeRow({ sessionId, token, myActor, dispute, onChanged }) {
           />
           <div className="flex gap-2">
             {nextOptions.map((status) => (
-              <button
+              <Button
                 key={status}
-                type="button"
-                disabled={submitting}
+                size="sm"
+                fullWidth
+                loading={submitting}
+                variant={status === 'RESOLVED' ? 'success' : status === 'DISMISSED' ? 'secondary' : 'subtle'}
                 onClick={() => transition(status)}
-                className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors ${
-                  status === 'RESOLVED'
-                    ? 'bg-success hover:bg-success-hover text-white'
-                    : status === 'DISMISSED'
-                    ? 'bg-transparent border border-border-strong text-ink-secondary hover:bg-bg-elevated'
-                    : 'bg-teal-subtle border border-teal-border text-teal-text hover:bg-teal-subtle/70'
-                }`}
               >
-                {submitting ? '…' : TRANSITION_BUTTON_LABEL[status]}
-              </button>
+                {TRANSITION_BUTTON_LABEL[status]}
+              </Button>
             ))}
           </div>
           {err && <p className="text-[11px] text-danger">{err}</p>}
@@ -651,12 +611,9 @@ function FileDisputeForm({ sessionId, token, myActor, view, visible, onFiled }) 
   if (!open) {
     return (
       <div className="mt-4">
-        <button
-          onClick={() => setOpen(true)}
-          className="w-full px-4 py-2.5 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated transition-colors"
-        >
+        <Button variant="secondary" fullWidth onClick={() => setOpen(true)}>
           File a dispute
-        </button>
+        </Button>
         <p className="mt-1.5 text-xs text-ink-muted">
           Disagree with how this went, or with the result itself? File a dispute — it's recorded alongside the attestation, it never reopens the negotiation on its own.
         </p>
@@ -668,100 +625,109 @@ function FileDisputeForm({ sessionId, token, myActor, view, visible, onFiled }) 
   const overSessionCap = isRateLimited && /per party per session/i.test(err.message || '')
 
   return (
-    <form onSubmit={submit} className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
-      <p className="text-sm font-medium text-ink-primary">File a dispute</p>
-      <p className="text-xs text-ink-muted">
-        This is a flag for a human to review — filing never changes the outcome or reopens negotiation on its own.
-      </p>
-
-      <div>
-        <label className={labelClass}>Dispute type</label>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => { setDisputeType('process'); setReferencedField('') }}
-            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${disputeType === 'process' ? 'bg-teal text-white border-teal' : 'bg-transparent border-border-strong text-ink-secondary hover:bg-bg-elevated'}`}
-          >
-            Process
-          </button>
-          <button
-            type="button"
-            onClick={() => setDisputeType('outcome')}
-            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${disputeType === 'outcome' ? 'bg-teal text-white border-teal' : 'bg-transparent border-border-strong text-ink-secondary hover:bg-bg-elevated'}`}
-          >
-            Outcome
-          </button>
-        </div>
-        <p className="mt-1.5 text-[11px] text-ink-muted">
-          {disputeType === 'process'
-            ? "The record doesn't match what happened, or a stated rule wasn't followed."
-            : 'The negotiated result itself seems unfair — grounded in an attested figure below, not just a feeling.'}
+    <form onSubmit={submit} className="mt-4">
+      <Card padding="lg" className="space-y-3">
+        <p className="text-sm font-medium text-ink-primary">File a dispute</p>
+        <p className="text-xs text-ink-muted">
+          This is a flag for a human to review — filing never changes the outcome or reopens negotiation on its own.
         </p>
-      </div>
 
-      {disputeType === 'outcome' && (
         <div>
-          <label className={labelClass}>Which attested figure?</label>
-          <div className="space-y-1.5">
-            <label className={`flex items-center gap-2 text-xs ${finalGapAvailable ? 'text-ink-primary cursor-pointer' : 'text-ink-muted/50 cursor-not-allowed'}`}>
-              <input
-                type="radio"
-                name="referenced_field"
-                disabled={!finalGapAvailable}
-                checked={referencedField === 'final_gap_pct'}
-                onChange={() => setReferencedField('final_gap_pct')}
-              />
-              Price movement from opening offer{!finalGapAvailable && ' — not available on this session'}
-            </label>
-            <label className={`flex items-center gap-2 text-xs ${marketPercentileAvailable ? 'text-ink-primary cursor-pointer' : 'text-ink-muted/50 cursor-not-allowed'}`}>
-              <input
-                type="radio"
-                name="referenced_field"
-                disabled={!marketPercentileAvailable}
-                checked={referencedField === 'market_percentile'}
-                onChange={() => setReferencedField('market_percentile')}
-              />
-              Market percentile{!marketPercentileAvailable && ' — not available on this session'}
-            </label>
+          <FieldLabel>Dispute type</FieldLabel>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              fullWidth
+              variant={disputeType === 'process' ? 'primary' : 'secondary'}
+              onClick={() => { setDisputeType('process'); setReferencedField('') }}
+            >
+              Process
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              fullWidth
+              variant={disputeType === 'outcome' ? 'primary' : 'secondary'}
+              onClick={() => setDisputeType('outcome')}
+            >
+              Outcome
+            </Button>
           </div>
-        </div>
-      )}
-
-      <div>
-        <label className={labelClass}>Evidence / reasoning</label>
-        <textarea
-          className={`${inputClass} min-h-[90px]`}
-          value={evidence}
-          maxLength={DISPUTE_EVIDENCE_MAX_LENGTH}
-          onChange={(e) => setEvidence(e.target.value)}
-          placeholder="Explain what happened, with specifics (round numbers, dates, quoted terms)."
-          required
-        />
-        <p className="mt-1 text-[11px] text-ink-muted text-right">{evidence.length} / {DISPUTE_EVIDENCE_MAX_LENGTH}</p>
-      </div>
-
-      {err && (
-        isRateLimited ? (
-          <p className="text-xs text-sealed-text bg-sealed-subtle border border-sealed-border rounded-lg px-3 py-2">
-            {overSessionCap ? "You've reached the dispute limit for this session (3 per party)." : 'Rate limit reached — try again in a bit.'}
+          <p className="mt-1.5 text-[11px] text-ink-muted">
+            {disputeType === 'process'
+              ? "The record doesn't match what happened, or a stated rule wasn't followed."
+              : 'The negotiated result itself seems unfair — grounded in an attested figure below, not just a feeling.'}
           </p>
-        ) : (
-          <p className="text-xs text-danger">{err.message}</p>
-        )
-      )}
+        </div>
 
-      <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting || !evidence.trim() || (disputeType === 'outcome' && !referencedField)}
-          className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors"
-        >
-          {submitting ? 'Filing…' : 'File dispute'}
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
-          Cancel
-        </button>
-      </div>
+        {disputeType === 'outcome' && (
+          <div>
+            <FieldLabel>Which attested figure?</FieldLabel>
+            <div className="space-y-1.5">
+              <label className={`flex items-center gap-2 text-xs ${finalGapAvailable ? 'text-ink-primary cursor-pointer' : 'text-ink-muted/50 cursor-not-allowed'}`}>
+                <input
+                  type="radio"
+                  name="referenced_field"
+                  className="accent-teal"
+                  disabled={!finalGapAvailable}
+                  checked={referencedField === 'final_gap_pct'}
+                  onChange={() => setReferencedField('final_gap_pct')}
+                />
+                Price movement from opening offer{!finalGapAvailable && ' — not available on this session'}
+              </label>
+              <label className={`flex items-center gap-2 text-xs ${marketPercentileAvailable ? 'text-ink-primary cursor-pointer' : 'text-ink-muted/50 cursor-not-allowed'}`}>
+                <input
+                  type="radio"
+                  name="referenced_field"
+                  className="accent-teal"
+                  disabled={!marketPercentileAvailable}
+                  checked={referencedField === 'market_percentile'}
+                  onChange={() => setReferencedField('market_percentile')}
+                />
+                Market percentile{!marketPercentileAvailable && ' — not available on this session'}
+              </label>
+            </div>
+          </div>
+        )}
+
+        <div>
+          <FieldLabel>Evidence / reasoning</FieldLabel>
+          <Textarea
+            className="min-h-[90px]"
+            value={evidence}
+            maxLength={DISPUTE_EVIDENCE_MAX_LENGTH}
+            onChange={(e) => setEvidence(e.target.value)}
+            placeholder="Explain what happened, with specifics (round numbers, dates, quoted terms)."
+            required
+          />
+          <p className="mt-1 text-[11px] text-ink-muted text-right">{evidence.length} / {DISPUTE_EVIDENCE_MAX_LENGTH}</p>
+        </div>
+
+        {err && (
+          isRateLimited ? (
+            <p className="text-xs text-sealed-text bg-sealed-subtle border border-sealed-border rounded-lg px-3 py-2">
+              {overSessionCap ? "You've reached the dispute limit for this session (3 per party)." : 'Rate limit reached — try again in a bit.'}
+            </p>
+          ) : (
+            <p className="text-xs text-danger">{err.message}</p>
+          )
+        )}
+
+        <div className="flex gap-2">
+          <Button
+            type="submit"
+            fullWidth
+            loading={submitting}
+            disabled={!evidence.trim() || (disputeType === 'outcome' && !referencedField)}
+          >
+            {submitting ? 'Filing…' : 'File dispute'}
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+        </div>
+      </Card>
     </form>
   )
 }
@@ -777,7 +743,7 @@ function DisputesPanel({ sessionId, token, myActor, view, visible, disputesData,
   const list = disputesData?.disputes || []
 
   return (
-    <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border">
+    <Card padding="lg" className="mt-4">
       <p className="text-xs font-semibold text-ink-secondary uppercase tracking-wide mb-1">Disputes</p>
       <p className="text-xs text-ink-muted mb-2">
         A record of any concerns either side has raised about this outcome — visible to both parties.
@@ -792,7 +758,7 @@ function DisputesPanel({ sessionId, token, myActor, view, visible, disputesData,
       )}
 
       <FileDisputeForm sessionId={sessionId} token={token} myActor={myActor} view={view} visible onFiled={onChanged} />
-    </div>
+    </Card>
   )
 }
 
@@ -814,12 +780,13 @@ function AttestationPanel({ sessionId, token, visible }) {
   if (!visible) return null
 
   return (
-    <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+    <Card emphasis="seal" padding="lg" className="mt-4">
       {receipt ? (
         <>
           {receipt.tee_attested ? (
-            <div className="flex items-center gap-2 mb-2 px-2.5 py-1 rounded-md bg-success-subtle border border-success w-fit">
-              <span className="text-xs font-semibold text-success-text">🛡️ Verified by Intel TDX</span>
+            <div className="flex items-center gap-2 mb-2">
+              <SealMark size="sm" />
+              <span className="text-xs font-semibold text-teal-text">Verified by Intel TDX</span>
             </div>
           ) : (
             <div className="flex items-center gap-2 mb-2 px-2.5 py-1 rounded-md bg-sealed-subtle border border-sealed-border w-fit">
@@ -831,9 +798,9 @@ function AttestationPanel({ sessionId, token, visible }) {
               ? 'Verified by secure, tamper-proof computation — neither side could see or alter the other’s private numbers, and the result can’t be faked.'
               : 'This demo run skipped the real secure hardware — for testing only, not a verified result.'}
           </p>
-          <p className="text-[11px] font-mono text-ink-muted break-all mb-3">{receipt.attestation}</p>
+          <p className="text-[11px] font-mono tnum text-ink-muted break-all mb-3">{receipt.attestation}</p>
           {cred && (
-            <div className="pt-3 border-t border-border">
+            <div className="pt-3 border-t border-teal-border">
               <span className={`text-xs font-semibold ${cred.genuine_negotiation ? 'text-success' : 'text-sealed'}`}>
                 {cred.genuine_negotiation ? 'Genuine negotiation verified' : 'Conduct issues detected'}
               </span>
@@ -844,7 +811,7 @@ function AttestationPanel({ sessionId, token, visible }) {
       ) : (
         <p className="text-xs text-ink-muted italic">{err || 'Loading attestation receipt…'}</p>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -879,12 +846,9 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled, enclaveVeri
   if (!open) {
     return (
       <div className="mt-4">
-        <button
-          onClick={() => setOpen(true)}
-          className="w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
-        >
+        <Button variant="subtle" fullWidth onClick={() => setOpen(true)}>
           Enable AI negotiation
-        </button>
+        </Button>
         <p className="mt-1.5 text-xs text-ink-muted">
           An AI agent will negotiate on your behalf, using the private floor you set below — it will never agree to a number below that floor.
         </p>
@@ -893,34 +857,39 @@ function EnableAgenticButton({ sessionId, token, visible, onEnabled, enclaveVeri
   }
 
   return (
-    <form onSubmit={submit} className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
-      <p className="text-sm font-medium text-ink-primary">Enable AI negotiation</p>
-      <p className="text-xs text-ink-muted">
-        A Claude agent will negotiate on your behalf once the employer is ready too. Your floor is sealed — never shown to the employer, even to their agent.
-      </p>
-      <TeeInputBoundary label="Inside the TEE — sealed, never shown to the other side" pills={['Intel TDX', 'DCAP verified']}>
-        <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
-        <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
-          <label className="block text-xs font-medium text-sealed-text mb-1.5">🔒 Your walk-away floor — private, only you see this</label>
-          <input className={`${inputClass} text-sealed-text`} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="175000" required disabled={!enclaveVerified} />
+    <form onSubmit={submit} className="mt-4">
+      <Card padding="lg" className="space-y-3">
+        <p className="text-sm font-medium text-ink-primary">Enable AI negotiation</p>
+        <p className="text-xs text-ink-muted">
+          A Claude agent will negotiate on your behalf once the employer is ready too. Your floor is sealed — never shown to the employer, even to their agent.
+        </p>
+        <TeeInputBoundary label="Inside the TEE — sealed, never shown to the other side" pills={['Intel TDX', 'DCAP verified']}>
+          <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
+          <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-sealed-text mb-1.5">
+              <LockIcon size={12} />
+              Your walk-away floor — private, only you see this
+            </label>
+            <Input mono className="!text-sealed-text" type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="175000" required disabled={!enclaveVerified} />
+          </div>
+        </TeeInputBoundary>
+        <div>
+          <FieldLabel>Priorities (optional)</FieldLabel>
+          <Input value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
         </div>
-      </TeeInputBoundary>
-      <div>
-        <label className={labelClass}>Priorities (optional)</label>
-        <input className={inputClass} value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
-      </div>
-      {err && <p className="text-xs text-danger">{err}</p>}
-      <div className="flex gap-2">
-        <button type="submit" disabled={submitting || !floor || !enclaveVerified} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
-          {submitting ? 'Sealing…' : 'Seal & enable'}
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
-          Cancel
-        </button>
-      </div>
-      <p className="text-[11px] text-ink-muted">
-        Sealing locks in your number privately — the other side never sees it, only the eventual outcome.
-      </p>
+        {err && <p className="text-xs text-danger">{err}</p>}
+        <div className="flex gap-2">
+          <Button type="submit" fullWidth loading={submitting} disabled={!floor || !enclaveVerified}>
+            {submitting ? 'Sealing…' : 'Seal & enable'}
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+        </div>
+        <p className="text-[11px] text-ink-muted">
+          Sealing locks in your number privately — the other side never sees it, only the eventual outcome.
+        </p>
+      </Card>
     </form>
   )
 }
@@ -956,12 +925,9 @@ function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled, encl
   if (!open) {
     return (
       <div className="mt-3">
-        <button
-          onClick={() => setOpen(true)}
-          className="w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
-        >
+        <Button variant="subtle" fullWidth onClick={() => setOpen(true)}>
           Enable AI negotiation (full package)
-        </button>
+        </Button>
         <p className="mt-1.5 text-xs text-ink-muted">
           An AI agent will negotiate your full compensation package on your behalf, using the private floor you set below — it will never agree below that floor.
         </p>
@@ -970,34 +936,39 @@ function EnablePackageAgenticButton({ sessionId, token, visible, onEnabled, encl
   }
 
   return (
-    <form onSubmit={submit} className="mt-3 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
-      <p className="text-sm font-medium text-ink-primary">Enable AI negotiation (full package)</p>
-      <p className="text-xs text-ink-muted">
-        A Claude agent will negotiate the full compensation package on your behalf. Your floor is sealed — never shown to the employer.
-      </p>
-      <TeeInputBoundary label="Inside the TEE — sealed, never shown to the other side" pills={['Intel TDX', 'DCAP verified']}>
-        <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
-        <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
-          <label className="block text-xs font-medium text-sealed-text mb-1.5">🔒 Your walk-away floor — total comp, private</label>
-          <input className={`${inputClass} text-sealed-text`} type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="250000" required disabled={!enclaveVerified} />
+    <form onSubmit={submit} className="mt-3">
+      <Card padding="lg" className="space-y-3">
+        <p className="text-sm font-medium text-ink-primary">Enable AI negotiation (full package)</p>
+        <p className="text-xs text-ink-muted">
+          A Claude agent will negotiate the full compensation package on your behalf. Your floor is sealed — never shown to the employer.
+        </p>
+        <TeeInputBoundary label="Inside the TEE — sealed, never shown to the other side" pills={['Intel TDX', 'DCAP verified']}>
+          <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
+          <div className="p-3 rounded-lg bg-sealed-subtle border border-dashed border-sealed-border">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-sealed-text mb-1.5">
+              <LockIcon size={12} />
+              Your walk-away floor — total comp, private
+            </label>
+            <Input mono className="!text-sealed-text" type="number" min="0" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="250000" required disabled={!enclaveVerified} />
+          </div>
+        </TeeInputBoundary>
+        <div>
+          <FieldLabel>Priorities (optional)</FieldLabel>
+          <Input value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
         </div>
-      </TeeInputBoundary>
-      <div>
-        <label className={labelClass}>Priorities (optional)</label>
-        <input className={inputClass} value={priorities} onChange={(e) => setPriorities(e.target.value)} placeholder="base matters more than equity" />
-      </div>
-      {err && <p className="text-xs text-danger">{err}</p>}
-      <div className="flex gap-2">
-        <button type="submit" disabled={submitting || !floor || !enclaveVerified} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
-          {submitting ? 'Sealing…' : 'Seal & enable'}
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
-          Cancel
-        </button>
-      </div>
-      <p className="text-[11px] text-ink-muted">
-        Sealing locks in your number privately — the other side never sees it, only the eventual outcome.
-      </p>
+        {err && <p className="text-xs text-danger">{err}</p>}
+        <div className="flex gap-2">
+          <Button type="submit" fullWidth loading={submitting} disabled={!floor || !enclaveVerified}>
+            {submitting ? 'Sealing…' : 'Seal & enable'}
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+        </div>
+        <p className="text-[11px] text-ink-muted">
+          Sealing locks in your number privately — the other side never sees it, only the eventual outcome.
+        </p>
+      </Card>
     </form>
   )
 }
@@ -1024,7 +995,7 @@ function AgenticPanel({ sessionId, token, visible, view, onComplete }) {
   }
 
   return (
-    <div className="mt-4 p-5 rounded-xl bg-teal-subtle border border-teal-border">
+    <Card padding="lg" className="mt-4 !bg-teal-subtle !border-teal-border">
       {!result && (
         <>
           <p className="text-sm font-medium text-ink-primary mb-1">Let AI agents negotiate</p>
@@ -1032,26 +1003,15 @@ function AgenticPanel({ sessionId, token, visible, view, onComplete }) {
             Both sides have sealed their private numbers. Two Claude agents will negotiate from here —
             your floor never crosses to the employer's agent, only offer amounts and moves do.
           </p>
-          <button
-            onClick={run}
-            disabled={running}
-            className="w-full px-4 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"
-          >
-            {running ? (
-              <>
-                <Spinner />
-                Agents negotiating… Round {view?.round_number ?? 0} of {view?.max_rounds ?? 5}
-              </>
-            ) : 'Let agents negotiate'}
-          </button>
+          <Button variant="success" fullWidth loading={running} onClick={run}>
+            {running ? `Agents negotiating… Round ${view?.round_number ?? 0} of ${view?.max_rounds ?? 5}` : 'Let agents negotiate'}
+          </Button>
           {err && <p className="text-xs text-danger mt-2">{err}</p>}
         </>
       )}
       {result && (
         <>
-          <span className="inline-block text-[10px] uppercase tracking-wide text-teal-text font-semibold bg-white px-1.5 py-0.5 rounded mb-2">
-            Negotiated by AI agents
-          </span>
+          <Badge tone="teal" className="mb-2">Negotiated by AI agents</Badge>
           <p className="text-sm font-semibold text-ink-primary mb-2">
             {result.state === 'AGREED'
               ? `Agents agreed at $${result.agreed_price?.toLocaleString()}`
@@ -1065,7 +1025,7 @@ function AgenticPanel({ sessionId, token, visible, view, onComplete }) {
           />
         </>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -1091,7 +1051,7 @@ function PackageAgenticPanel({ sessionId, token, visible, view, onComplete }) {
   }
 
   return (
-    <div className="mt-4 p-5 rounded-xl bg-teal-subtle border border-teal-border">
+    <Card padding="lg" className="mt-4 !bg-teal-subtle !border-teal-border">
       {!result && (
         <>
           <p className="text-sm font-medium text-ink-primary mb-1">Let AI agents negotiate the full package</p>
@@ -1099,26 +1059,15 @@ function PackageAgenticPanel({ sessionId, token, visible, view, onComplete }) {
             Base, equity, signing bonus, annual bonus, remote policy, start date, and PTO — negotiated
             simultaneously. Floors and budgets never cross, only the package on the table each round.
           </p>
-          <button
-            onClick={run}
-            disabled={running}
-            className="w-full px-4 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"
-          >
-            {running ? (
-              <>
-                <Spinner />
-                Agents negotiating… Round {view?.package_round_number ?? 0} of {view?.max_rounds ?? 5}
-              </>
-            ) : 'Let agents negotiate (full package)'}
-          </button>
+          <Button variant="success" fullWidth loading={running} onClick={run}>
+            {running ? `Agents negotiating… Round ${view?.package_round_number ?? 0} of ${view?.max_rounds ?? 5}` : 'Let agents negotiate (full package)'}
+          </Button>
           {err && <p className="text-xs text-danger mt-2">{err}</p>}
         </>
       )}
       {result && (
         <>
-          <span className="inline-block text-[10px] uppercase tracking-wide text-teal-text font-semibold bg-white px-1.5 py-0.5 rounded mb-2">
-            Negotiated by AI agents
-          </span>
+          <Badge tone="teal" className="mb-2">Negotiated by AI agents</Badge>
           <p className="text-sm font-semibold text-ink-primary mb-3">
             {result.state === 'AGREED'
               ? 'Agreed package'
@@ -1139,7 +1088,7 @@ function PackageAgenticPanel({ sessionId, token, visible, view, onComplete }) {
           )}
         </>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -1174,25 +1123,25 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
 
   if (myVote) {
     return (
-      <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border">
+      <Card padding="lg" className="mt-4">
         <p className="text-sm text-ink-primary mb-1">
           You voted to <span className="font-semibold">{APPROVAL_LABEL[myVote]}</span>.
         </p>
         <p className="text-xs text-ink-muted italic">
           {otherVote ? `The employer voted to ${APPROVAL_LABEL[otherVote]}.` : 'Waiting for the employer to respond…'}
         </p>
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
+    <Card padding="lg" className="mt-4 space-y-3">
       <p className="text-sm font-medium text-ink-primary">
         {packageMode ? 'Agents reached a package agreement — your call' : 'Agents reached an outcome — your call'}
       </p>
       {!packageMode && view.agreed_price != null && (
         <p className="text-xs text-ink-muted">
-          Agreed price: <span className="font-mono font-semibold text-ink-primary">${view.agreed_price.toLocaleString()}</span>
+          Agreed price: <span className="font-mono tnum font-semibold text-ink-primary">${view.agreed_price.toLocaleString()}</span>
         </p>
       )}
       {otherVote && (
@@ -1202,17 +1151,17 @@ function ApprovalPanel({ sessionId, token, visible, view, packageMode, onVoted }
       )}
       {err && <p className="text-xs text-danger">{err}</p>}
       <div className="flex gap-2">
-        <button disabled={submitting} onClick={() => vote('approve')} className="flex-1 px-3 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors">
+        <Button variant="success" size="sm" fullWidth loading={submitting} onClick={() => vote('approve')}>
           Approve
-        </button>
-        <button disabled={submitting} onClick={() => vote('request_more_rounds')} className="flex-1 px-3 py-2.5 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated disabled:opacity-40 transition-colors">
+        </Button>
+        <Button variant="secondary" size="sm" fullWidth loading={submitting} onClick={() => vote('request_more_rounds')}>
           More rounds
-        </button>
-        <button disabled={submitting} onClick={() => vote('decline')} className="flex-1 px-3 py-2.5 rounded-lg bg-danger hover:bg-danger-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors">
+        </Button>
+        <Button variant="destructive" size="sm" fullWidth loading={submitting} onClick={() => vote('decline')}>
           Decline
-        </button>
+        </Button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -1232,8 +1181,11 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, en
   if (view.candidate_provenance_verified) {
     const c = view.candidate_provenance_credential
     return (
-      <div className="mt-4 p-5 rounded-xl bg-success-subtle border border-success/30">
-        <p className="text-xs font-semibold text-success-text mb-1">✓ Git-provenance credential verified</p>
+      <Card padding="lg" className="mt-4 !bg-success-subtle !border-success/30">
+        <p className="flex items-center gap-1.5 text-xs font-semibold text-success-text mb-1">
+          <CheckIcon size={12} />
+          Git-provenance credential verified
+        </p>
         {c && (
           <>
             <p className="text-xs text-ink-muted">
@@ -1245,7 +1197,7 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, en
             )}
           </>
         )}
-      </div>
+      </Card>
     )
   }
 
@@ -1277,12 +1229,9 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, en
             The employer requires this before you can respond.
           </div>
         )}
-        <button
-          onClick={() => setOpen(true)}
-          className="w-full px-4 py-2.5 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
-        >
+        <Button variant="subtle" fullWidth onClick={() => setOpen(true)}>
           Verify your engineering experience with GitHub
-        </button>
+        </Button>
         <p className="mt-1.5 text-xs text-ink-muted">
           Prove real, hands-on experience straight from your commit history — no résumé needed. We only
           compute a summary signal (seniority level, active years, languages); your GitHub token and
@@ -1293,32 +1242,34 @@ function VerifyCredentialPanel({ sessionId, token, visible, view, onVerified, en
   }
 
   return (
-    <form onSubmit={submit} className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
-      <p className="text-sm font-medium text-ink-primary">Verify with GitHub</p>
-      <p className="text-xs text-ink-muted">
-        A read-only GitHub personal access token works best. Used once, in memory, to read your commit
-        history — never written to disk.
-      </p>
-      <TeeInputBoundary label="Inside the TEE — used once, discarded after use" pills={['Intel TDX', 'DCAP verified', 'Token discarded after use']}>
-        <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
-        <div>
-          <label className={labelClass}>GitHub personal access token</label>
-          <input className={inputClass} type="password" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="ghp_…" required disabled={!enclaveVerified} />
+    <form onSubmit={submit} className="mt-4">
+      <Card padding="lg" className="space-y-3">
+        <p className="text-sm font-medium text-ink-primary">Verify with GitHub</p>
+        <p className="text-xs text-ink-muted">
+          A read-only GitHub personal access token works best. Used once, in memory, to read your commit
+          history — never written to disk.
+        </p>
+        <TeeInputBoundary label="Inside the TEE — used once, discarded after use" pills={['Intel TDX', 'DCAP verified', 'Token discarded after use']}>
+          <EnclaveStatusNote loading={enclaveLoading} error={enclaveError} />
+          <div>
+            <FieldLabel>GitHub personal access token</FieldLabel>
+            <Input type="password" value={githubToken} onChange={(e) => setGithubToken(e.target.value)} placeholder="ghp_…" required disabled={!enclaveVerified} />
+          </div>
+          <div>
+            <FieldLabel>Repositories (comma-separated, owner/repo)</FieldLabel>
+            <Input value={repos} onChange={(e) => setRepos(e.target.value)} placeholder="yourname/project-one, yourname/project-two" required disabled={!enclaveVerified} />
+          </div>
+        </TeeInputBoundary>
+        {err && <p className="text-xs text-danger">{err}</p>}
+        <div className="flex gap-2">
+          <Button type="submit" fullWidth loading={submitting} disabled={!githubToken || !repos || !enclaveVerified}>
+            {submitting ? 'Verifying…' : 'Verify'}
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
         </div>
-        <div>
-          <label className={labelClass}>Repositories (comma-separated, owner/repo)</label>
-          <input className={inputClass} value={repos} onChange={(e) => setRepos(e.target.value)} placeholder="yourname/project-one, yourname/project-two" required disabled={!enclaveVerified} />
-        </div>
-      </TeeInputBoundary>
-      {err && <p className="text-xs text-danger">{err}</p>}
-      <div className="flex gap-2">
-        <button type="submit" disabled={submitting || !githubToken || !repos || !enclaveVerified} className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors">
-          {submitting ? 'Verifying…' : 'Verify'}
-        </button>
-        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
-          Cancel
-        </button>
-      </div>
+      </Card>
     </form>
   )
 }
@@ -1467,395 +1418,381 @@ export default function CandidateSession() {
   const absoluteEmployerLink = employerLink ? `${window.location.origin}${employerLink}` : null
 
   return (
-    <div className="min-h-[calc(100vh-3.5rem)] px-4 py-10 sm:py-16">
-      <div className="w-full max-w-3xl mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-ink-primary mb-2">Verification status</h1>
+    <PageShell>
+      <h1 className="text-hero-sm text-ink-primary mb-2">Verification status</h1>
 
-        <HowThisWorksStrip lines={HOW_THIS_WORKS_LINES} />
+      <HowThisWorksStrip lines={HOW_THIS_WORKS_LINES} />
 
-        {view && <StageSpine statuses={stageStatuses} />}
+      {view && <StageSpine statuses={stageStatuses} />}
 
-        {consistency && !consistency.verified && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-sealed-subtle border border-sealed-border text-sealed-text text-xs">
-            Heads up — some details didn't pass the consistency check: {consistency.issues.join('; ')}
+      {consistency && !consistency.verified && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-sealed-subtle border border-sealed-border text-sealed-text text-xs">
+          Heads up — some details didn't pass the consistency check: {consistency.issues.join('; ')}
+        </div>
+      )}
+
+      {absoluteEmployerLink && !view?.band_set && (
+        <Card padding="sm" className="mb-6">
+          <p className="text-xs text-ink-muted mb-2">Send this link to the employer:</p>
+          <div className="flex gap-2">
+            <Input
+              readOnly
+              mono
+              value={absoluteEmployerLink}
+              className="flex-1 min-w-0 !bg-bg-elevated !text-ink-secondary !text-xs"
+              onFocus={(e) => e.target.select()}
+            />
+            <Button variant="subtle" size="sm" onClick={() => navigator.clipboard?.writeText(absoluteEmployerLink)}>
+              Copy
+            </Button>
           </div>
-        )}
+        </Card>
+      )}
 
-        {absoluteEmployerLink && !view?.band_set && (
-          <div className="mb-6 p-4 rounded-xl bg-bg-surface border border-border" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-            <p className="text-xs text-ink-muted mb-2">Send this link to the employer:</p>
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={absoluteEmployerLink}
-                className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-bg-elevated border border-border text-ink-secondary text-xs font-mono"
-                onFocus={(e) => e.target.select()}
-              />
-              <button
-                onClick={() => navigator.clipboard?.writeText(absoluteEmployerLink)}
-                className="px-3 py-2 rounded-lg bg-teal-subtle border-[1.5px] border-teal hover:bg-teal-subtle/70 text-teal text-xs font-medium transition-all"
-              >
-                Copy
-              </button>
-            </div>
-          </div>
-        )}
+      {error && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>
+      )}
 
-        {error && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>
-        )}
-
-        {view && (
-          <div
-            className={`p-6 rounded-xl bg-bg-surface ${cardIsSpotlighted ? 'border-2 border-teal' : 'border border-border'}`}
-            style={cardIsSpotlighted
-              ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' }
-              : { boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}
-          >
-            {/* Scoped strictly to isExpiredNoAgreement — every other terminal state keeps the
-                plain pill below as its only outcome indicator, exactly as before this change. */}
-            {isExpiredNoAgreement && (
-              <div className="mb-4 p-4 rounded-lg bg-sealed-subtle border border-sealed-border">
-                <p className="text-sm font-semibold text-sealed-text mb-1.5">This negotiation didn't reach an agreement</p>
-                {view.gap_pct != null && (
-                  <p className="font-mono font-bold text-2xl text-sealed-text mb-1">{Math.abs(view.gap_pct).toFixed(1)}% apart</p>
-                )}
-                <p className="text-xs text-sealed-text/80 leading-relaxed mb-3">
-                  The two sides were still this far apart when the {view.max_rounds}-round limit was reached, with no agreement in place.
-                </p>
-                <Link
-                  to="/offercheck/new"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
-                >
-                  Start a new negotiation
-                </Link>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between mb-4">
-              <span className={`inline-block px-2.5 py-1 rounded-md text-sm font-semibold ${STATE_BADGE[activeState] || 'bg-bg-elevated text-neutral'}`}>
-                {STATE_LABEL[activeState] || activeState}
-              </span>
-              <span className="text-xs font-mono text-ink-muted">round {activeRound} of {view.max_rounds}</span>
-            </div>
-
-            <GapMeter gapPct={view.gap_pct} />
-
-            {view.my_current_value != null && (
-              <p className="text-xs text-ink-muted mb-4">
-                Your current ask: <span className="font-mono font-semibold text-ink-primary">${view.my_current_value.toLocaleString()}</span>
+      {view && (
+        <Card emphasis={cardIsSpotlighted ? 'spotlight' : 'default'} padding="lg">
+          {/* Scoped strictly to isExpiredNoAgreement — every other terminal state keeps the
+              plain pill below as its only outcome indicator, exactly as before this change. */}
+          {isExpiredNoAgreement && (
+            <div className="mb-4 p-4 rounded-lg bg-sealed-subtle border border-sealed-border">
+              <p className="text-sm font-semibold text-sealed-text mb-1.5">This negotiation didn't reach an agreement</p>
+              {view.gap_pct != null && (
+                <p className="font-mono tnum font-bold text-2xl text-sealed-text mb-1">{Math.abs(view.gap_pct).toFixed(1)}% apart</p>
+              )}
+              <p className="text-xs text-sealed-text/80 leading-relaxed mb-3">
+                The two sides were still this far apart when the {view.max_rounds}-round limit was reached, with no agreement in place.
               </p>
-            )}
-
-            {view.state === 'AGREED' && (
-              <p className="text-sm text-success font-medium mb-4">
-                Agreed at ${view.agreed_price?.toLocaleString()}
-              </p>
-            )}
-
-            {view.state === 'AGREED' && (
-              <AttestedMetrics finalGapPct={view.final_gap_pct} marketPercentile={view.market_percentile} />
-            )}
-
-            <RoundHistory history={view.history} myActor="candidate" />
-
-            {view.package_history.length > 0 && (
-              <div className="mb-4 pt-3 border-t border-border">
-                <p className="text-xs text-ink-muted mb-2">Package negotiation</p>
-                <PackageRoundHistory history={view.package_history} />
-              </div>
-            )}
-
-            {view.package_converged_hint && !isTerminal && (
-              <div className="mb-4 px-3 py-2 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs">
-                Within 2% of total comp — consider accepting.
-              </div>
-            )}
-
-            {/* The human approval-gate decision, appended to the trace so it doesn't only live in
-                ApprovalPanel's own status text — a viewer scrolling the trace alone should be able
-                to see their own final call, not just a list of agent moves that can look unresolved.
-                Only the viewer's own vote is shown here; the other party's vote is already surfaced
-                by ApprovalPanel itself, so repeating it here would be redundant. */}
-            {myVoteForTrace && (
-              <div className="mb-4 flex justify-end">
-                <div className="max-w-[80%] px-3 py-1.5 rounded-lg text-xs bg-sealed-subtle border border-sealed-border text-sealed-text">
-                  <div className="flex items-center justify-between gap-3 mb-0.5">
-                    <span className="font-medium">You</span>
-                    <span className="text-[10px] text-ink-muted">your decision</span>
-                  </div>
-                  <div className="font-mono uppercase font-semibold">
-                    {APPROVAL_LABEL[myVoteForTrace]}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Only reachable via a one-sided decline (see negotiation.py::_resolve_approval —
-                a decline resolves the session immediately without waiting for the other vote), so
-                the viewer here never got a turn to approve/decline. Without this, the trace would
-                just stop after the last agent move with no acknowledgement the session is over. */}
-            {!myVoteForTrace && otherVoteForTrace && isTerminal && (
-              <div className="mb-4 flex justify-start">
-                <div className="max-w-[80%] px-3 py-1.5 rounded-lg text-xs bg-bg-elevated border border-border text-ink-primary">
-                  <div className="flex items-center justify-between gap-3 mb-0.5">
-                    <span className="font-medium">Employer</span>
-                    <span className="text-[10px] text-ink-muted">ended it before your vote</span>
-                  </div>
-                  <div className="font-mono uppercase font-semibold">
-                    {APPROVAL_LABEL[otherVoteForTrace]}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!isTerminal && !myTurn && !pendingApproval && (
-              <p className="text-xs text-ink-muted italic">Waiting for the other side to respond…</p>
-            )}
-
-            <ApprovalPanel
-              sessionId={sessionId}
-              token={token}
-              visible={Boolean(pendingApproval)}
-              view={view}
-              packageMode={Boolean(packageActive)}
-              onVoted={refresh}
-            />
-
-            {!isTerminal && myTurn && !packageActive && !pendingApproval && (
-              view.require_provenance_credential && !view.candidate_provenance_verified ? (
-                <div className="pt-3 border-t border-border">
-                  <p className="text-xs text-sealed-text bg-sealed-subtle border border-sealed-border rounded-lg px-3 py-2">
-                    The employer requires a verified git-provenance credential before you can respond — verify below.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3 pt-3 border-t border-border">
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      value={counterValue}
-                      onChange={(e) => setCounterValue(e.target.value)}
-                      placeholder="New ask"
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.12]"
-                    />
-                    <button
-                      disabled={acting || !counterValue}
-                      onClick={() => act('counter', Number(counterValue))}
-                      className="px-4 py-2 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated disabled:opacity-40 transition-colors"
-                    >
-                      Counter
-                    </button>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      disabled={acting}
-                      onClick={() => act('accept')}
-                      className="flex-1 px-4 py-2.5 rounded-lg bg-success hover:bg-success-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors"
-                    >
-                      Accept
-                    </button>
-                    <button
-                      disabled={acting}
-                      onClick={() => act('walk')}
-                      className="flex-1 px-4 py-2.5 rounded-lg bg-danger hover:bg-danger-hover text-white text-sm font-semibold disabled:opacity-40 transition-colors"
-                    >
-                      Walk away
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-        )}
-
-        {view && (() => {
-          // Each node is built exactly once, with the exact same `visible` prop the panel has
-          // always had — only how it's WRAPPED (spotlighted vs. collapsible-vs-always-shown)
-          // changes, via ActionPanels below, never a change to any visible={...} condition.
-          //
-          // verify/salary/package are each split into a COLLAPSIBLE actionable node (a
-          // not-yet-made choice) and a NON-collapsible persistent-status node (a confirmation
-          // that must stay visible regardless of what getNextAction() recommends next) — see
-          // ActionPanels' own docstring for why conflating the two was a shipped regression.
-          const verifyFormNode = (
-            <VerifyCredentialPanel
-              sessionId={sessionId}
-              token={token}
-              view={view}
-              visible={verifyFormVisible}
-              onVerified={refresh}
-              enclaveVerified={enclaveVerified}
-              enclaveLoading={enclaveLoading}
-              enclaveError={enclaveError}
-            />
-          )
-          const verifyStatusNode = (
-            <VerifyCredentialPanel
-              sessionId={sessionId}
-              token={token}
-              view={view}
-              visible={verifyStatusVisible}
-              onVerified={refresh}
-              enclaveVerified={enclaveVerified}
-              enclaveLoading={enclaveLoading}
-              enclaveError={enclaveError}
-            />
-          )
-
-          const salaryChoiceNode = (
-            <>
-              {salaryNudgeVisible && (
-                <div className="mb-2 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
-                  The employer has already enabled AI negotiation (salary) — enable yours to get started.
-                </div>
-              )}
-              <EnableAgenticButton
-                sessionId={sessionId}
-                token={token}
-                visible={salaryChoiceVisible}
-                onEnabled={refresh}
-                enclaveVerified={enclaveVerified}
-                enclaveLoading={enclaveLoading}
-                enclaveError={enclaveError}
-              />
-            </>
-          )
-          const salaryWaitingNode = salaryWaitingVisible ? (
-            <div className="px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
-              <span>✓ AI negotiation enabled (salary) — waiting for the employer to enable their side too.</span>
+              <Button as={Link} to="/offercheck/new" variant="subtle" size="sm">Start a new negotiation</Button>
             </div>
-          ) : null
-
-          const packageChoiceNode = (
-            <>
-              {packageNudgeVisible && (
-                <div className="mb-2 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
-                  The employer has already enabled package AI negotiation — enable yours to get started.
-                </div>
-              )}
-              <EnablePackageAgenticButton
-                sessionId={sessionId}
-                token={token}
-                visible={packageChoiceVisible}
-                onEnabled={refresh}
-                enclaveVerified={enclaveVerified}
-                enclaveLoading={enclaveLoading}
-                enclaveError={enclaveError}
-              />
-            </>
-          )
-          const packageWaitingNode = packageWaitingVisible ? (
-            <div className="px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-2">
-              <span>✓ Package AI negotiation enabled — waiting for the employer to enable their side too.</span>
-            </div>
-          ) : null
-
-          const runSalaryNode = (
-            <AgenticPanel sessionId={sessionId} token={token} view={view} visible={runSalaryVisible} onComplete={refresh} />
-          )
-          const runPackageNode = (
-            <PackageAgenticPanel sessionId={sessionId} token={token} view={view} visible={runPackageVisible} onComplete={refresh} />
-          )
-
-          const isChoose = nextAction?.key === 'choose'
-          const items = [
-            {
-              key: 'verifyForm', node: verifyFormNode, collapsible: true,
-              visible: verifyFormVisible,
-              isSpotlight: nextAction?.key === 'verify',
-              title: 'Do this next — verify your GitHub credential',
-            },
-            {
-              // Persistent status — never collapsible. This is the exact node whose disappearance
-              // was reported: once verified, it must stay visible no matter what getNextAction()
-              // recommends next.
-              key: 'verifyStatus', node: verifyStatusNode, collapsible: false,
-              visible: verifyStatusVisible,
-              isSpotlight: false,
-            },
-            {
-              key: 'salaryChoice', node: salaryChoiceNode, collapsible: true,
-              visible: salaryChoiceVisible,
-              isSpotlight: isChoose,
-              title: 'Do this next — choose how to negotiate',
-            },
-            {
-              key: 'salaryWaiting', node: salaryWaitingNode, collapsible: false,
-              visible: salaryWaitingVisible,
-              isSpotlight: nextAction?.key === 'sealedWaitingSalary',
-              title: 'Waiting for the employer',
-            },
-            {
-              // No title here when spotlighted alongside salaryChoice (isChoose is their only
-              // shared trigger) — repeating "Do this next — choose how to negotiate" on both
-              // adjacent cards would just be duplicate text; the clarifying paragraph above
-              // already explains the pair.
-              key: 'packageChoice', node: packageChoiceNode, collapsible: true,
-              visible: packageChoiceVisible,
-              isSpotlight: isChoose,
-            },
-            {
-              key: 'packageWaiting', node: packageWaitingNode, collapsible: false,
-              visible: packageWaitingVisible,
-              isSpotlight: nextAction?.key === 'sealedWaitingPackage',
-              title: 'Waiting for the employer',
-            },
-            {
-              // Non-collapsible: once an agentic run completes, its result (agreed price / round
-              // history) must persist even after pendingApproval immediately supersedes 'runSalary'
-              // as the recommended action — the same regression class as the verified-credential
-              // card, since AgenticPanel keeps rendering its own cached result once visible flips.
-              key: 'runSalary', node: runSalaryNode, collapsible: false,
-              visible: runSalaryVisible,
-              isSpotlight: nextAction?.key === 'runSalary',
-              title: 'Do this next',
-            },
-            {
-              key: 'runPackage', node: runPackageNode, collapsible: false,
-              visible: runPackageVisible,
-              isSpotlight: nextAction?.key === 'runPackage',
-              title: 'Do this next',
-            },
-          ]
-
-          return (
-            <>
-              {/* Only shown when both choice buttons are the spotlight together — confirmed against
-                  EnablePackageAgenticButton's own visible={!isTerminal} that a track can still be
-                  added after starting the other, right up until this track's own outcome is final. */}
-              {isChoose && (
-                <p className="mb-3 text-xs text-ink-secondary">
-                  Choose one to start: salary only, or the full package (salary + equity + benefits).
-                  You can add the other track later, but only before this one finishes.
-                </p>
-              )}
-
-              <ActionPanels items={items} />
-            </>
-          )
-        })()}
-
-        <div
-          className={nextAction?.key === 'proof' ? 'rounded-xl border-2 border-teal p-5' : ''}
-          style={nextAction?.key === 'proof' ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' } : undefined}
-        >
-          {nextAction?.key === 'proof' && (
-            <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
           )}
-          <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
-          <DisputesPanel
+
+          <div className="flex items-center justify-between mb-4">
+            <Badge tone={STATE_TONE[activeState] || 'neutral'}>{STATE_LABEL[activeState] || activeState}</Badge>
+            <span className="text-xs font-mono tnum text-ink-muted">round {activeRound} of {view.max_rounds}</span>
+          </div>
+
+          <BalanceMeter gapPct={view.gap_pct} />
+
+          {view.my_current_value != null && (
+            <p className="text-xs text-ink-muted mb-4">
+              Your current ask: <span className="font-mono tnum font-semibold text-ink-primary">${view.my_current_value.toLocaleString()}</span>
+            </p>
+          )}
+
+          {view.state === 'AGREED' && (
+            <p className="text-sm text-success font-medium mb-4">
+              Agreed at ${view.agreed_price?.toLocaleString()}
+            </p>
+          )}
+
+          {view.state === 'AGREED' && (
+            <AttestedMetrics finalGapPct={view.final_gap_pct} marketPercentile={view.market_percentile} />
+          )}
+
+          <RoundHistory history={view.history} myActor="candidate" />
+
+          {view.package_history.length > 0 && (
+            <div className="mb-4 pt-3 border-t border-border">
+              <p className="text-xs text-ink-muted mb-2">Package negotiation</p>
+              <PackageRoundHistory history={view.package_history} />
+            </div>
+          )}
+
+          {view.package_converged_hint && !isTerminal && (
+            <div className="mb-4 px-3 py-2 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs">
+              Within 2% of total comp — consider accepting.
+            </div>
+          )}
+
+          {/* The human approval-gate decision, appended to the trace so it doesn't only live in
+              ApprovalPanel's own status text — a viewer scrolling the trace alone should be able
+              to see their own final call, not just a list of agent moves that can look unresolved.
+              Only the viewer's own vote is shown here; the other party's vote is already surfaced
+              by ApprovalPanel itself, so repeating it here would be redundant. */}
+          {myVoteForTrace && (
+            <div className="mb-4 flex justify-end">
+              <div className="max-w-[80%] px-3 py-1.5 rounded-lg text-xs bg-sealed-subtle border border-sealed-border text-sealed-text">
+                <div className="flex items-center justify-between gap-3 mb-0.5">
+                  <span className="font-medium">You</span>
+                  <span className="text-[10px] text-ink-muted">your decision</span>
+                </div>
+                <div className="font-mono uppercase font-semibold">
+                  {APPROVAL_LABEL[myVoteForTrace]}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Only reachable via a one-sided decline (see negotiation.py::_resolve_approval —
+              a decline resolves the session immediately without waiting for the other vote), so
+              the viewer here never got a turn to approve/decline. Without this, the trace would
+              just stop after the last agent move with no acknowledgement the session is over. */}
+          {!myVoteForTrace && otherVoteForTrace && isTerminal && (
+            <div className="mb-4 flex justify-start">
+              <div className="max-w-[80%] px-3 py-1.5 rounded-lg text-xs bg-bg-elevated border border-border text-ink-primary">
+                <div className="flex items-center justify-between gap-3 mb-0.5">
+                  <span className="font-medium">Employer</span>
+                  <span className="text-[10px] text-ink-muted">ended it before your vote</span>
+                </div>
+                <div className="font-mono uppercase font-semibold">
+                  {APPROVAL_LABEL[otherVoteForTrace]}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!isTerminal && !myTurn && !pendingApproval && (
+            <p className="text-xs text-ink-muted italic">Waiting for the other side to respond…</p>
+          )}
+
+          <ApprovalPanel
             sessionId={sessionId}
             token={token}
-            myActor="candidate"
+            visible={Boolean(pendingApproval)}
             view={view}
-            visible={Boolean(view && view.state === 'AGREED')}
-            disputesData={disputesData}
-            onChanged={refresh}
+            packageMode={Boolean(packageActive)}
+            onVoted={refresh}
           />
-        </div>
+
+          {!isTerminal && myTurn && !packageActive && !pendingApproval && (
+            view.require_provenance_credential && !view.candidate_provenance_verified ? (
+              <div className="pt-3 border-t border-border">
+                <p className="text-xs text-sealed-text bg-sealed-subtle border border-sealed-border rounded-lg px-3 py-2">
+                  The employer requires a verified git-provenance credential before you can respond — verify below.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 pt-3 border-t border-border">
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min="0"
+                    value={counterValue}
+                    onChange={(e) => setCounterValue(e.target.value)}
+                    placeholder="New ask"
+                    className="flex-1 min-w-0"
+                  />
+                  <Button variant="secondary" loading={acting} disabled={!counterValue} onClick={() => act('counter', Number(counterValue))}>
+                    Counter
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="success" fullWidth loading={acting} onClick={() => act('accept')}>
+                    Accept
+                  </Button>
+                  <Button variant="destructive" fullWidth loading={acting} onClick={() => act('walk')}>
+                    Walk away
+                  </Button>
+                </div>
+              </div>
+            )
+          )}
+        </Card>
+      )}
+
+      {view && (() => {
+        // Each node is built exactly once, with the exact same `visible` prop the panel has
+        // always had — only how it's WRAPPED (spotlighted vs. collapsible-vs-always-shown)
+        // changes, via ActionPanels below, never a change to any visible={...} condition.
+        //
+        // verify/salary/package are each split into a COLLAPSIBLE actionable node (a
+        // not-yet-made choice) and a NON-collapsible persistent-status node (a confirmation
+        // that must stay visible regardless of what getNextAction() recommends next) — see
+        // ActionPanels' own docstring for why conflating the two was a shipped regression.
+        const verifyFormNode = (
+          <VerifyCredentialPanel
+            sessionId={sessionId}
+            token={token}
+            view={view}
+            visible={verifyFormVisible}
+            onVerified={refresh}
+            enclaveVerified={enclaveVerified}
+            enclaveLoading={enclaveLoading}
+            enclaveError={enclaveError}
+          />
+        )
+        const verifyStatusNode = (
+          <VerifyCredentialPanel
+            sessionId={sessionId}
+            token={token}
+            view={view}
+            visible={verifyStatusVisible}
+            onVerified={refresh}
+            enclaveVerified={enclaveVerified}
+            enclaveLoading={enclaveLoading}
+            enclaveError={enclaveError}
+          />
+        )
+
+        const salaryChoiceNode = (
+          <>
+            {salaryNudgeVisible && (
+              <div className="mb-2 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
+                The employer has already enabled AI negotiation (salary) — enable yours to get started.
+              </div>
+            )}
+            <EnableAgenticButton
+              sessionId={sessionId}
+              token={token}
+              visible={salaryChoiceVisible}
+              onEnabled={refresh}
+              enclaveVerified={enclaveVerified}
+              enclaveLoading={enclaveLoading}
+              enclaveError={enclaveError}
+            />
+          </>
+        )
+        const salaryWaitingNode = salaryWaitingVisible ? (
+          <div className="px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-1.5">
+            <CheckIcon size={12} className="shrink-0" />
+            <span>AI negotiation enabled (salary) — waiting for the employer to enable their side too.</span>
+          </div>
+        ) : null
+
+        const packageChoiceNode = (
+          <>
+            {packageNudgeVisible && (
+              <div className="mb-2 px-4 py-2.5 rounded-lg bg-teal-subtle border border-teal-border text-teal-text text-xs">
+                The employer has already enabled package AI negotiation — enable yours to get started.
+              </div>
+            )}
+            <EnablePackageAgenticButton
+              sessionId={sessionId}
+              token={token}
+              visible={packageChoiceVisible}
+              onEnabled={refresh}
+              enclaveVerified={enclaveVerified}
+              enclaveLoading={enclaveLoading}
+              enclaveError={enclaveError}
+            />
+          </>
+        )
+        const packageWaitingNode = packageWaitingVisible ? (
+          <div className="px-4 py-2.5 rounded-lg bg-success-subtle border border-success/30 text-success-text text-xs flex items-center gap-1.5">
+            <CheckIcon size={12} className="shrink-0" />
+            <span>Package AI negotiation enabled — waiting for the employer to enable their side too.</span>
+          </div>
+        ) : null
+
+        const runSalaryNode = (
+          <AgenticPanel sessionId={sessionId} token={token} view={view} visible={runSalaryVisible} onComplete={refresh} />
+        )
+        const runPackageNode = (
+          <PackageAgenticPanel sessionId={sessionId} token={token} view={view} visible={runPackageVisible} onComplete={refresh} />
+        )
+
+        const isChoose = nextAction?.key === 'choose'
+        const items = [
+          {
+            key: 'verifyForm', node: verifyFormNode, collapsible: true,
+            visible: verifyFormVisible,
+            isSpotlight: nextAction?.key === 'verify',
+            title: 'Do this next — verify your GitHub credential',
+          },
+          {
+            // Persistent status — never collapsible. This is the exact node whose disappearance
+            // was reported: once verified, it must stay visible no matter what getNextAction()
+            // recommends next.
+            key: 'verifyStatus', node: verifyStatusNode, collapsible: false,
+            visible: verifyStatusVisible,
+            isSpotlight: false,
+          },
+          {
+            key: 'salaryChoice', node: salaryChoiceNode, collapsible: true,
+            visible: salaryChoiceVisible,
+            isSpotlight: isChoose,
+            title: 'Do this next — choose how to negotiate',
+          },
+          {
+            key: 'salaryWaiting', node: salaryWaitingNode, collapsible: false,
+            visible: salaryWaitingVisible,
+            isSpotlight: nextAction?.key === 'sealedWaitingSalary',
+            title: 'Waiting for the employer',
+          },
+          {
+            // No title here when spotlighted alongside salaryChoice (isChoose is their only
+            // shared trigger) — repeating "Do this next — choose how to negotiate" on both
+            // adjacent cards would just be duplicate text; the clarifying paragraph above
+            // already explains the pair.
+            key: 'packageChoice', node: packageChoiceNode, collapsible: true,
+            visible: packageChoiceVisible,
+            isSpotlight: isChoose,
+          },
+          {
+            key: 'packageWaiting', node: packageWaitingNode, collapsible: false,
+            visible: packageWaitingVisible,
+            isSpotlight: nextAction?.key === 'sealedWaitingPackage',
+            title: 'Waiting for the employer',
+          },
+          {
+            // Non-collapsible: once an agentic run completes, its result (agreed price / round
+            // history) must persist even after pendingApproval immediately supersedes 'runSalary'
+            // as the recommended action — the same regression class as the verified-credential
+            // card, since AgenticPanel keeps rendering its own cached result once visible flips.
+            key: 'runSalary', node: runSalaryNode, collapsible: false,
+            visible: runSalaryVisible,
+            isSpotlight: nextAction?.key === 'runSalary',
+            title: 'Do this next',
+          },
+          {
+            key: 'runPackage', node: runPackageNode, collapsible: false,
+            visible: runPackageVisible,
+            isSpotlight: nextAction?.key === 'runPackage',
+            title: 'Do this next',
+          },
+        ]
+
+        return (
+          <>
+            {/* Only shown when both choice buttons are the spotlight together — confirmed against
+                EnablePackageAgenticButton's own visible={!isTerminal} that a track can still be
+                added after starting the other, right up until this track's own outcome is final. */}
+            {isChoose && (
+              <p className="mb-3 text-xs text-ink-secondary">
+                Choose one to start: salary only, or the full package (salary + equity + benefits).
+                You can add the other track later, but only before this one finishes.
+              </p>
+            )}
+
+            <ActionPanels items={items} />
+          </>
+        )
+      })()}
+
+      <div>
+        {nextAction?.key === 'proof' ? (
+          <Card emphasis="spotlight" padding="lg">
+            <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
+            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+            <DisputesPanel
+              sessionId={sessionId}
+              token={token}
+              myActor="candidate"
+              view={view}
+              visible={Boolean(view && view.state === 'AGREED')}
+              disputesData={disputesData}
+              onChanged={refresh}
+            />
+          </Card>
+        ) : (
+          <>
+            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+            <DisputesPanel
+              sessionId={sessionId}
+              token={token}
+              myActor="candidate"
+              view={view}
+              visible={Boolean(view && view.state === 'AGREED')}
+              disputesData={disputesData}
+              onChanged={refresh}
+            />
+          </>
+        )}
       </div>
-    </div>
+    </PageShell>
   )
 }
