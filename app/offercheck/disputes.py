@@ -92,14 +92,20 @@ NOT touched by this module for the same reason: it only ever runs once, at
 the AGREED transition, strictly before any dispute can exist — wiring
 disputes into it would never actually surface a filed dispute in practice.
 
-**Not yet built, flagged rather than silently skipped:** dispute filing has
-no rate limit (app.offercheck.rate_limit covers every Claude-calling and
-griefing-prone endpoint in this vertical, but filing makes no external call
-and unlimited filing from either party is the intended behavior — a session
-can legitimately have many disputes — so this wasn't added by default; worth
-reconsidering if unbounded per-session storage growth becomes a real
-concern). There is also no adjudication workflow, no dispute-status field,
-and no notification when one is filed — all explicitly out of scope here.
+**Rate limiting.** Two layers, closing a gap explicitly flagged when this module was first built:
+  1. `MAX_DISPUTES_PER_PARTY_PER_SESSION` (below) — a hard, per-session, per-party cap enforced here
+     in file_dispute(), independent of IP or any general rate limiter. This is the primary defense
+     for this endpoint specifically: the real risk is one party spamming disputes on a *single*
+     negotiation (harassment/noise directed at a counterparty), not raw request volume across the
+     API — a generic per-IP limit alone wouldn't stop that, since it has no notion of which session
+     or which party a given request is scoped to.
+  2. `app.offercheck.rate_limit.check_dispute()` (`DISPUTE_LIMIT`, per-IP, applied in routes.py
+     exactly like every other write endpoint in this vertical) — the general backstop against a
+     self-issued-token script filing disputes across many sessions, same rationale as
+     `rate_limit.MOVE_LIMIT` for employer_move/candidate_move.
+
+**Still not built, flagged rather than silently skipped:** no adjudication workflow, no dispute-status
+field, and no notification when one is filed — all explicitly out of scope here.
 """
 import hashlib
 import json
@@ -122,6 +128,14 @@ if TYPE_CHECKING:
 # read, not just a hint injected into an LLM prompt.
 EVIDENCE_MAX_LENGTH = 1000
 
+# Hard cap on how many disputes a single party may file on a single session —
+# see this module's "Rate limiting" docstring section above for why this is
+# the primary defense here (a per-session-per-party limit, not just a generic
+# per-IP request-rate cap): the real risk is one party spamming disputes on
+# one negotiation, which a raw request-rate limit alone wouldn't scope to.
+# Named constant, not a magic number, so it's easy to tune later.
+MAX_DISPUTES_PER_PARTY_PER_SESSION = 3
+
 # The only two fields an "outcome" dispute may reference — both are the
 # external signals this vertical actually computes (see module docstring).
 # Deliberately not "any attested field": agreed_price is self-reported, not
@@ -141,6 +155,10 @@ class SessionNotAgreed(DisputeError):
 
 
 class NotAParty(DisputeError):
+    pass
+
+
+class DisputeLimitExceeded(DisputeError):
     pass
 
 
@@ -192,6 +210,13 @@ def file_dispute(
 
     if filed_by not in ("candidate", "employer"):
         raise NotAParty(f"{filed_by!r} is not a party to this session")
+
+    existing_count = sum(1 for d in session.disputes if d.filed_by == filed_by)
+    if existing_count >= MAX_DISPUTES_PER_PARTY_PER_SESSION:
+        raise DisputeLimitExceeded(
+            f"{filed_by} has already filed {existing_count} disputes on this session "
+            f"(limit {MAX_DISPUTES_PER_PARTY_PER_SESSION} per party per session)"
+        )
 
     if dispute_type == "outcome":
         if not referenced_field:

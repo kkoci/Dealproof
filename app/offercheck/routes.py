@@ -285,6 +285,8 @@ def _handle_dispute_error(exc: disputes.DisputeError) -> None:
         raise HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, disputes.NotAParty):
         raise HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, disputes.DisputeLimitExceeded):
+        raise HTTPException(status_code=429, detail=str(exc))
     raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -764,7 +766,7 @@ def _dispute_summary(d) -> DisputeSummary:
 
 
 @router.post("/sessions/{session_id}/employer/dispute", response_model=DisputeSummary, status_code=201)
-async def file_employer_dispute(session_id: str, body: FileDisputeRequest) -> DisputeSummary:
+async def file_employer_dispute(session_id: str, body: FileDisputeRequest, request: Request) -> DisputeSummary:
     """
     Employer's side of filing a dispute against this session's already-AGREED
     outcome — see app.offercheck.disputes module docstring for the full design
@@ -772,7 +774,14 @@ async def file_employer_dispute(session_id: str, body: FileDisputeRequest) -> Di
     market_percentile, and why this is deliberately NOT wired to the existing
     reopen mechanism). Flag-only: filing never changes session.state or any
     already-attested field.
+
+    Rate-limited two ways: the per-IP backstop below (same mechanism/pattern as
+    employer_move/candidate_move — see rate_limit.check_move's docstring), and
+    the per-session-per-party cap enforced inside disputes.file_dispute() itself
+    (disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION) — see that module's "Rate
+    limiting" docstring section for why both layers exist.
     """
+    rate_limit.check_dispute(request)
     session = _get_session_or_404(session_id)
     if body.token != session.employer_token:
         raise HTTPException(status_code=403, detail="invalid employer token")
@@ -787,8 +796,9 @@ async def file_employer_dispute(session_id: str, body: FileDisputeRequest) -> Di
 
 
 @router.post("/sessions/{session_id}/candidate/dispute", response_model=DisputeSummary, status_code=201)
-async def file_candidate_dispute(session_id: str, body: FileDisputeRequest) -> DisputeSummary:
+async def file_candidate_dispute(session_id: str, body: FileDisputeRequest, request: Request) -> DisputeSummary:
     """Candidate's counterpart to file_employer_dispute — see that docstring."""
+    rate_limit.check_dispute(request)
     session = _get_session_or_404(session_id)
     if body.token != session.candidate_token:
         raise HTTPException(status_code=403, detail="invalid candidate token")

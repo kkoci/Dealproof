@@ -67,6 +67,15 @@ BULK_VERIFY_LIMIT = 3        # /company/verify/bulk calls per IP per hour — de
                                # sessions/hour/IP) independent of the plain /sessions bucket,
                                # closing "many session/token pairs with zero backstop" without
                                # breaking the documented "up to 50 per call" feature.
+DISPUTE_LIMIT = 10           # employer/dispute + candidate/dispute calls per IP per hour — same
+                               # "no Claude cost, backstop against a self-issued-token script" family
+                               # as MOVE_LIMIT, but its own bucket rather than sharing MOVE_LIMIT's:
+                               # dispute filing and move-spam are different usage shapes (see
+                               # app.offercheck.disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION, which
+                               # already hard-caps *legitimate* per-session filing at 3/party — this
+                               # per-IP limit only needs to guard against a script filing disputes
+                               # across many self-issued sessions, not a real high-frequency human
+                               # workflow the way MOVE_LIMIT's looser 20/hour is calibrated for).
 
 _session_create_hits: dict[str, list[float]] = defaultdict(list)
 _agentic_call_hits: dict[str, list[float]] = defaultdict(list)
@@ -75,6 +84,7 @@ _parse_offer_letter_hits: dict[str, list[float]] = defaultdict(list)
 _move_hits: dict[str, list[float]] = defaultdict(list)
 _company_register_hits: dict[str, list[float]] = defaultdict(list)
 _bulk_verify_hits: dict[str, list[float]] = defaultdict(list)
+_dispute_hits: dict[str, list[float]] = defaultdict(list)
 
 
 def reset() -> None:
@@ -86,6 +96,7 @@ def reset() -> None:
     _move_hits.clear()
     _company_register_hits.clear()
     _bulk_verify_hits.clear()
+    _dispute_hits.clear()
 
 
 def client_ip(request: Request) -> str:
@@ -138,3 +149,7 @@ def check_company_register(request: Request) -> None:
 
 def check_bulk_verify(request: Request) -> None:
     _check(_bulk_verify_hits, client_ip(request), BULK_VERIFY_LIMIT)
+
+
+def check_dispute(request: Request) -> None:
+    _check(_dispute_hits, client_ip(request), DISPUTE_LIMIT)

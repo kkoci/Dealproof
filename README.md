@@ -266,11 +266,11 @@ tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company 
 tests/test_offercheck_agentic.py 24 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value exposure boundary, PATCH enable-agentic endpoints, HTTP e2e
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 35 tests — vertical/hr-offer-check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, HTTP e2e
-tests/test_offercheck_rate_limit.py 10 tests — vertical/hr-offer-check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
+tests/test_offercheck_rate_limit.py 26 tests — vertical/hr-offer-check: per-IP limits (incl. dispute), X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 10 tests — vertical/hr-offer-check: employer-initiated invite lifecycle (create -> unclaimed status -> join -> normal Session), company-auth gating, double-claim rejection
 tests/test_offercheck_approval.py 31 tests — vertical/hr-offer-check: PENDING_APPROVAL both-approve/decline-wins/reopen/stalemate transitions, package-mode parity, HTTP e2e
-tests/test_offercheck_disputes.py 23 tests — vertical/hr-offer-check: dispute/contest surface (process/outcome filing, rejections, no already-attested-field
-                                              mutation, decoupled from reopen, disputes_view, multi-dispute coexistence), HTTP e2e
+tests/test_offercheck_disputes.py 28 tests — vertical/hr-offer-check: dispute/contest surface (process/outcome filing, rejections, per-session-per-party
+                                              dispute cap, no already-attested-field mutation, decoupled from reopen, disputes_view, multi-dispute coexistence), HTTP e2e
 tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
 tests/test_devcred_rate_limit.py  5 tests — /evaluate 3/hr + /ingest 10/hr per-IP limits, daily 50/day hard stop, counter DB layer
 ```
@@ -1153,6 +1153,7 @@ Dealproof/
 | OC-26 | Opening-offer delta tracking — `Session.opening_employer_offer` (snapshotted once, on the employer's first counter) + `negotiation.final_gap_pct()`, folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
 | OC-27 | External market comparator — `app/offercheck/integrations/market_data.py` (BLS OEWS (US) + ONS ASHE (UK), free/public, cached, never raises; replaces an earlier PayScale attempt — sales-gated, not viable) + `negotiation.market_percentile()`, fetched once at `AGREED` (`routes.py::_maybe_attest`), folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
 | OC-28 | Dispute/contest surface — `app/offercheck/disputes.py` (`Dispute` model in `store.py`, `file_dispute()`, `disputes_view()`); AGREED-only, process/outcome types, outcome disputes grounded in `final_gap_pct`/`market_percentile`, deliberately decoupled from the reopen mechanism; `POST .../employer\|candidate/dispute`, `GET .../disputes` | ✅ Complete |
+| OC-29 | Rate limiting on the dispute routes — closes the gap flagged in OC-28: `disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION = 3` (hard per-session-per-party cap, enforced in `file_dispute()`) + `rate_limit.check_dispute()` (`DISPUTE_LIMIT`/IP/hour, same mechanism as `check_move`) | ✅ Complete |
 | **Dev Credential** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
@@ -1255,7 +1256,11 @@ free-form dissatisfaction — and that field must actually have a value on this 
 and is **deliberately not wired to the existing reopen mechanism** (the `request_more_rounds` path
 inside approval-vote resolution) — letting a dispute cheaply trigger a reopen would hand either party
 a free do-over button on an outcome they'd already agreed to, undermining the premise that an AGREED,
-attested outcome is actually settled. `GET /sessions/{id}/disputes?token=...` returns the live dispute
+attested outcome is actually settled. Rate-limited two ways: a hard, per-session, per-party cap
+(`disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION = 3`, enforced inside `file_dispute()` — the real risk
+is one party spamming disputes on a single negotiation, which a generic per-IP limit alone can't scope
+to) plus the same general per-IP backstop `employer_move`/`candidate_move` already use
+(`rate_limit.check_dispute()`, its own bucket). `GET /sessions/{id}/disputes?token=...` returns the live dispute
 list (hash-stamped per entry) alongside the original attested fields — a separate view from
 `GET .../attest`, since disputes are filed after that original quote already exists and can't
 retroactively join it. Acting on a filed dispute today is a manual process, not new code: an operator

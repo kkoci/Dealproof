@@ -160,6 +160,21 @@ def test_check_bulk_verify_blocks_over_limit():
     assert "429" in str(exc_info.value) or getattr(exc_info.value, "status_code", None) == 429
 
 
+def test_check_dispute_allows_up_to_limit():
+    req = _FakeRequest()
+    for _ in range(rate_limit.DISPUTE_LIMIT):
+        rate_limit.check_dispute(req)  # should not raise
+
+
+def test_check_dispute_blocks_over_limit():
+    req = _FakeRequest()
+    for _ in range(rate_limit.DISPUTE_LIMIT):
+        rate_limit.check_dispute(req)
+    with pytest.raises(Exception) as exc_info:
+        rate_limit.check_dispute(req)
+    assert "429" in str(exc_info.value) or getattr(exc_info.value, "status_code", None) == 429
+
+
 # ---------------------------------------------------------------------------
 # HTTP e2e
 # ---------------------------------------------------------------------------
@@ -265,6 +280,29 @@ def test_candidate_move_rate_limited_over_http(client):
     blocked = client.post(
         f"/api/offercheck/sessions/{session_id}/candidate/move",
         json={"token": candidate_token, "move": "accept"},
+    )
+    assert blocked.status_code == 429
+
+
+def test_employer_dispute_rate_limited_over_http(client):
+    """Same pattern as test_candidate_move_rate_limited_over_http — the per-IP
+    check runs before token auth, so invalid-token calls still consume budget.
+    This is the general per-IP backstop (rate_limit.DISPUTE_LIMIT); the
+    per-session-per-party cap (disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION) is
+    a separate, tighter mechanism covered in tests/test_offercheck_disputes.py."""
+    submit = client.post("/api/offercheck/sessions", json=_submit_body())
+    session_id = submit.json()["session_id"]
+
+    for _ in range(rate_limit.DISPUTE_LIMIT):
+        resp = client.post(
+            f"/api/offercheck/sessions/{session_id}/employer/dispute",
+            json={"token": "wrong", "dispute_type": "process", "evidence": "x"},
+        )
+        assert resp.status_code == 403
+
+    blocked = client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/dispute",
+        json={"token": "wrong", "dispute_type": "process", "evidence": "x"},
     )
     assert blocked.status_code == 429
 

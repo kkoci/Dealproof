@@ -156,6 +156,60 @@ def test_dispute_filed_by_non_party_is_rejected():
         disputes.file_dispute(session, filed_by="mediator", dispute_type="process", evidence="Not a real party.")
 
 
+# ---------------------------------------------------------------------------
+# Per-session-per-party dispute cap (MAX_DISPUTES_PER_PARTY_PER_SESSION)
+# ---------------------------------------------------------------------------
+
+def test_filing_up_to_the_cap_succeeds_each_time():
+    session = _agreed_session()
+    for i in range(disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION):
+        dispute = disputes.file_dispute(session, filed_by="candidate", dispute_type="process", evidence=f"Complaint number {i}.")
+        assert dispute in session.disputes
+    assert len(session.disputes) == disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION
+
+
+def test_filing_over_the_cap_is_rejected():
+    session = _agreed_session()
+    for i in range(disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION):
+        disputes.file_dispute(session, filed_by="candidate", dispute_type="process", evidence=f"Complaint number {i}.")
+    with pytest.raises(disputes.DisputeLimitExceeded):
+        disputes.file_dispute(session, filed_by="candidate", dispute_type="process", evidence="One too many.")
+    # the rejected attempt was never recorded
+    assert len(session.disputes) == disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION
+
+
+def test_cap_is_per_party_not_shared_across_the_session():
+    """The employer hitting their cap must not block the candidate from filing
+    their own disputes on the same session, and vice versa."""
+    session = _agreed_session()
+    for i in range(disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION):
+        disputes.file_dispute(session, filed_by="employer", dispute_type="process", evidence=f"Employer complaint {i}.")
+    with pytest.raises(disputes.DisputeLimitExceeded):
+        disputes.file_dispute(session, filed_by="employer", dispute_type="process", evidence="Employer over cap.")
+
+    # Candidate's own bucket is completely untouched.
+    for i in range(disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION):
+        dispute = disputes.file_dispute(session, filed_by="candidate", dispute_type="process", evidence=f"Candidate complaint {i}.")
+        assert dispute in session.disputes
+    assert len(session.disputes) == 2 * disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION
+
+
+def test_cap_is_per_session_not_shared_across_sessions():
+    """The same party filing up to their cap on one session must not affect
+    their ability to file on a completely different session."""
+    session_a = _agreed_session()
+    session_b = _agreed_session()
+    for i in range(disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION):
+        disputes.file_dispute(session_a, filed_by="candidate", dispute_type="process", evidence=f"Complaint {i} on A.")
+    with pytest.raises(disputes.DisputeLimitExceeded):
+        disputes.file_dispute(session_a, filed_by="candidate", dispute_type="process", evidence="Over cap on A.")
+
+    # Session B's bucket for the same party is untouched.
+    dispute_b = disputes.file_dispute(session_b, filed_by="candidate", dispute_type="process", evidence="First complaint on B.")
+    assert dispute_b in session_b.disputes
+    assert len(session_b.disputes) == 1
+
+
 def test_dispute_on_non_agreed_session_is_rejected():
     session = _new_session()
     negotiation.set_employer_band(session, 155_000, 175_000, 195_000)
@@ -427,3 +481,28 @@ def test_e2e_outcome_dispute_rejects_missing_referenced_field(client):
         json={"token": ids["employer_token"], "dispute_type": "outcome", "evidence": "Bad outcome."},
     )
     assert resp.status_code == 400
+
+
+def test_e2e_dispute_over_per_session_cap_returns_429(client):
+    ids = _negotiate_to_agreed(client)
+    session_id, employer_token = ids["session_id"], ids["employer_token"]
+
+    for i in range(disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION):
+        resp = client.post(
+            f"/api/offercheck/sessions/{session_id}/employer/dispute",
+            json={"token": employer_token, "dispute_type": "process", "evidence": f"Complaint {i}."},
+        )
+        assert resp.status_code == 201
+
+    blocked = client.post(
+        f"/api/offercheck/sessions/{session_id}/employer/dispute",
+        json={"token": employer_token, "dispute_type": "process", "evidence": "One too many."},
+    )
+    assert blocked.status_code == 429
+
+    # the candidate's own bucket on the same session is untouched
+    candidate_resp = client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/dispute",
+        json={"token": ids["candidate_token"], "dispute_type": "process", "evidence": "Candidate's own complaint."},
+    )
+    assert candidate_resp.status_code == 201

@@ -229,7 +229,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (434 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+## Test Suite (442 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
 
 The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
 assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
@@ -258,13 +258,14 @@ tests/test_offercheck_phase3.py 34   Offer Check: company auth, credential, bill
 tests/test_offercheck_agentic.py 25  Offer Check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value-exposure boundary, PATCH enable-agentic endpoints, query-token param rename regression, HTTP e2e
 tests/test_offercheck_demo_auth.py 23  Offer Check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e
 tests/test_offercheck_package.py 43  Offer Check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, PATCH enable-agentic-package endpoints, converged_hint field, HTTP e2e
-tests/test_offercheck_rate_limit.py 23  Offer Check: per-IP limits (session-create, agentic-call, provenance-verify, parse-offer-letter, move, company-register, bulk-verify), X-Forwarded-For handling, independent buckets, HTTP e2e 429s
+tests/test_offercheck_rate_limit.py 26  Offer Check: per-IP limits (session-create, agentic-call, provenance-verify, parse-offer-letter, move, company-register, bulk-verify, dispute), X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 12  Offer Check: employer-initiated invite lifecycle (create → unclaimed status → join → normal Session),
                                       company-auth gating, double-claim rejection, sealed agentic floor pass-through
 tests/test_offercheck_approval.py 31  Offer Check: PENDING_APPROVAL resolution rule (both-approve/decline-wins/reopen/stalemate),
                                       reopen turn-assignment, opening_employer_offer survives a reopen untouched, package-mode parity, HTTP e2e
-tests/test_offercheck_disputes.py 23  Offer Check: dispute/contest surface — valid process/outcome filings, rejections (no/unavailable/unknown
-                                      referenced_field, non-party filer, non-AGREED session, empty/oversized evidence), filing never mutates
+tests/test_offercheck_disputes.py 28  Offer Check: dispute/contest surface — valid process/outcome filings, rejections (no/unavailable/unknown
+                                      referenced_field, non-party filer, non-AGREED session, empty/oversized evidence), per-session-per-party
+                                      dispute cap (up-to-cap succeeds, over-cap rejects, per-party/per-session independence), filing never mutates
                                       already-attested fields or reopen-mechanism fields, disputes_view, multiple disputes both types/parties, HTTP e2e
 ```
 
@@ -783,12 +784,31 @@ free text in an in-memory, never-pruned list; validated in `file_dispute()` itse
 Pydantic schema layer) so it's exercised the same way whether called via HTTP or directly, matching
 `apply_move()`'s own convention of putting real validation in the logic layer.
 
-**Not yet built, flagged rather than silently skipped:** no rate limit on dispute filing (unlike every
-Claude-calling or griefing-prone endpoint elsewhere in this vertical — filing makes no external call
-and unlimited filing from either party is the intended behavior, so this wasn't added by default; the
-in-memory, never-pruned storage growth is a real consideration if this becomes a concern), no
-adjudication workflow or dispute-status field, no notification when one is filed, and no frontend
-wiring (this pass is backend-only, matching the task's explicit scope).
+**Rate limiting — two layers, closing a gap explicitly flagged when this module was first built** (the
+two dispute routes had no rate limit at all, unlike `employer_move`/`candidate_move`):
+  1. **`disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION = 3`** — a hard, per-session, per-party cap
+     enforced inside `file_dispute()` itself (counts existing `session.disputes` entries with a
+     matching `filed_by` before appending a new one; raises `DisputeLimitExceeded`, mapped to HTTP
+     429 in `_handle_dispute_error`). This is the primary defense for this endpoint specifically:
+     the real risk is one party spamming disputes on a *single* negotiation (harassment/noise
+     directed at a counterparty), not raw request volume across the whole API — a generic per-IP
+     limit alone has no notion of which session or which party a given request is scoped to, so it
+     can't stop that on its own. Named constant, kept in `disputes.py` (not `routes.py`) specifically
+     so the cap stays testable without going through HTTP, and easy to tune later.
+  2. **`rate_limit.check_dispute()`** (`DISPUTE_LIMIT = 10`/IP/hour, its own bucket — not shared with
+     `MOVE_LIMIT`, following this module's own one-bucket-per-endpoint-family convention) — applied
+     as the first line of both dispute routes, byte-for-byte the same pattern as
+     `rate_limit.check_move(request)` in `employer_move`/`candidate_move`: `app.offercheck.rate_limit`
+     is a plain in-memory, per-IP, fixed-1-hour-window inline check (no middleware, no decorator) —
+     see that module's own docstring for why (a self-issued-token script can otherwise create
+     sessions and act on them with zero real credential). This is the general backstop against a
+     script filing disputes across many self-issued sessions, sidestepping the per-session cap above;
+     it isn't calibrated for a legitimate high-frequency human workflow the way `MOVE_LIMIT`'s looser
+     20/hour is — disputes are a rare, post-`AGREED` action, not a per-round back-and-forth.
+
+**Still not built, flagged rather than silently skipped:** no adjudication workflow or dispute-status
+field, no notification when one is filed, and no frontend wiring (this pass is backend-only, matching
+the task's explicit scope).
 
 **PDF parsing (Phase 2) is a draft prefill, not a data source:** `POST /parse-offer-letter` returns
 `ExtractedOfferFields` (schemas.py) — a deliberately *unvalidated* shape (`base_salary` can be `0`)
