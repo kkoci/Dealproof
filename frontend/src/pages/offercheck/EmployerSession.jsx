@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { getEnclaveAttestation, offercheckEmployerApproval, offercheckEmployerApprovalPackage, offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckEnableEmployerPackageAgentic, offercheckGetAttestation, offercheckGetCredential, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage } from '../../api.js'
+import { getEnclaveAttestation, offercheckEmployerApproval, offercheckEmployerApprovalPackage, offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckEnableEmployerPackageAgentic, offercheckFileEmployerDispute, offercheckGetAttestation, offercheckGetCredential, offercheckGetDisputes, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckUpdateEmployerDisputeStatus } from '../../api.js'
 
 const SENIORITY_LABEL = { junior: 'Junior', mid: 'Mid-level', senior: 'Senior', staff: 'Staff+' }
 
@@ -20,6 +20,44 @@ function formatPackageValue(field, value) {
 }
 
 const POLL_MS = 1500
+
+// Dispute/contest surface (see app.offercheck.disputes) — mirrors that module's own constants/
+// transition table exactly, so the UI never offers an action the backend would reject.
+const DISPUTE_EVIDENCE_MAX_LENGTH = 1000 // app.offercheck.disputes.EVIDENCE_MAX_LENGTH
+const DISPUTE_TYPE_LABEL = { process: 'Process', outcome: 'Outcome' }
+const DISPUTE_STATUS_LABEL = { OPEN: 'Open', UNDER_REVIEW: 'Under review', RESOLVED: 'Resolved', DISMISSED: 'Dismissed' }
+const DISPUTE_STATUS_BADGE = {
+  OPEN: 'bg-sealed-subtle text-sealed-text',
+  UNDER_REVIEW: 'bg-teal-subtle text-teal-text',
+  RESOLVED: 'bg-success-subtle text-success-text',
+  DISMISSED: 'bg-bg-elevated text-neutral',
+}
+// app.offercheck.disputes._VALID_TRANSITIONS: OPEN -> {UNDER_REVIEW, DISMISSED}, UNDER_REVIEW ->
+// {RESOLVED, DISMISSED}; RESOLVED/DISMISSED are terminal (no further transitions offered).
+const DISPUTE_NEXT_TRANSITIONS = { OPEN: ['UNDER_REVIEW', 'DISMISSED'], UNDER_REVIEW: ['RESOLVED', 'DISMISSED'], RESOLVED: [], DISMISSED: [] }
+const TRANSITION_BUTTON_LABEL = { UNDER_REVIEW: 'Mark under review', RESOLVED: 'Mark resolved', DISMISSED: 'Dismiss' }
+const OUTCOME_FIELD_LABEL = { final_gap_pct: 'Price movement from opening offer', market_percentile: 'Market percentile' }
+
+function ordinal(n) {
+  const rounded = Math.round(n)
+  const mod100 = Math.abs(rounded) % 100
+  if (mod100 >= 11 && mod100 <= 13) return `${rounded}th`
+  switch (Math.abs(rounded) % 10) {
+    case 1: return `${rounded}st`
+    case 2: return `${rounded}nd`
+    case 3: return `${rounded}rd`
+    default: return `${rounded}th`
+  }
+}
+
+function formatTimestamp(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  } catch {
+    return iso
+  }
+}
 
 const STATE_LABEL = {
   PENDING_EMPLOYER: 'Your turn',
@@ -405,6 +443,324 @@ function PackageRoundHistory({ history }) {
           </tr>
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Two attested external anchors, shown once AGREED — final_gap_pct (relative: did the price move
+// from the employer's opening counter) and market_percentile (absolute: is the price sane against
+// real external salary data). Both can be null on a perfectly normal session (no opening-counter
+// anchor if the employer accepted immediately; no market data if the BLS/ONS lookup never matched
+// this role) — rendered as a clear "unavailable" state rather than hidden or left blank. No source
+// (BLS/ONS) is exposed anywhere in the attested payload, so this deliberately doesn't claim one.
+function AttestedMetrics({ finalGapPct, marketPercentile }) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-2">
+      <div
+        className="px-3 py-2 rounded-lg bg-bg-elevated border border-border"
+        title="How far the final price moved from the employer's very first counter-offer — an anchor the negotiating agent never controlled."
+      >
+        <p className="text-[10px] uppercase tracking-wide text-ink-muted mb-0.5">Movement from opening offer</p>
+        {finalGapPct != null ? (
+          <p className="text-sm font-mono font-semibold text-ink-primary">
+            {finalGapPct > 0 ? '+' : ''}{finalGapPct.toFixed(1)}% from opening offer
+          </p>
+        ) : (
+          <p className="text-xs text-ink-muted italic">No opening-counter anchor on this session</p>
+        )}
+      </div>
+      <div
+        className="px-3 py-2 rounded-lg bg-bg-elevated border border-border"
+        title="Where the agreed price falls against real external salary data for this role — an independent market comparator, computed once when the session agreed."
+      >
+        <p className="text-[10px] uppercase tracking-wide text-ink-muted mb-0.5">Market comparator</p>
+        {marketPercentile != null ? (
+          <p className="text-sm font-mono font-semibold text-ink-primary">{ordinal(marketPercentile)} percentile</p>
+        ) : (
+          <p className="text-xs text-ink-muted italic">Market data unavailable for this role</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// One filed dispute — evidence, status, resolution note if present, and (if the dispute isn't
+// already terminal) the buttons to advance it. Either party may act on either side's dispute, per
+// app.offercheck.disputes' own actor gating (dismissing your own concern or acknowledging the
+// other side's are both legitimate unilateral actions; RESOLVED is unilateral in this pass too —
+// a documented judgment call, not a bug, see that module's docstring).
+function DisputeRow({ sessionId, token, myActor, dispute, onChanged }) {
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState(null)
+  const [note, setNote] = useState('')
+
+  const updateFn = myActor === 'employer' ? offercheckUpdateEmployerDisputeStatus : offercheckUpdateCandidateDisputeStatus
+  const nextOptions = DISPUTE_NEXT_TRANSITIONS[dispute.status] || []
+
+  const transition = async (newStatus) => {
+    setErr(null)
+    setSubmitting(true)
+    try {
+      await updateFn(sessionId, dispute.dispute_id, { token, new_status: newStatus, resolution_note: note.trim() || undefined })
+      setNote('')
+      onChanged?.()
+    } catch (e) {
+      setErr(e.message || 'Could not update this dispute')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="p-3 rounded-lg border border-border bg-bg-elevated/40 space-y-2">
+      <div className="flex items-center justify-between flex-wrap gap-1.5">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">{DISPUTE_TYPE_LABEL[dispute.dispute_type]}</span>
+          <span className="text-ink-muted text-xs">·</span>
+          <span className="text-xs text-ink-muted">filed by {dispute.filed_by === myActor ? 'you' : dispute.filed_by === 'employer' ? 'employer' : 'candidate'}</span>
+        </div>
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${DISPUTE_STATUS_BADGE[dispute.status] || 'bg-bg-elevated text-neutral'}`}>
+          {DISPUTE_STATUS_LABEL[dispute.status] || dispute.status}
+        </span>
+      </div>
+
+      {dispute.referenced_field && (
+        <p className="text-[11px] text-ink-muted">References: {OUTCOME_FIELD_LABEL[dispute.referenced_field] || dispute.referenced_field}</p>
+      )}
+
+      <p className="text-xs text-ink-primary leading-relaxed whitespace-pre-wrap">{dispute.evidence}</p>
+
+      {dispute.resolution_note && (
+        <p className="text-xs text-ink-muted italic border-t border-border pt-2">Resolution note: {dispute.resolution_note}</p>
+      )}
+
+      <p className="text-[10px] text-ink-muted">
+        Filed {formatTimestamp(dispute.filed_at)}
+        {dispute.resolved_at ? ` · Resolved ${formatTimestamp(dispute.resolved_at)}` : ''}
+      </p>
+
+      {nextOptions.length > 0 && (
+        <div className="pt-2 border-t border-border space-y-2">
+          <input
+            className={`${inputClass} text-xs py-1.5`}
+            placeholder="Optional note…"
+            value={note}
+            maxLength={DISPUTE_EVIDENCE_MAX_LENGTH}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <div className="flex gap-2">
+            {nextOptions.map((status) => (
+              <button
+                key={status}
+                type="button"
+                disabled={submitting}
+                onClick={() => transition(status)}
+                className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors ${
+                  status === 'RESOLVED'
+                    ? 'bg-success hover:bg-success-hover text-white'
+                    : status === 'DISMISSED'
+                    ? 'bg-transparent border border-border-strong text-ink-secondary hover:bg-bg-elevated'
+                    : 'bg-teal-subtle border border-teal-border text-teal-text hover:bg-teal-subtle/70'
+                }`}
+              >
+                {submitting ? '…' : TRANSITION_BUTTON_LABEL[status]}
+              </button>
+            ))}
+          </div>
+          {err && <p className="text-[11px] text-danger">{err}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Filing form — collapsed to a single button until opened, matching EnableAgenticButton's own
+// collapsed/expanded pattern on this page. Only ever rendered when session state is AGREED (see
+// visible prop below), matching the backend's own SessionNotAgreed rejection rule, so the action
+// is never even offered when it would just error. Outcome disputes gate their referenced_field
+// options on the live SessionView's own final_gap_pct/market_percentile — no separate fetch needed
+// for that check, since SessionView already carries both fields once AGREED.
+function FileDisputeForm({ sessionId, token, myActor, view, visible, onFiled }) {
+  const [open, setOpen] = useState(false)
+  const [disputeType, setDisputeType] = useState('process')
+  const [referencedField, setReferencedField] = useState('')
+  const [evidence, setEvidence] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState(null)
+
+  if (!visible) return null
+
+  const fileFn = myActor === 'employer' ? offercheckFileEmployerDispute : offercheckFileCandidateDispute
+  const finalGapAvailable = view?.final_gap_pct != null
+  const marketPercentileAvailable = view?.market_percentile != null
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setErr(null)
+    setSubmitting(true)
+    try {
+      await fileFn(sessionId, {
+        token,
+        dispute_type: disputeType,
+        evidence,
+        referenced_field: disputeType === 'outcome' ? (referencedField || null) : null,
+      })
+      setOpen(false)
+      setEvidence('')
+      setReferencedField('')
+      setDisputeType('process')
+      onFiled?.()
+    } catch (e) {
+      setErr({ message: e.message, status: e.status })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="mt-4">
+        <button
+          onClick={() => setOpen(true)}
+          className="w-full px-4 py-2.5 rounded-lg bg-transparent border-[1.5px] border-border-strong text-ink-secondary text-sm font-medium hover:bg-bg-elevated transition-colors"
+        >
+          File a dispute
+        </button>
+        <p className="mt-1.5 text-xs text-ink-muted">
+          Disagree with how this went, or with the result itself? File a dispute — it's recorded alongside the attestation, it never reopens the negotiation on its own.
+        </p>
+      </div>
+    )
+  }
+
+  const isRateLimited = err?.status === 429
+  const overSessionCap = isRateLimited && /per party per session/i.test(err.message || '')
+
+  return (
+    <form onSubmit={submit} className="mt-4 p-5 rounded-xl bg-bg-surface border border-border space-y-3">
+      <p className="text-sm font-medium text-ink-primary">File a dispute</p>
+      <p className="text-xs text-ink-muted">
+        This is a flag for a human to review — filing never changes the outcome or reopens negotiation on its own.
+      </p>
+
+      <div>
+        <label className={labelClass}>Dispute type</label>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => { setDisputeType('process'); setReferencedField('') }}
+            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${disputeType === 'process' ? 'bg-teal text-white border-teal' : 'bg-transparent border-border-strong text-ink-secondary hover:bg-bg-elevated'}`}
+          >
+            Process
+          </button>
+          <button
+            type="button"
+            onClick={() => setDisputeType('outcome')}
+            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${disputeType === 'outcome' ? 'bg-teal text-white border-teal' : 'bg-transparent border-border-strong text-ink-secondary hover:bg-bg-elevated'}`}
+          >
+            Outcome
+          </button>
+        </div>
+        <p className="mt-1.5 text-[11px] text-ink-muted">
+          {disputeType === 'process'
+            ? "The record doesn't match what happened, or a stated rule wasn't followed."
+            : 'The negotiated result itself seems unfair — grounded in an attested figure below, not just a feeling.'}
+        </p>
+      </div>
+
+      {disputeType === 'outcome' && (
+        <div>
+          <label className={labelClass}>Which attested figure?</label>
+          <div className="space-y-1.5">
+            <label className={`flex items-center gap-2 text-xs ${finalGapAvailable ? 'text-ink-primary cursor-pointer' : 'text-ink-muted/50 cursor-not-allowed'}`}>
+              <input
+                type="radio"
+                name="referenced_field"
+                disabled={!finalGapAvailable}
+                checked={referencedField === 'final_gap_pct'}
+                onChange={() => setReferencedField('final_gap_pct')}
+              />
+              Price movement from opening offer{!finalGapAvailable && ' — not available on this session'}
+            </label>
+            <label className={`flex items-center gap-2 text-xs ${marketPercentileAvailable ? 'text-ink-primary cursor-pointer' : 'text-ink-muted/50 cursor-not-allowed'}`}>
+              <input
+                type="radio"
+                name="referenced_field"
+                disabled={!marketPercentileAvailable}
+                checked={referencedField === 'market_percentile'}
+                onChange={() => setReferencedField('market_percentile')}
+              />
+              Market percentile{!marketPercentileAvailable && ' — not available on this session'}
+            </label>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className={labelClass}>Evidence / reasoning</label>
+        <textarea
+          className={`${inputClass} min-h-[90px]`}
+          value={evidence}
+          maxLength={DISPUTE_EVIDENCE_MAX_LENGTH}
+          onChange={(e) => setEvidence(e.target.value)}
+          placeholder="Explain what happened, with specifics (round numbers, dates, quoted terms)."
+          required
+        />
+        <p className="mt-1 text-[11px] text-ink-muted text-right">{evidence.length} / {DISPUTE_EVIDENCE_MAX_LENGTH}</p>
+      </div>
+
+      {err && (
+        isRateLimited ? (
+          <p className="text-xs text-sealed-text bg-sealed-subtle border border-sealed-border rounded-lg px-3 py-2">
+            {overSessionCap ? "You've reached the dispute limit for this session (3 per party)." : 'Rate limit reached — try again in a bit.'}
+          </p>
+        ) : (
+          <p className="text-xs text-danger">{err.message}</p>
+        )
+      )}
+
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={submitting || !evidence.trim() || (disputeType === 'outcome' && !referencedField)}
+          className="flex-1 px-4 py-2 rounded-lg bg-teal hover:bg-teal-hover text-white text-sm font-semibold disabled:opacity-50 transition-colors"
+        >
+          {submitting ? 'Filing…' : 'File dispute'}
+        </button>
+        <button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-lg bg-bg-elevated hover:bg-border text-ink-secondary text-sm transition-colors">
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
+// Container: filing form + the live dispute list. Visually secondary by design — plain bordered
+// card (no spotlight treatment), placed after AttestationPanel at the bottom of the page. Only
+// ever visible when session.state === 'AGREED' specifically (not just any terminal state, and not
+// packageActive/activeState) — disputes are scoped to the scalar outcome per
+// app.offercheck.disputes, exactly matching disputesData's own {agreed_price, final_gap_pct,
+// market_percentile} fields.
+function DisputesPanel({ sessionId, token, myActor, view, visible, disputesData, onChanged }) {
+  if (!visible) return null
+  const list = disputesData?.disputes || []
+
+  return (
+    <div className="mt-4 p-5 rounded-xl bg-bg-surface border border-border">
+      <p className="text-xs font-semibold text-ink-secondary uppercase tracking-wide mb-1">Disputes</p>
+      <p className="text-xs text-ink-muted mb-2">
+        A record of any concerns either side has raised about this outcome — visible to both parties.
+      </p>
+
+      {list.length > 0 && (
+        <div className="space-y-2 mb-2">
+          {list.map((d) => (
+            <DisputeRow key={d.dispute_id} sessionId={sessionId} token={token} myActor={myActor} dispute={d} onChanged={onChanged} />
+          ))}
+        </div>
+      )}
+
+      <FileDisputeForm sessionId={sessionId} token={token} myActor={myActor} view={view} visible onFiled={onChanged} />
     </div>
   )
 }
@@ -874,6 +1230,7 @@ export default function EmployerSession() {
   const [bandGap, setBandGap] = useState(null)
   const [counterValue, setCounterValue] = useState('')
   const [acting, setActing] = useState(false)
+  const [disputesData, setDisputesData] = useState(null)
   const pollRef = useRef(null)
 
   // Verify, then release: the enclave's own attestation (not the session/negotiation
@@ -899,6 +1256,18 @@ export default function EmployerSession() {
       const data = await offercheckGetSession(sessionId, token)
       setView(data)
       setError('')
+      // Piggybacked onto the same poll tick/interval, not a separate fetch loop — disputes are
+      // only fileable/relevant once the scalar state is AGREED specifically (see
+      // app.offercheck.disputes), and this way they never poll tighter than the main session poll.
+      // Non-fatal: a transient disputes-fetch failure must not break the main session poll.
+      if (data.state === 'AGREED') {
+        try {
+          const dv = await offercheckGetDisputes(sessionId, token)
+          setDisputesData(dv)
+        } catch {
+          // ignore — next poll tick will retry
+        }
+      }
     } catch (err) {
       setError(err.message || 'Could not load session')
     }
@@ -1096,6 +1465,10 @@ export default function EmployerSession() {
               <p className="text-sm text-success font-medium mb-4">
                 Agreed at ${view.agreed_price?.toLocaleString()}
               </p>
+            )}
+
+            {view.state === 'AGREED' && (
+              <AttestedMetrics finalGapPct={view.final_gap_pct} marketPercentile={view.market_percentile} />
             )}
 
             <RoundHistory history={view.history} myActor="employer" />
@@ -1350,6 +1723,15 @@ export default function EmployerSession() {
             <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
           )}
           <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+          <DisputesPanel
+            sessionId={sessionId}
+            token={token}
+            myActor="employer"
+            view={view}
+            visible={Boolean(view && view.state === 'AGREED')}
+            disputesData={disputesData}
+            onChanged={refresh}
+          />
         </div>
       </div>
     </div>

@@ -23,7 +23,12 @@ async function request(path, options = {}) {
     } catch {
       // ignore parse errors
     }
-    throw new Error(errorMessage)
+    const err = new Error(errorMessage)
+    // Attached so callers can distinguish e.g. a 429 (rate limit / per-session dispute cap) from
+    // other failures without message-sniffing — added for the dispute-filing UI, but generally
+    // useful; existing callers that only read `.message` are unaffected.
+    err.status = res.status
+    throw err
   }
 
   return res.json()
@@ -45,7 +50,9 @@ async function requestMultipart(path, formData) {
     } catch {
       // ignore parse errors
     }
-    throw new Error(errorMessage)
+    const err = new Error(errorMessage)
+    err.status = res.status
+    throw err
   }
 
   return res.json()
@@ -406,6 +413,78 @@ export function offercheckGetCredential(sessionId, { token, apiKey } = {}) {
     return request(`/api/offercheck/sessions/${sessionId}/credential`, { headers: { 'X-API-Key': apiKey } })
   }
   return request(`/api/offercheck/sessions/${sessionId}/credential?token=${encodeURIComponent(token)}`)
+}
+
+// ---------------------------------------------------------------------------
+// Dispute/contest surface (see app.offercheck.disputes) — filed against an
+// already-AGREED session. Follows the same employer/X vs candidate/X split-
+// route convention as every other actor-scoped write in this vertical.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/offercheck/sessions/:id/employer/dispute
+ * @param {string} sessionId
+ * @param {{ token: string, dispute_type: 'process'|'outcome', evidence: string, referenced_field?: 'final_gap_pct'|'market_percentile'|null }} body
+ * @returns {Promise<object>} DisputeSummary
+ */
+export function offercheckFileEmployerDispute(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/dispute`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/offercheck/sessions/:id/candidate/dispute
+ * @param {string} sessionId
+ * @param {{ token: string, dispute_type: 'process'|'outcome', evidence: string, referenced_field?: 'final_gap_pct'|'market_percentile'|null }} body
+ * @returns {Promise<object>} DisputeSummary
+ */
+export function offercheckFileCandidateDispute(sessionId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/dispute`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * GET /api/offercheck/sessions/:id/disputes?token=... — live dispute list + original
+ * attested outcome fields. Either party's token works.
+ * @param {string} sessionId
+ * @param {string} token
+ * @returns {Promise<object>} DisputesView { session_id, state, agreed_price, final_gap_pct, market_percentile, disputes: DisputeSummary[] }
+ */
+export function offercheckGetDisputes(sessionId, token) {
+  return request(`/api/offercheck/sessions/${sessionId}/disputes?token=${encodeURIComponent(token)}`)
+}
+
+/**
+ * PATCH /api/offercheck/sessions/:id/employer/dispute/:disputeId — move a dispute through its
+ * lightweight status lifecycle (OPEN -> UNDER_REVIEW -> RESOLVED, OPEN/UNDER_REVIEW -> DISMISSED).
+ * @param {string} sessionId
+ * @param {string} disputeId
+ * @param {{ token: string, new_status: 'OPEN'|'UNDER_REVIEW'|'RESOLVED'|'DISMISSED', resolution_note?: string }} body
+ * @returns {Promise<object>} DisputeSummary
+ */
+export function offercheckUpdateEmployerDisputeStatus(sessionId, disputeId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/employer/dispute/${disputeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * PATCH /api/offercheck/sessions/:id/candidate/dispute/:disputeId — candidate's counterpart
+ * @param {string} sessionId
+ * @param {string} disputeId
+ * @param {{ token: string, new_status: 'OPEN'|'UNDER_REVIEW'|'RESOLVED'|'DISMISSED', resolution_note?: string }} body
+ * @returns {Promise<object>} DisputeSummary
+ */
+export function offercheckUpdateCandidateDisputeStatus(sessionId, disputeId, body) {
+  return request(`/api/offercheck/sessions/${sessionId}/candidate/dispute/${disputeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
 }
 
 /**
