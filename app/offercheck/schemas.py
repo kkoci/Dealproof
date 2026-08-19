@@ -28,6 +28,8 @@ SessionState = Literal[
 ]
 Actor = Literal["candidate", "employer"]
 ApprovalDecision = Literal["approve", "request_more_rounds", "decline"]
+DisputeType = Literal["process", "outcome"]
+OutcomeDisputeField = Literal["final_gap_pct", "market_percentile"]
 
 
 class CompetingOffer(BaseModel):
@@ -539,3 +541,48 @@ class PackageAgenticResult(BaseModel):
     attestation: str | None
     tee_attested: bool
     credential: PackageCredentialResponse | None = None
+
+
+# ---------------------------------------------------------------------------
+# Dispute/contest surface (see app.offercheck.disputes) — a claim filed
+# against an already-AGREED session's outcome. Two types: "process" (the
+# attested record doesn't match what the party experienced, or a stated
+# rule was violated) and "outcome" (the result itself is bad, grounded
+# against final_gap_pct or market_percentile — never free-form). filed_by
+# is never taken as request input; routes.py derives it from which
+# endpoint was called + token, same pattern as every other actor-scoped
+# write in this vertical (employer/move vs candidate/move, etc.).
+# ---------------------------------------------------------------------------
+
+class FileDisputeRequest(BaseModel):
+    token: str
+    dispute_type: DisputeType
+    evidence: str  # capped/validated in app.offercheck.disputes.file_dispute() — see EVIDENCE_MAX_LENGTH there
+    referenced_field: OutcomeDisputeField | None = None  # required for "outcome", must be None for "process"
+
+
+class DisputeSummary(BaseModel):
+    dispute_id: str
+    filed_by: Actor
+    dispute_type: DisputeType
+    evidence: str
+    referenced_field: OutcomeDisputeField | None = None
+    filed_at: str  # ISO-8601 UTC
+    dispute_hash: str  # SHA-256 over this record's fields — tamper-evident, NOT part of the original TDX report_data (see disputes.py docstring)
+
+
+class DisputesView(BaseModel):
+    """
+    Live view of a session's filed disputes alongside the original attested
+    outcome fields — see app.offercheck.disputes.disputes_view for why this
+    is a separate view from AttestationReceipt rather than folded into it.
+    Visible to either party regardless of who filed a given dispute — same
+    "evidence meant to be shown, not a negotiating position" precedent as
+    candidate_provenance_credential above.
+    """
+    session_id: str
+    state: SessionState
+    agreed_price: float | None
+    final_gap_pct: float | None
+    market_percentile: float | None
+    disputes: list[DisputeSummary]

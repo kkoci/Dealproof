@@ -23,6 +23,31 @@ class RoundEntry:
 
 
 @dataclass
+class Dispute:
+    """
+    A filed dispute against an AGREED session's outcome — see
+    app.offercheck.disputes module docstring for the full design (two
+    dispute types, why filing is decoupled from the reopen mechanism, why
+    this isn't folded into the original TDX quote). Additive and immutable
+    once filed: nothing in this module or elsewhere mutates a Dispute after
+    file_dispute() constructs it.
+
+    filed_by / dispute_type / referenced_field are plain str (not the
+    Literal types schemas.py defines for the API boundary) — same
+    dataclass-layer convention as RoundEntry.actor/move above; validation
+    happens in app.offercheck.disputes.file_dispute(), not at this layer.
+    """
+    dispute_id: str
+    session_id: str
+    filed_by: str  # "candidate" | "employer"
+    dispute_type: str  # "process" | "outcome"
+    evidence: str
+    referenced_field: str | None  # "final_gap_pct" | "market_percentile" for outcome disputes; None for process disputes
+    filed_at: str  # ISO-8601 UTC
+    dispute_hash: str  # SHA-256 over the fields above (sorted-keys JSON) — tamper-evident, not itself part of the original TDX report_data
+
+
+@dataclass
 class Session:
     id: str
     candidate_token: str
@@ -91,6 +116,11 @@ class Session:
     # mirrors from app.devcred's SeniorDevCredential schema.
     require_provenance_credential: bool = False
     candidate_provenance_credential: dict | None = None
+    # Dispute/contest surface (see app.offercheck.disputes) — additive, list-like: zero or more
+    # disputes, from either party, potentially of both types (process | outcome). Filing never
+    # mutates session.state or any already-attested field above; see that module's docstring for
+    # why this is deliberately decoupled from the approval-vote reopen mechanism.
+    disputes: list[Dispute] = field(default_factory=list)
 
 
 _SESSIONS: dict[str, Session] = {}

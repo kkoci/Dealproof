@@ -268,7 +268,9 @@ tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC to
 tests/test_offercheck_package.py 35 tests — vertical/hr-offer-check: total_comp formula, hard clamps, package turn-order, reasoning-never-crosses-boundary, convergence hint, package credential, package-state SessionView sync, HTTP e2e
 tests/test_offercheck_rate_limit.py 10 tests — vertical/hr-offer-check: per-IP limits, X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 10 tests — vertical/hr-offer-check: employer-initiated invite lifecycle (create -> unclaimed status -> join -> normal Session), company-auth gating, double-claim rejection
-tests/test_offercheck_approval.py 29 tests — vertical/hr-offer-check: PENDING_APPROVAL both-approve/decline-wins/reopen/stalemate transitions, package-mode parity, HTTP e2e
+tests/test_offercheck_approval.py 31 tests — vertical/hr-offer-check: PENDING_APPROVAL both-approve/decline-wins/reopen/stalemate transitions, package-mode parity, HTTP e2e
+tests/test_offercheck_disputes.py 23 tests — vertical/hr-offer-check: dispute/contest surface (process/outcome filing, rejections, no already-attested-field
+                                              mutation, decoupled from reopen, disputes_view, multi-dispute coexistence), HTTP e2e
 tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
 tests/test_devcred_rate_limit.py  5 tests — /evaluate 3/hr + /ingest 10/hr per-IP limits, daily 50/day hard stop, counter DB layer
 ```
@@ -1150,6 +1152,7 @@ Dealproof/
 | OC-25 | Fold Dev Credential's git-verification capability into Offer Check's flow as a pre-negotiation step | 🔜 Pending (insertion point proposed, not yet built) |
 | OC-26 | Opening-offer delta tracking — `Session.opening_employer_offer` (snapshotted once, on the employer's first counter) + `negotiation.final_gap_pct()`, folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
 | OC-27 | External market comparator — `app/offercheck/integrations/market_data.py` (BLS OEWS (US) + ONS ASHE (UK), free/public, cached, never raises; replaces an earlier PayScale attempt — sales-gated, not viable) + `negotiation.market_percentile()`, fetched once at `AGREED` (`routes.py::_maybe_attest`), folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
+| OC-28 | Dispute/contest surface — `app/offercheck/disputes.py` (`Dispute` model in `store.py`, `file_dispute()`, `disputes_view()`); AGREED-only, process/outcome types, outcome disputes grounded in `final_gap_pct`/`market_percentile`, deliberately decoupled from the reopen mechanism; `POST .../employer\|candidate/dispute`, `GET .../disputes` | ✅ Complete |
 | **Dev Credential** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
@@ -1239,6 +1242,25 @@ unmapped role, no network access, rate-limited, or timed-out all degrade to `mar
 while the session still reaches `AGREED` and still attests normally — same non-fatal resilience
 pattern as memory/πCreds/Auditor/DKIM elsewhere in this repo. As with `opening_employer_offer`, only
 the derived percentile is attested — the raw fetched salary range is never persisted or exposed.
+
+**Dispute/contest surface** (`app/offercheck/disputes.py`) — flagged independently by Andrew Miller's
+eight-move governance framework ("no formal dispute/contest surface") and by Gil Rosen ("is
+negotiation fair if one agent is smarter"). Either party may file a dispute against an **AGREED**
+session's outcome: `POST /sessions/{id}/employer/dispute` or `.../candidate/dispute`,
+`{ token, dispute_type: "process"|"outcome", evidence, referenced_field }`. A **process** dispute
+claims the attested record doesn't match what happened; an **outcome** dispute claims the result
+itself is bad and must name `referenced_field` as `final_gap_pct` or `market_percentile` — never
+free-form dissatisfaction — and that field must actually have a value on this session. Filing is
+**flag-only**: it never changes `session.state`, `agreed_price`, or any other already-attested field,
+and is **deliberately not wired to the existing reopen mechanism** (the `request_more_rounds` path
+inside approval-vote resolution) — letting a dispute cheaply trigger a reopen would hand either party
+a free do-over button on an outcome they'd already agreed to, undermining the premise that an AGREED,
+attested outcome is actually settled. `GET /sessions/{id}/disputes?token=...` returns the live dispute
+list (hash-stamped per entry) alongside the original attested fields — a separate view from
+`GET .../attest`, since disputes are filed after that original quote already exists and can't
+retroactively join it. Acting on a filed dispute today is a manual process, not new code: an operator
+reviews the evidence against the session's existing data. See CLAUDE.md's Offer Check Architecture
+section for the full design rationale, including why no new session state was added.
 
 Frontend: `/offercheck` (landing), `/offercheck/new` (candidate submit + PDF upload), `/offercheck/candidate/:id`,
 `/offercheck/employer/:id` — each session page shows an attestation receipt panel once the session closes.

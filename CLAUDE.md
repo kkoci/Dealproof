@@ -156,6 +156,7 @@ app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opa
 app/offercheck/invites.py     EmployerInvite in-memory store — employer-initiated negotiation, pending until a candidate claims it (see "Employer-Initiated Invites" below)
 app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
 app/offercheck/credential.py  OfferVerifiedCredential + PackageCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
+app/offercheck/disputes.py    Dispute/contest surface — file_dispute(), disputes_view(); AGREED-only, flag-only, deliberately decoupled from the reopen mechanism
 app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
 app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub),
@@ -228,7 +229,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (411 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+## Test Suite (434 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
 
 The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
 assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
@@ -262,6 +263,9 @@ tests/test_offercheck_invites.py 12  Offer Check: employer-initiated invite life
                                       company-auth gating, double-claim rejection, sealed agentic floor pass-through
 tests/test_offercheck_approval.py 31  Offer Check: PENDING_APPROVAL resolution rule (both-approve/decline-wins/reopen/stalemate),
                                       reopen turn-assignment, opening_employer_offer survives a reopen untouched, package-mode parity, HTTP e2e
+tests/test_offercheck_disputes.py 23  Offer Check: dispute/contest surface — valid process/outcome filings, rejections (no/unavailable/unknown
+                                      referenced_field, non-party filer, non-AGREED session, empty/oversized evidence), filing never mutates
+                                      already-attested fields or reopen-mechanism fields, disputes_view, multiple disputes both types/parties, HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -710,6 +714,81 @@ calling `market_percentile()` again — it has no `MarketRange` to pass and must
 the derived percentile is ever attested or exposed — the raw fetched `p25/p50/p75` range (and which
 source/currency answered) is never persisted on `Session` at all, same privacy discipline as
 `opening_employer_offer` never appearing in `attested_terms()` raw.
+
+**Dispute/contest surface (`app/offercheck/disputes.py`):** flagged independently by Andrew Miller's
+eight-move governance framework ("no formal dispute/contest surface") and by Gil Rosen ("is
+negotiation fair if one agent is smarter") — both pointing at the same gap: an AGREED, attested
+outcome had no way for either party to formally register disagreement with it. Built as a new module,
+not an addition to `negotiation.py` — that module's own docstring scopes it to the revision-loop state
+machine specifically, and every other capability layered on a closed session already gets its own
+module here (`credential.py`, `provenance.py`, `package.py`); disputes follow that same boundary.
+
+Two dispute types: **"process"** (the attested record doesn't match what the party experienced, or a
+stated rule was violated — e.g. a stated floor wasn't respected, a round was miscounted) and
+**"outcome"** (the result itself is claimed unfair). Outcome disputes must reference one of the two
+external signals this vertical already computes — `final_gap_pct` or `market_percentile` — never
+free-form dissatisfaction: `disputes.file_dispute()` requires `referenced_field` to be one of exactly
+those two names, and that field must have a non-`None` value on this session (you can't dispute
+`market_percentile` against a session where the BLS/ONS lookup never succeeded). `agreed_price` is
+deliberately not a valid `referenced_field` — it's the self-reported outcome number itself, not an
+external anchor; disputing it would collapse this into the exact "vague complaint text" bucket the
+design explicitly rejects. Fileable **only** on an `AGREED` session — there's no settled outcome to
+contest before an agreement exists, and no `agreed_price` for an outcome dispute to be grounded
+against on any other terminal state (`WALKAWAY`/`EXPIRED`/`DECLINED`/`STALEMATE`). No new session
+state is added (no `DISPUTED` state) — there's no precedent in this codebase for a state that exists
+purely to block, and filing is a flag recorded alongside an unmodified `session.state`, not a
+transition.
+
+**Filing is flag-only, deliberately decoupled from the existing reopen mechanism**
+(`negotiation._resolve_approval`'s `request_more_rounds` path, `extension_count`/`max_rounds`).
+`file_dispute()` never touches those fields and never calls into the approval-vote machinery — this
+is the single most important constraint in this module. The incentive-exploit reasoning, stated
+explicitly rather than left implicit: if filing a dispute could cheaply trigger a reopen, either party
+could use it as a free do-over button on an outcome they'd already agreed to — filing costs nothing
+and nothing stops it being repeated, which would quietly undermine the entire premise that an AGREED,
+attested outcome is actually settled. A dispute is documented justification a human reviews; **acting**
+on one, today, is a manual process note, not new code: an operator reads the evidence and the
+session's existing attested data side by side, and — if warranted — manually coordinates a fresh
+negotiation out-of-band. There is currently no "reopen an AGREED session" endpoint at all (the
+existing reopen path only fires from within `PENDING_APPROVAL` vote resolution, before AGREED); this
+module doesn't add one, on purpose.
+
+**Filing never mutates any already-attested field.** `agreed_price`, `final_gap_pct`,
+`market_percentile`, and every hash in `negotiation.attested_terms()` are read, never written, by
+`file_dispute()` — purely additive, appended to `session.disputes`. Disputes are also **not** folded
+into the original TDX quote: `credential_hash` gets embedded in `report_data` because
+`compute_credential()` runs *before* `sign_result()` at the same `AGREED`-transition moment, but
+disputes are filed *after* that moment (`session.attestation` is set exactly once, at `AGREED`,
+before any dispute could exist — `_maybe_attest` is idempotent and never re-fires). Wiring disputes
+into `negotiation.attested_terms()` itself was considered and rejected for the same timing reason —
+that function only ever runs once, strictly before any dispute can exist, so it would never actually
+surface one. Instead, each `Dispute` (see `store.py`) carries its own `dispute_hash` (SHA-256 over its
+disclosed fields, sorted-keys JSON — same discipline as `credential_hash`), and a separate live view,
+`disputes.disputes_view()` (`GET /sessions/{id}/disputes`), returns the current dispute list alongside
+the original attested outcome fields. A verifier gets two honest, separately-verifiable things instead
+of one quote silently redefined after filing: the original TDX quote (`GET /sessions/{id}/attest`, as
+it stood at `AGREED`) and the live, hash-stamped dispute list layered on top of it.
+
+Endpoints follow this vertical's established per-actor-route convention exactly (`employer/move` vs.
+`candidate/move`, `employer/approval` vs. `candidate/approval`) rather than one shared endpoint with a
+client-declared actor field: `POST /sessions/{id}/employer/dispute` and
+`POST /sessions/{id}/candidate/dispute` each validate the token against that side's own token and
+derive `filed_by` server-side — never trusted from the request body, same principle this file's own
+module docstring states for every other endpoint ("token is never trusted to also declare which party
+it is"). `GET /sessions/{id}/disputes` is a single shared read endpoint, visible to either party
+regardless of who filed a given dispute, same "evidence meant to be shown, not a negotiating position"
+precedent as `candidate_provenance_credential`. Evidence is capped at `disputes.EVIDENCE_MAX_LENGTH`
+(1000 chars, ~150-200 words) — enough room for a specific explanation without becoming unbounded
+free text in an in-memory, never-pruned list; validated in `file_dispute()` itself (not just at the
+Pydantic schema layer) so it's exercised the same way whether called via HTTP or directly, matching
+`apply_move()`'s own convention of putting real validation in the logic layer.
+
+**Not yet built, flagged rather than silently skipped:** no rate limit on dispute filing (unlike every
+Claude-calling or griefing-prone endpoint elsewhere in this vertical — filing makes no external call
+and unlimited filing from either party is the intended behavior, so this wasn't added by default; the
+in-memory, never-pruned storage growth is a real consideration if this becomes a concern), no
+adjudication workflow or dispute-status field, no notification when one is filed, and no frontend
+wiring (this pass is backend-only, matching the task's explicit scope).
 
 **PDF parsing (Phase 2) is a draft prefill, not a data source:** `POST /parse-offer-letter` returns
 `ExtractedOfferFields` (schemas.py) — a deliberately *unvalidated* shape (`base_salary` can be `0`)

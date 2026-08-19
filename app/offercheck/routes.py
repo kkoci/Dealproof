@@ -21,6 +21,9 @@ Endpoints:
   POST /sessions/{id}/employer/approval           employer's counterpart to the above
   POST /sessions/{id}/candidate/approval-package  package-mode counterpart (package_state == PENDING_APPROVAL)
   POST /sessions/{id}/employer/approval-package   employer's counterpart to the above
+  POST /sessions/{id}/employer/dispute    file a process|outcome dispute against an AGREED session (app.offercheck.disputes)
+  POST /sessions/{id}/candidate/dispute   candidate's counterpart to the above
+  GET  /sessions/{id}/disputes            live dispute list + original attested outcome fields (?token=..., either party)
   PATCH /sessions/{id}/candidate/enable-agentic  seal candidate_floor any time pre-terminal (not just at creation)
   PATCH /sessions/{id}/employer/enable-agentic   seal employer_authority_limit any time pre-terminal (after band is set)
   GET  /sessions/{id}                     viewer-scoped status poll (?token=...)
@@ -55,7 +58,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, demo_auth, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
+from app.offercheck import auth, billing, credential, demo_auth, disputes, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, market_data, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -84,6 +87,8 @@ from app.offercheck.schemas import (
     DcapVerification,
     DemoLinkRequest,
     DemoLinkResponse,
+    DisputesView,
+    DisputeSummary,
     EmployerBandRequest,
     EmployerBandResponse,
     EmployerEnableAgenticRequest,
@@ -91,6 +96,7 @@ from app.offercheck.schemas import (
     EmployerInviteRequest,
     EmployerInviteResponse,
     ExtractedOfferFields,
+    FileDisputeRequest,
     InviteStatusResponse,
     MoveRequest,
     OfferLetterExtraction,
@@ -271,6 +277,14 @@ def _handle_negotiation_error(exc: negotiation.OfferCheckError) -> None:
         raise HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, negotiation.ProvenanceCredentialRequired):
         raise HTTPException(status_code=412, detail=str(exc))
+    raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _handle_dispute_error(exc: disputes.DisputeError) -> None:
+    if isinstance(exc, disputes.SessionNotAgreed):
+        raise HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, disputes.NotAParty):
+        raise HTTPException(status_code=403, detail=str(exc))
     raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -735,6 +749,79 @@ async def candidate_approval_package(session_id: str, body: ApprovalVoteRequest)
     await _maybe_attest_package(session)
     await _maybe_notify_package(session)
     return _view_for(session, "candidate")
+
+
+def _dispute_summary(d) -> DisputeSummary:
+    return DisputeSummary(
+        dispute_id=d.dispute_id,
+        filed_by=d.filed_by,
+        dispute_type=d.dispute_type,
+        evidence=d.evidence,
+        referenced_field=d.referenced_field,
+        filed_at=d.filed_at,
+        dispute_hash=d.dispute_hash,
+    )
+
+
+@router.post("/sessions/{session_id}/employer/dispute", response_model=DisputeSummary, status_code=201)
+async def file_employer_dispute(session_id: str, body: FileDisputeRequest) -> DisputeSummary:
+    """
+    Employer's side of filing a dispute against this session's already-AGREED
+    outcome — see app.offercheck.disputes module docstring for the full design
+    (two dispute types, why outcome disputes must reference final_gap_pct or
+    market_percentile, and why this is deliberately NOT wired to the existing
+    reopen mechanism). Flag-only: filing never changes session.state or any
+    already-attested field.
+    """
+    session = _get_session_or_404(session_id)
+    if body.token != session.employer_token:
+        raise HTTPException(status_code=403, detail="invalid employer token")
+    try:
+        dispute = disputes.file_dispute(
+            session, filed_by="employer", dispute_type=body.dispute_type,
+            evidence=body.evidence, referenced_field=body.referenced_field,
+        )
+    except disputes.DisputeError as exc:
+        _handle_dispute_error(exc)
+    return _dispute_summary(dispute)
+
+
+@router.post("/sessions/{session_id}/candidate/dispute", response_model=DisputeSummary, status_code=201)
+async def file_candidate_dispute(session_id: str, body: FileDisputeRequest) -> DisputeSummary:
+    """Candidate's counterpart to file_employer_dispute — see that docstring."""
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+    try:
+        dispute = disputes.file_dispute(
+            session, filed_by="candidate", dispute_type=body.dispute_type,
+            evidence=body.evidence, referenced_field=body.referenced_field,
+        )
+    except disputes.DisputeError as exc:
+        _handle_dispute_error(exc)
+    return _dispute_summary(dispute)
+
+
+@router.get("/sessions/{session_id}/disputes", response_model=DisputesView)
+async def get_disputes_route(session_id: str, token: str) -> DisputesView:
+    """
+    Live dispute list for a session, visible to either party regardless of
+    who filed — same "evidence meant to be shown, not a negotiating position"
+    precedent as candidate_provenance_credential (see SessionView). See
+    app.offercheck.disputes.disputes_view for why this is a separate view
+    from GET .../attest rather than folded into it.
+    """
+    session = _get_session_or_404(session_id)
+    _resolve_viewer(session, token)  # either party may view; which one isn't used further
+    view = disputes.disputes_view(session)
+    return DisputesView(
+        session_id=view["session_id"],
+        state=view["state"],
+        agreed_price=view["agreed_price"],
+        final_gap_pct=view["final_gap_pct"],
+        market_percentile=view["market_percentile"],
+        disputes=[DisputeSummary(**d) for d in view["disputes"]],
+    )
 
 
 @router.patch("/sessions/{session_id}/candidate/enable-agentic", response_model=SessionView)
