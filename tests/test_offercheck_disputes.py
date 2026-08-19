@@ -344,6 +344,188 @@ def test_multiple_disputes_of_both_types_from_both_parties_coexist():
 
 
 # ---------------------------------------------------------------------------
+# Lightweight status lifecycle (update_dispute_status)
+# ---------------------------------------------------------------------------
+
+def _filed(session, filed_by="candidate"):
+    return disputes.file_dispute(session, filed_by=filed_by, dispute_type="process", evidence="Something happened.")
+
+
+def test_valid_transition_open_to_under_review():
+    session = _agreed_session()
+    d = _filed(session)
+    updated = disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    assert updated.status == "UNDER_REVIEW"
+    assert updated.resolved_at is None  # non-terminal transition
+
+
+def test_valid_transition_open_to_dismissed():
+    session = _agreed_session()
+    d = _filed(session)
+    updated = disputes.update_dispute_status(
+        session, dispute_id=d.dispute_id, actor="employer", new_status="DISMISSED", resolution_note="Not a real issue.",
+    )
+    assert updated.status == "DISMISSED"
+    assert updated.resolution_note == "Not a real issue."
+    assert updated.resolved_at is not None
+
+
+def test_valid_transition_under_review_to_resolved():
+    session = _agreed_session()
+    d = _filed(session)
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="candidate", new_status="UNDER_REVIEW")
+    updated = disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="candidate", new_status="RESOLVED")
+    assert updated.status == "RESOLVED"
+    assert updated.resolved_at is not None
+
+
+def test_valid_transition_under_review_to_dismissed():
+    session = _agreed_session()
+    d = _filed(session)
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    updated = disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="DISMISSED")
+    assert updated.status == "DISMISSED"
+    assert updated.resolved_at is not None
+
+
+def test_transition_straight_to_resolved_without_under_review_is_rejected():
+    session = _agreed_session()
+    d = _filed(session)
+    with pytest.raises(disputes.InvalidDisputeTransition):
+        disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="RESOLVED")
+
+
+def test_transition_on_already_resolved_dispute_is_rejected():
+    session = _agreed_session()
+    d = _filed(session)
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="candidate", new_status="UNDER_REVIEW")
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="candidate", new_status="RESOLVED")
+    with pytest.raises(disputes.InvalidDisputeTransition):
+        disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="candidate", new_status="UNDER_REVIEW")
+
+
+def test_transition_on_already_dismissed_dispute_is_rejected():
+    session = _agreed_session()
+    d = _filed(session)
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="DISMISSED")
+    with pytest.raises(disputes.InvalidDisputeTransition):
+        disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    with pytest.raises(disputes.InvalidDisputeTransition):
+        disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="RESOLVED")
+
+
+def test_transition_by_non_party_is_rejected():
+    session = _agreed_session()
+    d = _filed(session)
+    with pytest.raises(disputes.NotAParty):
+        disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="mediator", new_status="UNDER_REVIEW")
+
+
+def test_transition_on_unknown_dispute_id_is_rejected():
+    session = _agreed_session()
+    _filed(session)
+    with pytest.raises(disputes.DisputeNotFound):
+        disputes.update_dispute_status(session, dispute_id="does-not-exist", actor="employer", new_status="UNDER_REVIEW")
+
+
+def test_oversized_resolution_note_is_rejected():
+    session = _agreed_session()
+    d = _filed(session)
+    with pytest.raises(disputes.InvalidResolutionNote):
+        disputes.update_dispute_status(
+            session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW",
+            resolution_note="x" * (disputes.EVIDENCE_MAX_LENGTH + 1),
+        )
+
+
+def test_either_party_may_move_a_dispute_filed_by_the_other_side():
+    """Default assumption confirmed: either party, regardless of who filed, may
+    move a dispute to UNDER_REVIEW or DISMISSED."""
+    session = _agreed_session()
+    d = _filed(session, filed_by="candidate")
+    updated = disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="DISMISSED")
+    assert updated.status == "DISMISSED"
+
+
+def test_either_party_may_mark_resolved_unilaterally():
+    """The documented judgment call: no 'both parties agree' gate for RESOLVED
+    in this pass — either party, alone, may resolve."""
+    session = _agreed_session()
+    d = _filed(session, filed_by="employer")
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    # The FILER (employer) resolves unilaterally — the candidate never voted or was asked.
+    updated = disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="RESOLVED")
+    assert updated.status == "RESOLVED"
+
+
+def test_status_update_does_not_touch_session_state_or_negotiation_fields():
+    """Mirrors the equivalent regression test for filing itself — status
+    changes must be exactly as decoupled from session.state/reopen as filing."""
+    session = _agreed_session(market_percentile=42.0)
+    d = _filed(session)
+    original_state = session.state
+    original_agreed_price = session.agreed_price
+    original_final_gap_pct = negotiation.final_gap_pct(session)
+    original_market_percentile = session.market_percentile
+    original_extension_count = session.extension_count
+    original_max_rounds = session.max_rounds
+    original_candidate_vote = session.candidate_approval_vote
+    original_employer_vote = session.employer_approval_vote
+    original_terms = negotiation.attested_terms(session)
+
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="candidate", new_status="RESOLVED", resolution_note="Looked into it.")
+
+    assert session.state == original_state
+    assert session.agreed_price == original_agreed_price
+    assert negotiation.final_gap_pct(session) == original_final_gap_pct
+    assert session.market_percentile == original_market_percentile
+    assert session.extension_count == original_extension_count
+    assert session.max_rounds == original_max_rounds
+    assert session.candidate_approval_vote == original_candidate_vote
+    assert session.employer_approval_vote == original_employer_vote
+    assert negotiation.attested_terms(session) == original_terms
+
+
+def test_dispute_hash_unchanged_by_status_update():
+    """dispute_hash seals only the original filing fields — a status change
+    must not alter it (see disputes.py's dispute_hash discipline)."""
+    session = _agreed_session()
+    d = _filed(session)
+    original_hash = d.dispute_hash
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    assert d.dispute_hash == original_hash
+
+
+def test_resolved_at_only_set_on_terminal_transitions():
+    session = _agreed_session()
+    d = _filed(session)
+    assert d.resolved_at is None
+
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    assert d.resolved_at is None  # still non-terminal
+
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="RESOLVED")
+    assert d.resolved_at is not None
+
+
+def test_status_and_resolution_appear_in_disputes_view():
+    session = _agreed_session()
+    d = _filed(session)
+    disputes.update_dispute_status(session, dispute_id=d.dispute_id, actor="employer", new_status="UNDER_REVIEW")
+    disputes.update_dispute_status(
+        session, dispute_id=d.dispute_id, actor="candidate", new_status="RESOLVED", resolution_note="Confirmed, all good.",
+    )
+
+    view = disputes.disputes_view(session)
+    entry = view["disputes"][0]
+    assert entry["status"] == "RESOLVED"
+    assert entry["resolution_note"] == "Confirmed, all good."
+    assert entry["resolved_at"] == d.resolved_at
+    assert entry["resolved_at"] is not None
+
+
+# ---------------------------------------------------------------------------
 # HTTP e2e
 # ---------------------------------------------------------------------------
 
@@ -506,3 +688,79 @@ def test_e2e_dispute_over_per_session_cap_returns_429(client):
         json={"token": ids["candidate_token"], "dispute_type": "process", "evidence": "Candidate's own complaint."},
     )
     assert candidate_resp.status_code == 201
+
+
+def test_e2e_update_dispute_status_full_lifecycle(client):
+    ids = _negotiate_to_agreed(client)
+    session_id, candidate_token, employer_token = ids["session_id"], ids["candidate_token"], ids["employer_token"]
+
+    filed = client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/dispute",
+        json={"token": candidate_token, "dispute_type": "process", "evidence": "Round count seems off."},
+    )
+    assert filed.status_code == 201
+    dispute_id = filed.json()["dispute_id"]
+    assert filed.json()["status"] == "OPEN"
+
+    under_review = client.patch(
+        f"/api/offercheck/sessions/{session_id}/employer/dispute/{dispute_id}",
+        json={"token": employer_token, "new_status": "UNDER_REVIEW"},
+    )
+    assert under_review.status_code == 200
+    assert under_review.json()["status"] == "UNDER_REVIEW"
+    assert under_review.json()["resolved_at"] is None
+
+    resolved = client.patch(
+        f"/api/offercheck/sessions/{session_id}/employer/dispute/{dispute_id}",
+        json={"token": employer_token, "new_status": "RESOLVED", "resolution_note": "Confirmed round count is correct."},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "RESOLVED"
+    assert resolved.json()["resolution_note"] == "Confirmed round count is correct."
+    assert resolved.json()["resolved_at"] is not None
+
+    # reflected in the shared GET view too
+    view = client.get(f"/api/offercheck/sessions/{session_id}/disputes", params={"token": candidate_token})
+    assert view.status_code == 200
+    assert view.json()["disputes"][0]["status"] == "RESOLVED"
+
+
+def test_e2e_update_dispute_status_rejects_invalid_transition(client):
+    ids = _negotiate_to_agreed(client)
+    session_id, candidate_token, employer_token = ids["session_id"], ids["candidate_token"], ids["employer_token"]
+
+    filed = client.post(
+        f"/api/offercheck/sessions/{session_id}/candidate/dispute",
+        json={"token": candidate_token, "dispute_type": "process", "evidence": "Something."},
+    )
+    dispute_id = filed.json()["dispute_id"]
+
+    skip_ahead = client.patch(
+        f"/api/offercheck/sessions/{session_id}/employer/dispute/{dispute_id}",
+        json={"token": employer_token, "new_status": "RESOLVED"},
+    )
+    assert skip_ahead.status_code == 409
+
+
+def test_e2e_update_dispute_status_rejects_invalid_token(client):
+    ids = _negotiate_to_agreed(client)
+    filed = client.post(
+        f"/api/offercheck/sessions/{ids['session_id']}/candidate/dispute",
+        json={"token": ids["candidate_token"], "dispute_type": "process", "evidence": "Something."},
+    )
+    dispute_id = filed.json()["dispute_id"]
+
+    resp = client.patch(
+        f"/api/offercheck/sessions/{ids['session_id']}/employer/dispute/{dispute_id}",
+        json={"token": "wrong", "new_status": "UNDER_REVIEW"},
+    )
+    assert resp.status_code == 403
+
+
+def test_e2e_update_dispute_status_unknown_dispute_id_returns_404(client):
+    ids = _negotiate_to_agreed(client)
+    resp = client.patch(
+        f"/api/offercheck/sessions/{ids['session_id']}/employer/dispute/does-not-exist",
+        json={"token": ids["employer_token"], "new_status": "UNDER_REVIEW"},
+    )
+    assert resp.status_code == 404

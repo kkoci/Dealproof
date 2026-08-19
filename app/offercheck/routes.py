@@ -24,6 +24,8 @@ Endpoints:
   POST /sessions/{id}/employer/dispute    file a process|outcome dispute against an AGREED session (app.offercheck.disputes)
   POST /sessions/{id}/candidate/dispute   candidate's counterpart to the above
   GET  /sessions/{id}/disputes            live dispute list + original attested outcome fields (?token=..., either party)
+  PATCH /sessions/{id}/employer/dispute/{dispute_id}   move a dispute through its lightweight status lifecycle
+  PATCH /sessions/{id}/candidate/dispute/{dispute_id}  candidate's counterpart to the above
   PATCH /sessions/{id}/candidate/enable-agentic  seal candidate_floor any time pre-terminal (not just at creation)
   PATCH /sessions/{id}/employer/enable-agentic   seal employer_authority_limit any time pre-terminal (after band is set)
   GET  /sessions/{id}                     viewer-scoped status poll (?token=...)
@@ -107,6 +109,7 @@ from app.offercheck.schemas import (
     ProvenanceCredentialSummary,
     RoundSummary,
     SessionView,
+    UpdateDisputeStatusRequest,
     VerifyCredentialRequest,
     VerifyCredentialResponse,
     VerifyTokenResponse,
@@ -287,6 +290,10 @@ def _handle_dispute_error(exc: disputes.DisputeError) -> None:
         raise HTTPException(status_code=403, detail=str(exc))
     if isinstance(exc, disputes.DisputeLimitExceeded):
         raise HTTPException(status_code=429, detail=str(exc))
+    if isinstance(exc, disputes.DisputeNotFound):
+        raise HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, disputes.InvalidDisputeTransition):
+        raise HTTPException(status_code=409, detail=str(exc))
     raise HTTPException(status_code=400, detail=str(exc))
 
 
@@ -762,6 +769,9 @@ def _dispute_summary(d) -> DisputeSummary:
         referenced_field=d.referenced_field,
         filed_at=d.filed_at,
         dispute_hash=d.dispute_hash,
+        status=d.status,
+        resolution_note=d.resolution_note,
+        resolved_at=d.resolved_at,
     )
 
 
@@ -832,6 +842,52 @@ async def get_disputes_route(session_id: str, token: str) -> DisputesView:
         market_percentile=view["market_percentile"],
         disputes=[DisputeSummary(**d) for d in view["disputes"]],
     )
+
+
+@router.patch("/sessions/{session_id}/employer/dispute/{dispute_id}", response_model=DisputeSummary)
+async def update_employer_dispute_status(session_id: str, dispute_id: str, body: UpdateDisputeStatusRequest) -> DisputeSummary:
+    """
+    Employer's side of moving a dispute through its lightweight status
+    lifecycle — see app.offercheck.disputes module docstring's "Lightweight
+    status lifecycle" section for the valid transitions and the RESOLVED-gate
+    judgment call (either party may resolve unilaterally in this pass).
+
+    PATCH + split-by-party-route, not a single shared endpoint: this mirrors
+    PATCH .../employer/enable-agentic below — every actor-relevant write in
+    this vertical (moves, approvals, enable-agentic, dispute filing itself)
+    is split into an employer/candidate route pair rather than a shared
+    endpoint with a client-declared actor, and this is an update to an
+    existing resource (PATCH, like enable-agentic) rather than a new one
+    (POST, like filing itself). No new state is added to session/negotiation
+    — see disputes.update_dispute_status's own docstring.
+    """
+    session = _get_session_or_404(session_id)
+    if body.token != session.employer_token:
+        raise HTTPException(status_code=403, detail="invalid employer token")
+    try:
+        dispute = disputes.update_dispute_status(
+            session, dispute_id=dispute_id, actor="employer",
+            new_status=body.new_status, resolution_note=body.resolution_note,
+        )
+    except disputes.DisputeError as exc:
+        _handle_dispute_error(exc)
+    return _dispute_summary(dispute)
+
+
+@router.patch("/sessions/{session_id}/candidate/dispute/{dispute_id}", response_model=DisputeSummary)
+async def update_candidate_dispute_status(session_id: str, dispute_id: str, body: UpdateDisputeStatusRequest) -> DisputeSummary:
+    """Candidate's counterpart to update_employer_dispute_status — see that docstring."""
+    session = _get_session_or_404(session_id)
+    if body.token != session.candidate_token:
+        raise HTTPException(status_code=403, detail="invalid candidate token")
+    try:
+        dispute = disputes.update_dispute_status(
+            session, dispute_id=dispute_id, actor="candidate",
+            new_status=body.new_status, resolution_note=body.resolution_note,
+        )
+    except disputes.DisputeError as exc:
+        _handle_dispute_error(exc)
+    return _dispute_summary(dispute)
 
 
 @router.patch("/sessions/{session_id}/candidate/enable-agentic", response_model=SessionView)

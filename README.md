@@ -269,8 +269,10 @@ tests/test_offercheck_package.py 35 tests — vertical/hr-offer-check: total_com
 tests/test_offercheck_rate_limit.py 26 tests — vertical/hr-offer-check: per-IP limits (incl. dispute), X-Forwarded-For handling, independent buckets, HTTP e2e 429s
 tests/test_offercheck_invites.py 10 tests — vertical/hr-offer-check: employer-initiated invite lifecycle (create -> unclaimed status -> join -> normal Session), company-auth gating, double-claim rejection
 tests/test_offercheck_approval.py 31 tests — vertical/hr-offer-check: PENDING_APPROVAL both-approve/decline-wins/reopen/stalemate transitions, package-mode parity, HTTP e2e
-tests/test_offercheck_disputes.py 28 tests — vertical/hr-offer-check: dispute/contest surface (process/outcome filing, rejections, per-session-per-party
-                                              dispute cap, no already-attested-field mutation, decoupled from reopen, disputes_view, multi-dispute coexistence), HTTP e2e
+tests/test_offercheck_disputes.py 48 tests — vertical/hr-offer-check: dispute/contest surface (process/outcome filing, rejections, per-session-per-party
+                                              dispute cap, no already-attested-field mutation, decoupled from reopen, disputes_view, multi-dispute coexistence,
+                                              lightweight status lifecycle — valid/invalid transitions, terminal-dispute/non-party rejection, either-party
+                                              RESOLVED, no session/negotiation coupling, dispute_hash unchanged, resolved_at only on terminal), HTTP e2e
 tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
 tests/test_devcred_rate_limit.py  5 tests — /evaluate 3/hr + /ingest 10/hr per-IP limits, daily 50/day hard stop, counter DB layer
 ```
@@ -1154,6 +1156,7 @@ Dealproof/
 | OC-27 | External market comparator — `app/offercheck/integrations/market_data.py` (BLS OEWS (US) + ONS ASHE (UK), free/public, cached, never raises; replaces an earlier PayScale attempt — sales-gated, not viable) + `negotiation.market_percentile()`, fetched once at `AGREED` (`routes.py::_maybe_attest`), folded into `attested_terms()`, `AttestationReceipt`, `SessionView`, `AgenticResult` | ✅ Complete |
 | OC-28 | Dispute/contest surface — `app/offercheck/disputes.py` (`Dispute` model in `store.py`, `file_dispute()`, `disputes_view()`); AGREED-only, process/outcome types, outcome disputes grounded in `final_gap_pct`/`market_percentile`, deliberately decoupled from the reopen mechanism; `POST .../employer\|candidate/dispute`, `GET .../disputes` | ✅ Complete |
 | OC-29 | Rate limiting on the dispute routes — closes the gap flagged in OC-28: `disputes.MAX_DISPUTES_PER_PARTY_PER_SESSION = 3` (hard per-session-per-party cap, enforced in `file_dispute()`) + `rate_limit.check_dispute()` (`DISPUTE_LIMIT`/IP/hour, same mechanism as `check_move`) | ✅ Complete |
+| OC-30 | Lightweight dispute status lifecycle — partially closes the "no adjudication workflow" gap flagged in OC-28: `Dispute.status`/`resolution_note`/`resolved_at` (`store.py`) + `disputes.update_dispute_status()` (`OPEN → UNDER_REVIEW → RESOLVED`, `OPEN`/`UNDER_REVIEW` → `DISMISSED`, no auto-transitions, no session-state coupling); `PATCH .../employer\|candidate/dispute/{dispute_id}` | ✅ Complete |
 | **Dev Credential** | **product/dev-credential branch (merged into vertical/hr-offer-check 2026-07-18)** | |
 | DC-1 | Git ingestion + corpus hashing — `app/devcred/git_hasher.py` + `POST /api/devcred/ingest` | ✅ Complete |
 | DC-2 | GitAnalysisAgent (deterministic inspector + LLM evaluator) | ✅ Complete |
@@ -1266,6 +1269,21 @@ list (hash-stamped per entry) alongside the original attested fields — a separ
 retroactively join it. Acting on a filed dispute today is a manual process, not new code: an operator
 reviews the evidence against the session's existing data. See CLAUDE.md's Offer Check Architecture
 section for the full design rationale, including why no new session state was added.
+
+A filed dispute now carries a **lightweight status lifecycle**, closing part of the "no adjudication
+workflow" gap flagged when disputes were first added — deliberately only the lightweight part.
+`OPEN` (default) → `UNDER_REVIEW` → `RESOLVED`, or `OPEN`/`UNDER_REVIEW` → `DISMISSED` — no skipping
+straight to `RESOLVED`, no re-opening a terminal dispute, and **no automatic transitions of any kind**:
+status only ever changes via `PATCH /sessions/{id}/employer\|candidate/dispute/{dispute_id}`
+(`{ token, new_status, resolution_note }`), never a timer or escalation. Either party may move a
+dispute to `UNDER_REVIEW` or `DISMISSED`; `RESOLVED` is also unilateral in this pass — a documented
+judgment call, not a silent default (a "both parties agree" gate mirroring `AGREED`'s own approval
+votes was considered and rejected, since reusing that machinery would mean coupling disputes back to
+`session.state`/`PENDING_APPROVAL`, exactly what this module exists to avoid). None of this touches
+`session.state`, `extension_count`, `max_rounds`, or any approval-vote field. `resolution_note` is
+optional and shares `evidence`'s 1000-char cap; `resolved_at` is set only once, on the transition into
+a terminal status. `dispute_hash` is **not** recomputed on a status change — it still seals only the
+original filing. See CLAUDE.md's Offer Check Architecture section for the full lifecycle design.
 
 Frontend: `/offercheck` (landing), `/offercheck/new` (candidate submit + PDF upload), `/offercheck/candidate/:id`,
 `/offercheck/employer/:id` — each session page shows an attestation receipt panel once the session closes.

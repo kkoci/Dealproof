@@ -30,6 +30,7 @@ Actor = Literal["candidate", "employer"]
 ApprovalDecision = Literal["approve", "request_more_rounds", "decline"]
 DisputeType = Literal["process", "outcome"]
 OutcomeDisputeField = Literal["final_gap_pct", "market_percentile"]
+DisputeStatus = Literal["OPEN", "UNDER_REVIEW", "RESOLVED", "DISMISSED"]
 
 
 class CompetingOffer(BaseModel):
@@ -561,6 +562,20 @@ class FileDisputeRequest(BaseModel):
     referenced_field: OutcomeDisputeField | None = None  # required for "outcome", must be None for "process"
 
 
+class UpdateDisputeStatusRequest(BaseModel):
+    """
+    Moves a filed dispute through its lightweight status lifecycle — see
+    app.offercheck.disputes.update_dispute_status for the valid transitions
+    (OPEN -> UNDER_REVIEW -> RESOLVED, OPEN/UNDER_REVIEW -> DISMISSED) and
+    the RESOLVED-gate judgment call (either party may resolve unilaterally
+    in this pass). resolution_note is optional and capped/validated in
+    update_dispute_status() (same EVIDENCE_MAX_LENGTH cap as evidence).
+    """
+    token: str
+    new_status: DisputeStatus
+    resolution_note: str | None = None
+
+
 class DisputeSummary(BaseModel):
     dispute_id: str
     filed_by: Actor
@@ -568,7 +583,10 @@ class DisputeSummary(BaseModel):
     evidence: str
     referenced_field: OutcomeDisputeField | None = None
     filed_at: str  # ISO-8601 UTC
-    dispute_hash: str  # SHA-256 over this record's fields — tamper-evident, NOT part of the original TDX report_data (see disputes.py docstring)
+    dispute_hash: str  # SHA-256 over the ORIGINAL filing fields only — NOT recomputed on a status change, see disputes.py
+    status: DisputeStatus = "OPEN"
+    resolution_note: str | None = None
+    resolved_at: str | None = None  # ISO-8601 UTC — set only once status reaches RESOLVED or DISMISSED
 
 
 class DisputesView(BaseModel):

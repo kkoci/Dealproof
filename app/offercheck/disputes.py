@@ -92,6 +92,36 @@ NOT touched by this module for the same reason: it only ever runs once, at
 the AGREED transition, strictly before any dispute can exist — wiring
 disputes into it would never actually surface a filed dispute in practice.
 
+**Lightweight status lifecycle** (`update_dispute_status`) — a partial answer to "no adjudication
+workflow" above, deliberately staying lightweight: four statuses, `OPEN -> UNDER_REVIEW -> RESOLVED`
+or `OPEN -> DISMISSED` or `UNDER_REVIEW -> DISMISSED` (see `_VALID_TRANSITIONS`), no skipping straight
+to `RESOLVED` without passing through `UNDER_REVIEW`, no re-opening a `RESOLVED`/`DISMISSED` dispute.
+**No automatic transitions of any kind** — no timers, no expiry, no escalation; status only ever
+changes via an explicit call from a party. This does NOT touch session.state, extension_count,
+max_rounds, or any approval-vote field — the reopen-mechanism decoupling above is completely
+untouched by this addition; a dispute's status is entirely self-contained within its own record.
+
+Actor gating, and the one real judgment call in this addition: either party (candidate or employer,
+regardless of who filed the dispute) may move a dispute to `UNDER_REVIEW` or `DISMISSED` — dismissing
+your own concern, or acknowledging you've seen the other party's, are both legitimate unilateral
+actions. `RESOLVED` was considered for a "both parties agree" gate, mirroring how `AGREED` itself
+requires both approval votes (`negotiation.apply_approval_vote`/`_resolve_approval`) — but that
+mechanism is deeply coupled to session.state/PENDING_APPROVAL/extension_count, which is exactly the
+coupling this module exists to avoid, and reusing or parallel-building it here would mean inventing
+new per-dispute vote state, contradicting the explicit "lightweight, nothing more" scope of this pass.
+No other clean, reusable precedent for a two-party gate exists in this codebase that doesn't carry
+that coupling. **Default taken instead: either party may mark a dispute RESOLVED unilaterally.** This
+is a real judgment call, not a silent default — worth revisiting once real disputes exist and it's
+clear whether unilateral RESOLVED is actually being misused (e.g. one party marking a live
+disagreement "resolved" without the other's involvement).
+
+`dispute_hash` is NOT recomputed on a status change — see store.py's `Dispute.status` comment. It
+continues to seal only the fields present at filing time; status/resolution_note/resolved_at are
+plain mutable fields with no separate tamper-evidence layer in this lightweight pass. Also not built,
+by the same "lightweight" discipline: no audit trail of who changed status or when each individual
+transition happened (only the single, most recent `resolved_at`), and no notification on a status
+change.
+
 **Rate limiting.** Two layers, closing a gap explicitly flagged when this module was first built:
   1. `MAX_DISPUTES_PER_PARTY_PER_SESSION` (below) — a hard, per-session, per-party cap enforced here
      in file_dispute(), independent of IP or any general rate limiter. This is the primary defense
@@ -136,6 +166,17 @@ EVIDENCE_MAX_LENGTH = 1000
 # Named constant, not a magic number, so it's easy to tune later.
 MAX_DISPUTES_PER_PARTY_PER_SESSION = 3
 
+# Lightweight status lifecycle — see module docstring's "Lightweight status lifecycle" section for
+# the full reasoning (no skipping straight to RESOLVED without UNDER_REVIEW, no re-opening a
+# terminal dispute). RESOLVED and DISMISSED are terminal — empty transition sets.
+_VALID_TRANSITIONS: dict[str, set[str]] = {
+    "OPEN": {"UNDER_REVIEW", "DISMISSED"},
+    "UNDER_REVIEW": {"RESOLVED", "DISMISSED"},
+    "RESOLVED": set(),
+    "DISMISSED": set(),
+}
+_TERMINAL_STATUSES = {"RESOLVED", "DISMISSED"}
+
 # The only two fields an "outcome" dispute may reference — both are the
 # external signals this vertical actually computes (see module docstring).
 # Deliberately not "any attested field": agreed_price is self-reported, not
@@ -159,6 +200,18 @@ class NotAParty(DisputeError):
 
 
 class DisputeLimitExceeded(DisputeError):
+    pass
+
+
+class DisputeNotFound(DisputeError):
+    pass
+
+
+class InvalidDisputeTransition(DisputeError):
+    pass
+
+
+class InvalidResolutionNote(DisputeError):
     pass
 
 
@@ -262,6 +315,55 @@ def file_dispute(
     return dispute
 
 
+def update_dispute_status(
+    session: "Session",
+    dispute_id: str,
+    actor: str,
+    new_status: str,
+    resolution_note: str | None = None,
+) -> Dispute:
+    """
+    Moves a filed dispute through its lightweight status lifecycle — see
+    module docstring's "Lightweight status lifecycle" section for the full
+    design (valid transitions, the RESOLVED-gate judgment call, why this
+    never touches session.state or any negotiation/approval field).
+
+    actor is expected to already be resolved from the caller's token by
+    routes.py (same _resolve_viewer()-derived-identity convention as
+    file_dispute() and every other endpoint in this vertical). Re-validated
+    here anyway so this function is safe to call directly without HTTP.
+    """
+    if actor not in ("candidate", "employer"):
+        raise NotAParty(f"{actor!r} is not a party to this session")
+
+    dispute = next((d for d in session.disputes if d.dispute_id == dispute_id), None)
+    if dispute is None:
+        raise DisputeNotFound(f"no dispute {dispute_id!r} on session {session.id!r}")
+
+    if new_status not in _VALID_TRANSITIONS:
+        raise DisputeError(f"unknown status {new_status!r} — must be one of {sorted(_VALID_TRANSITIONS)}")
+
+    allowed_next = _VALID_TRANSITIONS[dispute.status]
+    if new_status not in allowed_next:
+        raise InvalidDisputeTransition(
+            f"cannot move dispute {dispute_id!r} from {dispute.status!r} to {new_status!r} — "
+            f"valid transitions from {dispute.status!r} are {sorted(allowed_next) or 'none (terminal)'}"
+        )
+
+    if resolution_note is not None and len(resolution_note) > EVIDENCE_MAX_LENGTH:
+        raise InvalidResolutionNote(
+            f"resolution_note must be at most {EVIDENCE_MAX_LENGTH} characters (got {len(resolution_note)})"
+        )
+
+    dispute.status = new_status
+    if resolution_note is not None:
+        dispute.resolution_note = resolution_note
+    if new_status in _TERMINAL_STATUSES:
+        dispute.resolved_at = datetime.now(timezone.utc).isoformat()
+
+    return dispute
+
+
 def _hash_dispute(dispute: Dispute) -> str:
     payload = {
         "dispute_id": dispute.dispute_id,
@@ -298,6 +400,9 @@ def disputes_view(session: "Session") -> dict:
                 "referenced_field": d.referenced_field,
                 "filed_at": d.filed_at,
                 "dispute_hash": d.dispute_hash,
+                "status": d.status,
+                "resolution_note": d.resolution_note,
+                "resolved_at": d.resolved_at,
             }
             for d in session.disputes
         ],

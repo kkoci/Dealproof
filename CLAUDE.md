@@ -156,7 +156,8 @@ app/offercheck/store.py       In-memory Session store (no DB, no auth beyond opa
 app/offercheck/invites.py     EmployerInvite in-memory store — employer-initiated negotiation, pending until a candidate claims it (see "Employer-Initiated Invites" below)
 app/offercheck/auth.py        In-memory Company store (Phase 3) — register_company(), get_company_by_api_key(), connect_ats()
 app/offercheck/credential.py  OfferVerifiedCredential + PackageCredential — deterministic capitulation/convergence checks, no LLM (mirrors app/picreds/constraints.py)
-app/offercheck/disputes.py    Dispute/contest surface — file_dispute(), disputes_view(); AGREED-only, flag-only, deliberately decoupled from the reopen mechanism
+app/offercheck/disputes.py    Dispute/contest surface — file_dispute(), update_dispute_status(), disputes_view(); AGREED-only, flag-only,
+                               deliberately decoupled from the reopen mechanism; lightweight OPEN/UNDER_REVIEW/RESOLVED/DISMISSED status, no auto-transitions
 app/offercheck/billing.py     Pricing tiers (individual/team/growth/enterprise) + record_verification_usage() (StripeNotConfigured-gated)
 app/offercheck/parsing.py     PDF offer-letter parsing (Phase 2) — pypdf text extraction + Claude field extraction
 app/offercheck/integrations/  greenhouse.py, lever.py (outbound notify + HMAC webhook verify), workday.py (deliberate stub),
@@ -229,7 +230,7 @@ transcript                    list of negotiation rounds
 
 ---
 
-## Test Suite (442 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
+## Test Suite (462 passed, 2 skipped, 3 known-environment failures — run with `pytest`, no Docker or tappd required)
 
 The 3 known failures are in `tests/test_e2e.py` (core DealProof, unrelated to Offer Check) — they
 assert on a mocked `sign_result` return value but get back a real `sim_quote:...` hash instead.
@@ -263,10 +264,13 @@ tests/test_offercheck_invites.py 12  Offer Check: employer-initiated invite life
                                       company-auth gating, double-claim rejection, sealed agentic floor pass-through
 tests/test_offercheck_approval.py 31  Offer Check: PENDING_APPROVAL resolution rule (both-approve/decline-wins/reopen/stalemate),
                                       reopen turn-assignment, opening_employer_offer survives a reopen untouched, package-mode parity, HTTP e2e
-tests/test_offercheck_disputes.py 28  Offer Check: dispute/contest surface — valid process/outcome filings, rejections (no/unavailable/unknown
+tests/test_offercheck_disputes.py 48  Offer Check: dispute/contest surface — valid process/outcome filings, rejections (no/unavailable/unknown
                                       referenced_field, non-party filer, non-AGREED session, empty/oversized evidence), per-session-per-party
                                       dispute cap (up-to-cap succeeds, over-cap rejects, per-party/per-session independence), filing never mutates
-                                      already-attested fields or reopen-mechanism fields, disputes_view, multiple disputes both types/parties, HTTP e2e
+                                      already-attested fields or reopen-mechanism fields, disputes_view, multiple disputes both types/parties;
+                                      lightweight status lifecycle (valid/invalid transitions, terminal-dispute rejection, non-party rejection,
+                                      unknown dispute_id, oversized resolution_note, either-party UNDER_REVIEW/DISMISSED/RESOLVED, status update
+                                      never touches session/negotiation fields, dispute_hash unchanged, resolved_at only on terminal), HTTP e2e
 ```
 
 **Resilience guarantees:**
@@ -806,9 +810,48 @@ two dispute routes had no rate limit at all, unlike `employer_move`/`candidate_m
      it isn't calibrated for a legitimate high-frequency human workflow the way `MOVE_LIMIT`'s looser
      20/hour is — disputes are a rare, post-`AGREED` action, not a per-round back-and-forth.
 
-**Still not built, flagged rather than silently skipped:** no adjudication workflow or dispute-status
-field, no notification when one is filed, and no frontend wiring (this pass is backend-only, matching
-the task's explicit scope).
+**Lightweight status lifecycle** (`disputes.update_dispute_status()`) — a partial answer to "no
+adjudication workflow," deliberately staying lightweight: `Dispute.status` (`app/offercheck/store.py`)
+is one of `OPEN` (default at filing) → `UNDER_REVIEW` → `RESOLVED`, or `OPEN` → `DISMISSED`, or
+`UNDER_REVIEW` → `DISMISSED` — enforced by a small transition table (`disputes._VALID_TRANSITIONS`);
+skipping straight to `RESOLVED` without `UNDER_REVIEW` is rejected (`InvalidDisputeTransition`), and
+neither terminal status (`RESOLVED`/`DISMISSED`) can be re-opened. **No automatic transitions of any
+kind** — no timers, no expiry, no escalation; status only ever changes via an explicit
+`PATCH /sessions/{id}/employer\|candidate/dispute/{dispute_id}` call from a party. This does **not**
+touch `session.state`, `extension_count`, `max_rounds`, or any approval-vote field — the reopen-
+mechanism decoupling from the original OC-28 pass is completely untouched; a dispute's status lives
+entirely inside its own `Dispute` record.
+
+**Actor gating, and the one real judgment call in this addition:** either party (candidate or
+employer, regardless of who filed the dispute) may move a dispute to `UNDER_REVIEW` or `DISMISSED` —
+dismissing your own concern, or acknowledging you've seen the other party's, are both legitimate
+unilateral actions. `RESOLVED` was considered for a "both parties agree" gate, mirroring how `AGREED`
+itself requires both approval votes (`negotiation.apply_approval_vote`/`_resolve_approval`) — but that
+mechanism is deeply coupled to `session.state`/`PENDING_APPROVAL`/`extension_count`, exactly the
+coupling this module exists to avoid; reusing or parallel-building it here would mean inventing new
+per-dispute vote state, contradicting the explicit "lightweight, nothing more" scope of this addition.
+No other clean, reusable two-party-gate precedent exists in this codebase without that coupling.
+**Decision taken instead: either party may mark a dispute `RESOLVED` unilaterally.** Documented here as
+a real judgment call, not a silent default — worth revisiting once real disputes exist and it's clear
+whether unilateral `RESOLVED` needs tightening.
+
+`dispute_hash` is **not** recomputed on a status change — it continues to seal only the fields present
+at filing time (same discipline as `opening_employer_offer` never retroactively changing
+`final_gap_pct`'s anchor); `status`/`resolution_note`/`resolved_at` are plain mutable fields with no
+separate tamper-evidence layer in this pass. `resolution_note` is optional, capped at the same
+`disputes.EVIDENCE_MAX_LENGTH` (1000 chars) as `evidence`; `resolved_at` (ISO-8601 UTC) is set only on
+a transition *into* `RESOLVED` or `DISMISSED`, never cleared. Both new PATCH routes follow the exact
+`employer/X` vs `candidate/X` split-by-route convention used for every actor-relevant write in this
+vertical (mirroring `PATCH .../employer/enable-agentic` specifically, since this is an update to an
+existing resource, not a new one) — there is no precedent anywhere in this file for a single shared
+write endpoint with a client-declared actor field, so none was introduced here either. `status`,
+`resolution_note`, and `resolved_at` are surfaced everywhere a dispute already was: `DisputeSummary`
+(both filing responses and `PATCH` responses) and `disputes_view()`/`GET .../disputes`.
+
+**Still not built, flagged rather than silently skipped:** no audit trail of *who* changed status or
+*when* each individual transition happened (only the single, most recent `resolved_at`), no
+notification on a status change, and no frontend wiring (this pass is backend-only, matching the
+task's explicit scope).
 
 **PDF parsing (Phase 2) is a draft prefill, not a data source:** `POST /parse-offer-letter` returns
 `ExtractedOfferFields` (schemas.py) — a deliberately *unvalidated* shape (`base_salary` can be `0`)

@@ -45,6 +45,14 @@ class Dispute:
     referenced_field: str | None  # "final_gap_pct" | "market_percentile" for outcome disputes; None for process disputes
     filed_at: str  # ISO-8601 UTC
     dispute_hash: str  # SHA-256 over the fields above (sorted-keys JSON) — tamper-evident, not itself part of the original TDX report_data
+    # Lightweight status lifecycle (see app.offercheck.disputes.update_dispute_status) — plain str,
+    # not a Literal, same dataclass-layer convention as filed_by/dispute_type above; validated in
+    # disputes.py, not here. Mutated in place by update_dispute_status() — the one exception to this
+    # dataclass otherwise being immutable once filed (dispute_hash is NOT recomputed on a status
+    # change; it continues to seal only the original filing fields above, not these three).
+    status: str = "OPEN"  # "OPEN" | "UNDER_REVIEW" | "RESOLVED" | "DISMISSED"
+    resolution_note: str | None = None  # optional free text set on a transition; capped at disputes.EVIDENCE_MAX_LENGTH
+    resolved_at: str | None = None  # ISO-8601 UTC — set only when status becomes RESOLVED or DISMISSED, never cleared
 
 
 @dataclass
