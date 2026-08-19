@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { useLocation, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { getEnclaveAttestation, offercheckCandidateApproval, offercheckCandidateApprovalPackage, offercheckCandidateMove, offercheckEnableCandidateAgentic, offercheckEnableCandidatePackageAgentic, offercheckFileCandidateDispute, offercheckGetAttestation, offercheckGetCredential, offercheckGetDisputes, offercheckGetSession, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckUpdateCandidateDisputeStatus, offercheckVerifyCredential } from '../../api.js'
 
 const SENIORITY_LABEL = { junior: 'Junior', mid: 'Mid-level', senior: 'Senior', staff: 'Staff+' }
@@ -157,12 +157,19 @@ function getNextAction(view, { isTerminal, pendingApproval, myTurn, packageActiv
   return { stage: 'negotiating', key: 'waiting' }
 }
 
-function getStageStatuses(view, nextAction) {
+// unresolvedNoAgreement: opt-in only, passed true from exactly one call site (EXPIRED-without-
+// ever-reaching-PENDING_APPROVAL — see isExpiredNoAgreement in the component below). Every other
+// terminal state (AGREED, WALKAWAY, DECLINED, STALEMATE) calls this with the flag unset/false and
+// renders exactly as before — this only overrides 'negotiating'/'decision' from their normal
+// 'done' (green checkmark, implying clean completion) to a distinct 'unresolved' status, since
+// this specific case genuinely never produced a decision to complete.
+function getStageStatuses(view, nextAction, { unresolvedNoAgreement = false } = {}) {
   if (!nextAction) return []
   const currentIndex = STAGE_ORDER.indexOf(nextAction.stage)
   const verifyApplicable = Boolean(view.require_provenance_credential)
   return STAGE_ORDER.map((key, i) => {
     if (key === 'verify' && !verifyApplicable) return { key, status: 'skip' }
+    if (unresolvedNoAgreement && (key === 'negotiating' || key === 'decision')) return { key, status: 'unresolved' }
     if (i < currentIndex) return { key, status: 'done' }
     if (i === currentIndex) return { key, status: 'active' }
     return { key, status: 'future' }
@@ -183,6 +190,7 @@ function StageSpine({ statuses }) {
               className={`w-3.5 h-3.5 rounded-full flex items-center justify-center flex-shrink-0 ${
                 s.status === 'done' ? 'bg-success' :
                 s.status === 'active' ? 'bg-teal ring-4 ring-teal/20' :
+                s.status === 'unresolved' ? 'bg-sealed/60' :
                 s.status === 'skip' ? 'bg-transparent border border-dashed border-border' :
                 'bg-bg-elevated border border-border'
               }`}
@@ -192,12 +200,20 @@ function StageSpine({ statuses }) {
                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
               )}
+              {/* Deliberately a dash, not a checkmark — this stage happened but didn't conclude
+                  with an outcome, distinct from 'done'. Amber, not red: honest, not alarming. */}
+              {s.status === 'unresolved' && (
+                <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeWidth={3} d="M6 12h12" />
+                </svg>
+              )}
             </div>
             <span
               className={`text-xs text-center leading-tight ${
                 s.status === 'active' ? 'font-semibold text-ink-primary' :
                 s.status === 'skip' ? 'text-ink-muted/40' :
                 s.status === 'done' ? 'text-ink-secondary' :
+                s.status === 'unresolved' ? 'text-sealed-text' :
                 'text-ink-muted'
               }`}
             >
@@ -1395,10 +1411,20 @@ export default function CandidateSession() {
   const myVoteForTrace = view && (packageActive ? view.my_package_approval_vote : view.my_approval_vote)
   const otherVoteForTrace = view && (packageActive ? view.other_package_approval_vote : view.other_approval_vote)
 
+  // EXPIRED is set in exactly one place in the backend state machine (negotiation.py::apply_move's
+  // round-limit check) and never touched by the PENDING_APPROVAL reopen path (which produces
+  // STALEMATE instead, a different terminal state, left untouched by this change) — so
+  // activeState === 'EXPIRED' alone reliably identifies "ran out of rounds without ever reaching
+  // an agreement," with no need to separately check agreed_price (which can hold a stale value
+  // from an earlier accept that got reopened away from — checking it would be actively misleading
+  // here, not just redundant). Scoped to activeState (not view.state alone) so this also covers a
+  // package-mode negotiation that round-limited out, matching the same pill/label this augments.
+  const isExpiredNoAgreement = Boolean(activeState === 'EXPIRED')
+
   // One spotlighted next action + stage spine — both keyed off the exact derivation above,
   // never a second simplified version of it (see getNextAction's own docstring).
   const nextAction = getNextAction(view, { isTerminal, pendingApproval, myTurn, packageActive })
-  const stageStatuses = view ? getStageStatuses(view, nextAction) : []
+  const stageStatuses = view ? getStageStatuses(view, nextAction, { unresolvedNoAgreement: isExpiredNoAgreement }) : []
   // Panels/banners that live inside the status card itself (approval, manual respond, the
   // fallback waiting line) don't get their own SpotlightCard — the card as a whole gets the
   // highlighted-border treatment instead, since splitting those apart would mean rewriting the
@@ -1486,6 +1512,26 @@ export default function CandidateSession() {
               ? { boxShadow: '0 0 0 4px rgba(13,148,136,0.08)' }
               : { boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}
           >
+            {/* Scoped strictly to isExpiredNoAgreement — every other terminal state keeps the
+                plain pill below as its only outcome indicator, exactly as before this change. */}
+            {isExpiredNoAgreement && (
+              <div className="mb-4 p-4 rounded-lg bg-sealed-subtle border border-sealed-border">
+                <p className="text-sm font-semibold text-sealed-text mb-1.5">This negotiation didn't reach an agreement</p>
+                {view.gap_pct != null && (
+                  <p className="font-mono font-bold text-2xl text-sealed-text mb-1">{Math.abs(view.gap_pct).toFixed(1)}% apart</p>
+                )}
+                <p className="text-xs text-sealed-text/80 leading-relaxed mb-3">
+                  The two sides were still this far apart when the {view.max_rounds}-round limit was reached, with no agreement in place.
+                </p>
+                <Link
+                  to="/offercheck/new"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-teal-subtle border-[1.5px] border-teal text-teal text-sm font-medium hover:bg-teal-subtle/70 transition-all"
+                >
+                  Start a new negotiation
+                </Link>
+              </div>
+            )}
+
             <div className="flex items-center justify-between mb-4">
               <span className={`inline-block px-2.5 py-1 rounded-md text-sm font-semibold ${STATE_BADGE[activeState] || 'bg-bg-elevated text-neutral'}`}>
                 {STATE_LABEL[activeState] || activeState}
