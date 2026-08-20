@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { offercheckCheckCompanyKey, offercheckConnectAts, offercheckListCompanySessions } from '../../api.js'
+import { offercheckCheckCompanyKey, offercheckListCompanySessions } from '../../api.js'
 import PageShell from '../../components/offercheck/PageShell.jsx'
 import Card from '../../components/offercheck/Card.jsx'
 import Button from '../../components/offercheck/Button.jsx'
 import Badge from '../../components/offercheck/Badge.jsx'
-import { Input, Select } from '../../components/offercheck/Input.jsx'
+import { Input } from '../../components/offercheck/Input.jsx'
 
 const STATE_LABEL = {
   PENDING_EMPLOYER: 'Awaiting band',
@@ -34,9 +34,6 @@ export default function Dashboard() {
   const [keyStatus, setKeyStatus] = useState('empty')
   const [sessions, setSessions] = useState(null)
   const [error, setError] = useState('')
-  const [atsProvider, setAtsProvider] = useState('greenhouse')
-  const [atsKey, setAtsKey] = useState('')
-  const [atsStatus, setAtsStatus] = useState('')
 
   const refresh = async (key) => {
     try {
@@ -76,18 +73,6 @@ export default function Dashboard() {
     setApiKey('')
     setSessions(null)
     setKeyStatus('empty')
-  }
-
-  const handleConnectAts = async (e) => {
-    e.preventDefault()
-    setAtsStatus('')
-    try {
-      await offercheckConnectAts(apiKey, { provider: atsProvider, api_key: atsKey })
-      setAtsStatus(`Connected to ${atsProvider}.`)
-      setAtsKey('')
-    } catch (err) {
-      setAtsStatus(err.message || 'Could not connect')
-    }
   }
 
   if (keyStatus === 'empty' || keyStatus === 'malformed') {
@@ -147,20 +132,6 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
-
-      <Card padding="sm" className="mb-6">
-        <p className="text-sm font-medium text-ink-primary mb-3">Connect an ATS</p>
-        <form onSubmit={handleConnectAts} className="flex flex-col sm:flex-row gap-2">
-          <Select value={atsProvider} onChange={(e) => setAtsProvider(e.target.value)} className="sm:w-44">
-            <option value="greenhouse">Greenhouse</option>
-            <option value="lever">Lever</option>
-            <option value="workday">Workday</option>
-          </Select>
-          <Input value={atsKey} onChange={(e) => setAtsKey(e.target.value)} placeholder="ATS API key" className="flex-1 min-w-0" />
-          <Button type="submit" variant="secondary">Connect</Button>
-        </form>
-        {atsStatus && <p className="text-xs text-ink-muted mt-2">{atsStatus}</p>}
-      </Card>
 
       {error && (
         <div className="mb-4 px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-sm">{error}</div>

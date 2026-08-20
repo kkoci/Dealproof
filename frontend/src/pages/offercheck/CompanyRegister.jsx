@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { offercheckRegisterCompany } from '../../api.js'
 import PageShell from '../../components/offercheck/PageShell.jsx'
 import Card from '../../components/offercheck/Card.jsx'
@@ -77,6 +77,10 @@ export default function CompanyRegister() {
           {result.pricing.price_usd != null
             ? `$${result.pricing.price_usd} ${result.pricing.billing_period === 'monthly' ? '/month' : 'per verification'}`
             : 'custom pricing — contact sales'}
+          {' · '}
+          <Link to="/offercheck/plans" className="focus-ring rounded text-teal hover:text-teal-hover underline">
+            see all plans
+          </Link>
         </Card>
 
         <Button variant="primary" size="lg" fullWidth onClick={goToDashboard}>

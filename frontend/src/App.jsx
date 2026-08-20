@@ -9,6 +9,8 @@ import CompanyRegister from './pages/offercheck/CompanyRegister.jsx'
 import CompanyNew from './pages/offercheck/CompanyNew.jsx'
 import Dashboard from './pages/offercheck/Dashboard.jsx'
 import Demo from './pages/offercheck/Demo.jsx'
+import Plans from './pages/offercheck/Plans.jsx'
+import About from './pages/offercheck/About.jsx'
 import Button from './components/offercheck/Button.jsx'
 import { ArrowRightIcon } from './components/offercheck/icons.jsx'
 import logo from './assets/icon.svg'
@@ -34,6 +36,18 @@ function NavBar() {
           </Link>
 
           <div className="flex items-center gap-1">
+            <Link
+              to="/offercheck/plans"
+              className="focus-ring px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors"
+            >
+              Plans
+            </Link>
+            <Link
+              to="/offercheck/about"
+              className="focus-ring px-3 py-1.5 rounded-md text-sm font-medium text-ink-secondary hover:text-ink-primary hover:bg-bg-elevated transition-colors"
+            >
+              About
+            </Link>
             {isCompanyMode(pathname) && (
               <Link
                 to="/offercheck/dashboard"
@@ -85,6 +99,8 @@ export default function App() {
             <Route path="/offercheck/company/new" element={<CompanyNew />} />
             <Route path="/offercheck/dashboard" element={<Dashboard />} />
             <Route path="/offercheck/demo" element={<Demo />} />
+            <Route path="/offercheck/plans" element={<Plans />} />
+            <Route path="/offercheck/about" element={<About />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </div>
