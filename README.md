@@ -260,8 +260,9 @@ tests/test_memory.py          4 tests  — Contexto memory client: add, search, 
 tests/test_picreds.py        11 tests  — πCreds: deterministic constraint checks (5 pure) + auditor + credentials + failure
 tests/test_e2e.py            13 tests  — Full HTTP stack end-to-end (TestClient + mocks)
 tests/test_contract.py        8 tests  — Phase 4 escrow: on-chain create/complete/refund
-tests/test_offercheck.py         56 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer
-                                              delta / final_gap_pct, external market comparator / market_percentile via BLS + ONS), PDF parsing, HTTP e2e
+tests/test_offercheck.py         66 tests  — vertical/hr-offer-check: consistency checks, revision-loop state machine, privacy, attestation (incl. opening-offer
+                                              delta / final_gap_pct, external market comparator / market_percentile via BLS + ONS, metro/regional granularity via
+                                              CompetingOffer.location/currency with graceful fallback to national/UK-wide), PDF parsing, HTTP e2e
 tests/test_offercheck_phase3.py  34 tests  — vertical/hr-offer-check: company auth, credential, billing, ATS integrations, bulk verify, webhooks
 tests/test_offercheck_agentic.py 24 tests  — vertical/hr-offer-check: CandidateAgent/EmployerAgent clamps, mediator convergence, reasoning-never-crosses-boundary, mixed human/agentic value exposure boundary, PATCH enable-agentic endpoints, HTTP e2e
 tests/test_offercheck_demo_auth.py 23 tests — vertical/hr-offer-check: HMAC token roundtrip/tamper/expiry, single-use, spend cap, demo-link + verify + gated start-agentic HTTP e2e

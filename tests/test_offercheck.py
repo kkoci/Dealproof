@@ -555,11 +555,16 @@ def _bls_response(p25=150_000, p50=180_000, p75=210_000):
 
 
 def _ons_response(p25=90_000, p50=110_000, p75=140_000):
+    """ONS beta API (api.beta.ons.gov.uk/v1) wildcard-observations shape — each observation
+    echoes back its own resolved dimension option id/label alongside the value. Matches the
+    live shape confirmed while building metro/regional granularity (see market_data.py's
+    module docstring) — replaces the old (dead-endpoint) single-observation-per-call shape."""
     return {
         "observations": [
-            {"dimensions": {"statistics": {"label": "25th percentile"}}, "observation": str(p25)},
-            {"dimensions": {"statistics": {"label": "Median"}}, "observation": str(p50)},
-            {"dimensions": {"statistics": {"label": "75th percentile"}}, "observation": str(p75)},
+            {"dimensions": {"averagesandpercentiles": {"id": "25", "label": "25th percentile"}}, "observation": str(p25)},
+            {"dimensions": {"averagesandpercentiles": {"id": "median", "label": "Median"}}, "observation": str(p50)},
+            {"dimensions": {"averagesandpercentiles": {"id": "75", "label": "75th percentile"}}, "observation": str(p75)},
+            {"dimensions": {"averagesandpercentiles": {"id": "mean", "label": "Mean"}}, "observation": "999999"},
         ]
     }
 
@@ -625,6 +630,54 @@ async def test_fetch_market_range_bls_caches_result_and_does_not_refetch():
     mock_cls.assert_called_once()  # only one real HTTP client constructed — second call hit the cache
 
 
+# --- BLS metro/regional granularity (Part 1) ----------------------------
+
+def test_map_location_to_bls_area_matches_known_metro():
+    assert market_data._map_location_to_bls_area("Seattle, WA") == "0042660"
+    assert market_data._map_location_to_bls_area("  new york  ") == "0035620"
+
+
+def test_map_location_to_bls_area_returns_none_for_unmapped_location():
+    assert market_data._map_location_to_bls_area("Nowhereville, XX") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_bls_uses_metro_area_code_for_mapped_location():
+    """A real, mapped location narrows the OEWS series ID to that metro's area code
+    (area-type 'M') instead of the national aggregate (area-type 'N')."""
+    mock_ctx = _mock_market_httpx_client(_bls_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        result = await market_data.fetch_market_range_bls("Senior Software Engineer", "Seattle, WA")
+    assert result is not None
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.post.call_args
+    series_ids = kwargs["json"]["seriesid"]
+    assert all(sid.startswith("OEUM0042660") for sid in series_ids)
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_bls_falls_back_to_national_for_unmapped_location():
+    """An unrecognized location degrades gracefully to the national aggregate (area-type
+    'N') rather than erroring — same safe default as never providing a location at all."""
+    mock_ctx = _mock_market_httpx_client(_bls_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        result = await market_data.fetch_market_range_bls("Senior Software Engineer", "Nowhereville, XX")
+    assert result is not None
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.post.call_args
+    series_ids = kwargs["json"]["seriesid"]
+    assert all(sid.startswith("OEUN0000000") for sid in series_ids)
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_bls_uses_national_for_default_location():
+    """The module default (DEFAULT_LOCATION, "United States") is intentionally generic —
+    it must resolve to the national aggregate, not accidentally match a metro keyword."""
+    mock_ctx = _mock_market_httpx_client(_bls_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        await market_data.fetch_market_range_bls("Senior Software Engineer", market_data.DEFAULT_LOCATION)
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.post.call_args
+    assert all(sid.startswith("OEUN0000000") for sid in kwargs["json"]["seriesid"])
+
+
 # --- ONS ---------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -665,6 +718,55 @@ async def test_fetch_market_range_ons_caches_result_and_does_not_refetch():
         second = await market_data.fetch_market_range_ons("Senior Software Engineer", "United Kingdom")
     assert first == second
     mock_cls.assert_called_once()
+
+
+# --- ONS regional granularity (Part 1) ----------------------------------
+
+def test_map_location_to_ons_region_matches_known_region():
+    assert market_data._map_location_to_ons_region("London") == "E12000007"
+    assert market_data._map_location_to_ons_region("  Manchester  ") == "E12000002"
+
+
+def test_map_location_to_ons_region_returns_none_for_unmapped_location():
+    assert market_data._map_location_to_ons_region("Nowhereshire") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_uses_region_code_for_mapped_location():
+    """A real, mapped location narrows the ASHE query to that region's geography code
+    instead of the UK-wide aggregate."""
+    mock_ctx = _mock_market_httpx_client(_ons_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        result = await market_data.fetch_market_range_ons("Senior Software Engineer", "London")
+    assert result is not None
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.get.call_args
+    assert kwargs["params"]["geography"] == "E12000007"
+    # ashe-tables-3 only publishes 1-/2-digit SOC groups — the 4-digit role mapping (2136)
+    # must be truncated to 2 digits at the query-construction step, not sent raw.
+    assert kwargs["params"]["standardoccupationalclassification"] == "21"
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_falls_back_to_uk_wide_for_unmapped_location():
+    """An unrecognized location degrades gracefully to the UK-wide aggregate rather than
+    erroring — same safe default as never providing a location at all."""
+    mock_ctx = _mock_market_httpx_client(_ons_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        result = await market_data.fetch_market_range_ons("Senior Software Engineer", "Nowhereshire")
+    assert result is not None
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.get.call_args
+    assert kwargs["params"]["geography"] == market_data._ONS_UK_AREA_CODE
+
+
+@pytest.mark.asyncio
+async def test_fetch_market_range_ons_uses_uk_wide_for_default_location():
+    """The module default (DEFAULT_LOCATION, "United States") never accidentally matches a
+    UK region keyword — it must resolve to the UK-wide aggregate."""
+    mock_ctx = _mock_market_httpx_client(_ons_response())
+    with patch("httpx.AsyncClient", return_value=mock_ctx) as mock_cls:
+        await market_data.fetch_market_range_ons("Senior Software Engineer", market_data.DEFAULT_LOCATION)
+    _, kwargs = mock_cls.return_value.__aenter__.return_value.get.call_args
+    assert kwargs["params"]["geography"] == market_data._ONS_UK_AREA_CODE
 
 
 # --- source selection (top-level fetch_market_range) --------------------

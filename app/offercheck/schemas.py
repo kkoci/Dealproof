@@ -40,6 +40,14 @@ class CompetingOffer(BaseModel):
     equity_value: float = Field(default=0.0, ge=0)   # annualized estimate
     bonus: float = Field(default=0.0, ge=0)
     start_date: str  # ISO-8601 date, e.g. "2026-09-01"
+    # Optional — unlocks metro/regional market-comparator granularity (see
+    # app.offercheck.integrations.market_data). Free text, e.g. "Seattle, WA" or
+    # "London, UK"; matched against a small keyword table, same discipline as role's
+    # SOC-code mapping. Falls back to market_data.DEFAULT_LOCATION/DEFAULT_CURRENCY
+    # (national/UK-wide) when absent — this must stay optional so no existing caller
+    # that doesn't send it breaks.
+    location: str | None = None
+    currency: str | None = None  # e.g. "USD" / "GBP" — see market_data.DEFAULT_CURRENCY
 
 
 class ConsistencyCheck(BaseModel):
