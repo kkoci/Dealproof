@@ -50,7 +50,7 @@ export default function Demo() {
 
   return (
     <PageShell>
-      <h1 className="text-hero-sm text-ink-primary mb-2">Offer Check — live demo</h1>
+      <h1 className="font-display text-hero-sm text-ink-primary mb-2">Offer Check — live demo</h1>
       <p className="text-sm text-ink-muted mb-8">
         Two Claude agents negotiate a salary inside a TEE-attested revision loop. No login, no account.
       </p>

@@ -38,6 +38,9 @@ Thumbs.db
 # db
 *.db
 
+# Playwright MCP
+.playwright-mcp/
+
 # Claude
 .claude/
 

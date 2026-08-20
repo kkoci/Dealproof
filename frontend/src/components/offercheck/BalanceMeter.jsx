@@ -1,18 +1,27 @@
-// The signature element (v4 design plan). Gap-to-current-position IS the product's real mechanic —
-// this makes the "two sides finding equilibrium" metaphor literal instead of decorating with it: a
-// beam pivoting on a fixed fulcrum, tilting toward whichever side is further from agreement. Deliberately
-// restrained (max ~7° of tilt, no illustrated pans/chains/weights) after an explicit self-critique pass
-// flagged a literal seesaw graphic as gimmicky for a calm, high-stakes financial product — the beam reads
-// as an instrument, not a toy. Zero gap resolves to the same teal hue as "verified" elsewhere in this
-// system: the payoff of the metaphor is that equilibrium and attestation are visually the same idea.
+// The signature element (v5 "The Enclave" design plan) — a radial instrument gauge, replacing v4's
+// horizontal balance-beam. Same drop-in contract as before (`{ gapPct, label }`, same null/undefined
+// handling), only the rendering changed, so every existing call site in CandidateSession/
+// EmployerSession keeps working untouched.
 //
-// Drop-in replacement for the old per-file GapMeter — identical `{ gapPct }` prop, same null/undefined
-// handling (renders nothing pre-negotiation).
+// Why a gauge over a beam: the brief asked for real compositional risk and a moment worth
+// screenshotting. A thin line with two dots is calm but forgettable; a dial with a needle reads
+// immediately as "instrument you'd trust with a real reading" — the same category of object as a
+// pressure gauge or a seismograph, which is exactly the register this whole direction is built on.
+// The needle sweeps ±80° off vertical (not a full ±90°) so it never lies flat even at the extremes.
+// Colour logic is unchanged from v4: large gap = gold/attention, closing = green, near-zero = cyan
+// ("signal locked") — see tokens.css for why zero-gap is deliberately NOT the same hue as the
+// attestation/proof accent this time (two distinct registers: ceremonial copper vs. technical cyan).
 import React from 'react'
 
-const MAX_TILT_DEG = 7
+const MAX_SWEEP_DEG = 80
+const TICK_STEPS = [-80, -60, -40, -20, 0, 20, 40, 60, 80]
 
-export default function BalanceMeter({ gapPct, label = "Gap to current position" }) {
+function pointAt(cx, cy, r, deg) {
+  const rad = (deg * Math.PI) / 180
+  return { x: cx + r * Math.sin(rad), y: cy - r * Math.cos(rad) }
+}
+
+export default function BalanceMeter({ gapPct, label = 'Gap to current position' }) {
   if (gapPct === null || gapPct === undefined) return null
 
   const abs = Math.abs(gapPct)
@@ -20,30 +29,69 @@ export default function BalanceMeter({ gapPct, label = "Gap to current position"
   const textClass = { large: 'text-gap-large', closing: 'text-gap-closing', zero: 'text-gap-zero' }[tone]
   const strokeClass = { large: 'stroke-gap-large', closing: 'stroke-gap-closing', zero: 'stroke-gap-zero' }[tone]
   const fillClass = { large: 'fill-gap-large', closing: 'fill-gap-closing', zero: 'fill-gap-zero' }[tone]
+  const glowClass = {
+    large: 'drop-shadow-[0_0_10px_var(--color-gap-large)]',
+    closing: 'drop-shadow-[0_0_10px_var(--color-gap-closing)]',
+    zero: 'drop-shadow-[0_0_14px_var(--color-gap-zero)]',
+  }[tone]
 
   const clamped = Math.max(-50, Math.min(50, gapPct))
-  const angle = (clamped / 50) * MAX_TILT_DEG
+  const needleDeg = (clamped / 50) * MAX_SWEEP_DEG
+
+  const cx = 110
+  const cy = 122
+  const trackR = 98
+  const tickInnerR = 82
+  const needleLen = 76
+
+  const trackStart = pointAt(cx, cy, trackR, -90)
+  const trackEnd = pointAt(cx, cy, trackR, 90)
+  const needleTip = pointAt(cx, cy, needleLen, needleDeg)
 
   return (
-    <div className="mb-6">
-      <div className="flex items-baseline justify-between mb-3">
-        <span className="text-data-label uppercase text-ink-muted">{label}</span>
-        <span className={`font-mono tnum text-hero-sm ${textClass}`}>
+    <div className="mb-2">
+      <div className="flex items-baseline justify-between mb-2">
+        {label && <span className="text-data-label uppercase text-ink-muted">{label}</span>}
+        <span className={`font-display font-semibold tabular-nums text-hero-sm ${textClass} ${!label ? 'mx-auto' : ''}`}>
           {gapPct > 0 ? '+' : ''}{gapPct.toFixed(1)}%
         </span>
       </div>
-      <svg viewBox="0 0 200 34" className="w-full h-8" aria-hidden="true">
-        {/* fulcrum — fixed, never rotates */}
-        <path d="M100 16 L94 28 L106 28 Z" className="fill-border-strong" />
-        <g
-          className={`${strokeClass} transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]`}
-          style={{ transform: `rotate(${angle}deg)`, transformOrigin: '100px 16px' }}
-        >
-          <line x1="26" y1="16" x2="174" y2="16" strokeWidth="2" strokeLinecap="round" />
-          <circle cx="26" cy="16" r="4.5" className={fillClass} stroke="none" />
-          <circle cx="174" cy="16" r="4.5" className={fillClass} stroke="none" />
-        </g>
-      </svg>
+      <div className="relative w-full" style={{ maxWidth: 320, margin: '0 auto' }}>
+        <svg viewBox="0 0 220 132" className="w-full h-auto" aria-hidden="true">
+          {/* outer track — white-alpha rather than the border tokens: this needs to read clearly
+              as an instrument bezel regardless of exactly which dark surface it sits on. */}
+          <path
+            d={`M ${trackStart.x} ${trackStart.y} A ${trackR} ${trackR} 0 0 1 ${trackEnd.x} ${trackEnd.y}`}
+            fill="none"
+            stroke="rgba(255,255,255,0.14)"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          {/* tick marks */}
+          {TICK_STEPS.map((deg) => {
+            const inner = pointAt(cx, cy, tickInnerR, deg)
+            const outer = pointAt(cx, cy, trackR, deg)
+            const isCenter = deg === 0
+            return (
+              <line
+                key={deg}
+                x1={inner.x}
+                y1={inner.y}
+                x2={outer.x}
+                y2={outer.y}
+                stroke={isCenter ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.22)'}
+                strokeWidth={isCenter ? 2 : 1.25}
+                strokeLinecap="round"
+              />
+            )
+          })}
+          {/* needle */}
+          <g className={`${strokeClass} ${glowClass} transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]`}>
+            <line x1={cx} y1={cy} x2={needleTip.x} y2={needleTip.y} strokeWidth="2.5" strokeLinecap="round" />
+          </g>
+          <circle cx={cx} cy={cy} r="5" className={`${fillClass} ${glowClass}`} stroke="none" />
+        </svg>
+      </div>
     </div>
   )
 }

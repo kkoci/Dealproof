@@ -1,66 +1,84 @@
-/* Offer Check colour system v4 — "Ledger & Instrument" (see design plan in the v4 revamp commit).
-   Explicitly NOT: warm-cream+terracotta editorial, near-black+acid-accent dev-tool dark mode, or a
-   hairline-rule broadsheet. Two anchors: a deep verification-ink teal (the "attested" mark) and a
-   brass/instrument gold (the "needs attention" mark) — both bespoke hexes, not stock Tailwind swatches.
-   Every CSS custom property name below is unchanged from v3 on purpose: every existing className in
-   this vertical (bg-teal, text-sealed-text, border-border, …) keeps working — only the values shift. */
-:root {
-  /* Backgrounds — "vellum": a cool, warm-neutral off-white (paper/ledger stock), never cream */
-  --color-bg-primary: #F5F6F3;
-  --color-bg-surface: #FFFFFF;
-  --color-bg-elevated: #EDEFEA;
-  --color-bg-input: #FFFFFF;
+/* Offer Check colour system v5 — "The Enclave". Full redesign, nothing carried over from v4's
+   light "Ledger & Instrument" system except the CSS custom property NAMES (so every existing
+   className in this vertical keeps resolving — only the hexes and the mental model change).
 
-  /* Text — near-black ink with a whisper of the verification teal in it, not a flat grayscale */
-  --color-text-primary: #131F1B;
-  --color-text-secondary: #4B5A55;
-  --color-text-muted: #8B9993;
-  --color-text-inverse: #FFFFFF;
+   Direction: a precision-instrument dark mode. This is the one of three brainstormed directions
+   that comes directly from what the product actually is — code negotiating inside a sealed
+   hardware enclave, a hardware-signed proof at the end — rather than an adjacent metaphor
+   (currency, analog gauges). Two deliberately distinct accent registers, not one:
+     - "teal" (now a warm copper/amber, #D98C3D) = the CEREMONIAL register: attestation, proof,
+       the primary action. The colour of a hardware status LED on real security silicon.
+     - "sealed" (a cooler brass-gold, #D9A251) = the PRIVATE-INPUT register: sealed floors,
+       budgets, anything that must not cross the privacy boundary.
+     - "gap-zero" (a cold signal-cyan, #3FDCC4) = the TECHNICAL register: the live negotiation
+       gauge only. Cold and precise on purpose — it reads as a locked signal, not a trophy.
+   Background is near-black with a graphite-green cast (#0A0F0D), never pure black — pure black
+   plus a neon accent is the exact "hacker tool" failure mode this direction has to avoid. Text is
+   a warm off-white, never stark #FFFFFF, for the same reason.
+
+   Contrast was checked by hand (WCAG relative-luminance formula) for every accent used as text or
+   as a button fill: text-on-dark-bg accents all land at 6:1–11:1. The one real finding from that
+   check — baked into the palette, not left to per-component judgement — is that white text on a
+   copper/gold/success/danger FILL only clears ~2.3–3.3:1 (fails AA), while dark ink text on the
+   same fills clears 5.9–8.5:1. So `--color-text-inverse` (used on every filled accent button) is
+   now dark ink, not white — a flip from v4, where the accent was dark enough that white worked. */
+:root {
+  /* Backgrounds — near-black graphite-green, not pure black */
+  --color-bg-primary: #0A0F0D;
+  --color-bg-surface: #131815;
+  --color-bg-elevated: #1B221C;
+  --color-bg-input: #10150F;
+
+  /* Text — warm off-white, never stark white */
+  --color-text-primary: #EDEEE4;
+  --color-text-secondary: #9CA89D;
+  --color-text-muted: #71806F;
+  --color-text-inverse: #0D110E;
 
   /* Borders */
-  --color-border-default: #E1E4DF;
-  --color-border-strong: #C7CCC5;
-  --color-border-accent: #0E6B5C;
+  --color-border-default: #212B22;
+  --color-border-strong: #384539;
+  --color-border-accent: #D98C3D;
 
-  /* "teal" = the verification/attested accent — deep ledger-ink teal, not a bright SaaS teal.
-     Everywhere this vertical marks something as verified, sealed-and-correct, or the primary
-     brand action, it draws from this one hue. */
-  --color-teal: #0E6B5C;
-  --color-teal-hover: #0A5346;
-  --color-teal-subtle: #EAF4F1;
-  --color-teal-border: #B9DBD2;
-  --color-teal-text: #0A4B40;
+  /* "teal" = the ceremonial/attested register — warm copper, an instrument status-LED colour.
+     Primary action, TDX proof, the seal mark. */
+  --color-teal: #D98C3D;
+  --color-teal-hover: #E8A158;
+  --color-teal-subtle: rgba(217, 140, 61, 0.14);
+  --color-teal-border: rgba(217, 140, 61, 0.4);
+  --color-teal-text: #E8A158;
 
-  /* "sealed" = the private-input / needs-attention accent — brass/instrument gold, evoking a dial
-     or a wax-seal impression rather than a generic amber warning */
-  --color-sealed: #A3661F;
-  --color-sealed-hover: #855218;
-  --color-sealed-subtle: #FAF2E6;
-  --color-sealed-border: #E4C594;
-  --color-sealed-text: #5C3B12;
-  --color-sealed-icon: #A3661F;
+  /* "sealed" = the private-input register — brass-gold, distinguishable from copper at a glance
+     (yellower, less red) so "this is proof" and "this is private" never visually collide. */
+  --color-sealed: #D9A251;
+  --color-sealed-hover: #E6B36C;
+  --color-sealed-subtle: rgba(217, 162, 81, 0.14);
+  --color-sealed-border: rgba(217, 162, 81, 0.4);
+  --color-sealed-text: #E6B36C;
+  --color-sealed-icon: #D9A251;
 
   /* Success / agreed */
-  --color-success: #146B4B;
-  --color-success-hover: #0F5A3D;
-  --color-success-subtle: #E9F4EE;
-  --color-success-text: #0C4530;
+  --color-success: #4FBE86;
+  --color-success-hover: #66CC9A;
+  --color-success-subtle: rgba(79, 190, 134, 0.14);
+  --color-success-text: #6ECB9A;
 
   /* Danger / walk away, decline, errors */
-  --color-danger: #9C2E2E;
-  --color-danger-hover: #7E2424;
-  --color-danger-subtle: #FAEEED;
-  --color-danger-text: #6B1D1D;
+  --color-danger: #E2685A;
+  --color-danger-hover: #EB8375;
+  --color-danger-subtle: rgba(226, 104, 90, 0.14);
+  --color-danger-text: #EB8375;
 
-  /* Gap indicator — the balance-meter's three states. Deliberately: zero-gap converges on the same
-     hue as "verified" (teal) — the payoff of the balance metaphor is that equilibrium and proof are
-     visually the same idea. */
-  --color-gap-large: #A3661F;
-  --color-gap-closing: #146B4B;
-  --color-gap-zero: #0E6B5C;
+  /* Gap gauge — three states, deliberately NOT converging on the copper "proof" hue this time
+     (v4's payoff). Cold cyan at zero reads as "signal locked," a technical register distinct from
+     the warm ceremonial one — see header comment. */
+  --color-gap-large: #D9A251;
+  --color-gap-closing: #4FBE86;
+  --color-gap-zero: #3FDCC4;
+  --color-gap-zero-glow: rgba(63, 220, 196, 0.35);
 
   /* Neutral / inactive */
-  --color-neutral: #59685E;
-  --color-neutral-hover: #3F4C43;
-  --color-neutral-subtle: #F5F6F3;
+  --color-neutral: #7C8880;
+  --color-neutral-hover: #97A399;
+  --color-neutral-subtle: rgba(124, 136, 128, 0.14);
 }

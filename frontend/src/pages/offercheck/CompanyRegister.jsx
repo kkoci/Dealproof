@@ -41,7 +41,7 @@ export default function CompanyRegister() {
   if (result) {
     return (
       <PageShell width="lg">
-        <h1 className="text-hero-sm text-ink-primary mb-2">You're registered</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary mb-2">You're registered</h1>
         <p className="flex items-center gap-1.5 text-sm text-sealed-text mb-6">
           <LockIcon size={14} className="shrink-0" />
           Save this API key now — it's shown exactly once and cannot be recovered.
@@ -54,7 +54,7 @@ export default function CompanyRegister() {
               readOnly
               mono
               value={result.api_key}
-              className="!bg-white !border-sealed-border !text-sealed-text !text-xs"
+              className="!bg-bg-elevated !border-sealed-border !text-sealed-text !text-xs"
               onFocus={(e) => e.target.select()}
             />
             <Button
@@ -88,7 +88,7 @@ export default function CompanyRegister() {
 
   return (
     <PageShell width="lg">
-      <h1 className="text-hero-sm text-ink-primary mb-2">Register your company</h1>
+      <h1 className="font-display text-hero-sm text-ink-primary mb-2">Register your company</h1>
       <p className="text-sm text-ink-muted mb-8">
         Get an API key for bulk verification and the TA dashboard.
       </p>

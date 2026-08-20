@@ -93,7 +93,7 @@ export default function Dashboard() {
   if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
       <PageShell>
-        <h1 className="text-hero-sm text-ink-primary mb-2">Company dashboard</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary mb-2">Company dashboard</h1>
         <p className="text-sm text-ink-muted mb-6">Paste your API key to view your verifications.</p>
         <form onSubmit={handleUseKey} className="flex gap-2 mb-4">
           <Input mono value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder="oc_..." className="flex-1 min-w-0" />
@@ -120,7 +120,7 @@ export default function Dashboard() {
   if (keyStatus === 'unregistered') {
     return (
       <PageShell>
-        <h1 className="text-hero-sm text-ink-primary mb-2">No company registered yet</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary mb-2">No company registered yet</h1>
         <p className="text-sm text-ink-muted mb-6">
           This server instance has no record of that key — register to get started.
         </p>
@@ -137,7 +137,7 @@ export default function Dashboard() {
   return (
     <PageShell>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-hero-sm text-ink-primary">Company dashboard</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary">Company dashboard</h1>
         <div className="flex items-center gap-4">
           <Link to="/offercheck/company/new" className="focus-ring rounded text-xs text-teal hover:text-teal-hover font-medium">
             + Start a negotiation

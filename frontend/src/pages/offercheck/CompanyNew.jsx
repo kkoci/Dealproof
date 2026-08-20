@@ -107,7 +107,7 @@ export default function CompanyNew() {
   if (keyStatus === 'empty' || keyStatus === 'malformed') {
     return (
       <PageShell>
-        <h1 className="text-hero-sm text-ink-primary mb-2">Start a negotiation</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary mb-2">Start a negotiation</h1>
         <p className="text-sm text-ink-muted mb-6">Paste your company API key to open an invite.</p>
         <form onSubmit={handleUseKey} className="flex gap-2 mb-4">
           <Input mono value={keyInput} onChange={(e) => setKeyInput(e.target.value)} placeholder="oc_..." className="flex-1 min-w-0" />
@@ -134,7 +134,7 @@ export default function CompanyNew() {
   if (keyStatus === 'unregistered') {
     return (
       <PageShell>
-        <h1 className="text-hero-sm text-ink-primary mb-2">No company registered yet</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary mb-2">No company registered yet</h1>
         <p className="text-sm text-ink-muted mb-6">
           This server instance has no record of that key — register to get started.
         </p>
@@ -153,7 +153,7 @@ export default function CompanyNew() {
     return (
       <PageShell>
         <div className="animate-rise-in">
-          <h1 className="text-hero-sm text-ink-primary mb-2">Invite created</h1>
+          <h1 className="font-display text-hero-sm text-ink-primary mb-2">Invite created</h1>
           <p className="text-sm text-ink-muted mb-2">
             Send this link to the candidate. Their raw numbers stay private — you'll only ever see a gap percentage.
           </p>
@@ -221,7 +221,7 @@ export default function CompanyNew() {
   return (
     <PageShell>
       <div className="flex items-start justify-between gap-3 mb-2">
-        <h1 className="text-hero-sm text-ink-primary">Start a negotiation</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary">Start a negotiation</h1>
         <Button type="button" variant="secondary" size="sm" onClick={loadDemoData} className="shrink-0 mt-1">
           Load demo data
         </Button>

@@ -275,7 +275,7 @@ function HowThisWorksStrip({ lines }) {
         type="button"
         onClick={() => setDismissed(true)}
         aria-label="Dismiss"
-        className="focus-ring absolute top-2.5 right-2.5 w-5 h-5 flex items-center justify-center rounded-md text-teal-text/60 hover:text-teal-text hover:bg-white/50 transition-colors"
+        className="focus-ring absolute top-2.5 right-2.5 w-5 h-5 flex items-center justify-center rounded-md text-teal-text/60 hover:text-teal-text hover:bg-bg-elevated transition-colors"
       >
         <CloseIcon size={13} />
       </button>
@@ -283,7 +283,7 @@ function HowThisWorksStrip({ lines }) {
       <ol className="space-y-1.5">
         {lines.map((line, i) => (
           <li key={i} className="flex items-start gap-2 text-xs text-ink-secondary leading-relaxed">
-            <span className="flex-shrink-0 w-4 h-4 rounded-full bg-white border border-teal-border text-teal-text text-[10px] font-bold flex items-center justify-center mt-0.5">
+            <span className="flex-shrink-0 w-4 h-4 rounded-full bg-bg-surface border border-teal-border text-teal-text text-[10px] font-bold flex items-center justify-center mt-0.5">
               {i + 1}
             </span>
             <span>{line}</span>
@@ -303,12 +303,10 @@ const HOW_THIS_WORKS_LINES = [
 ]
 
 // Small pill for the "Inside the TEE" boundary below. Mirrors CandidateSession.jsx's local
-// TrustPill — Landing.jsx's TrustPill (devcred vertical) is dark-theme styled and isn't exported,
-// so this is built from Offer Check's own light-mode success tokens instead (--color-success* is
-// literally emerald, see tokens.css).
+// TrustPill.
 function TrustPill({ children }) {
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-success/30 text-success-text text-[10px] font-medium">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-bg-surface border border-success/30 text-success-text text-[10px] font-medium">
       {children}
     </span>
   )
@@ -769,21 +767,27 @@ function AttestationPanel({ sessionId, token, visible }) {
       {receipt ? (
         <>
           {receipt.tee_attested ? (
-            <div className="flex items-center gap-2 mb-2">
-              <SealMark size="sm" />
-              <span className="text-xs font-semibold text-teal-text">Verified by Intel TDX</span>
+            <div className="flex items-center gap-3 mb-3">
+              <SealMark size="md" ignite />
+              <div>
+                <p className="text-data-label uppercase text-teal-text/70">Cryptographic proof</p>
+                <span className="text-sm font-display font-semibold text-teal-text">Verified by Intel TDX</span>
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-2 mb-2 px-2.5 py-1 rounded-md bg-sealed-subtle border border-sealed-border w-fit">
               <span className="text-xs font-semibold text-sealed-text">Simulation mode — no real TEE hardware</span>
             </div>
           )}
-          <p className="text-xs text-ink-muted leading-relaxed mb-2">
+          <p className="text-xs text-ink-muted leading-relaxed mb-3">
             {receipt.tee_attested
               ? 'Verified by secure, tamper-proof computation — neither side could see or alter the other’s private numbers, and the result can’t be faked.'
               : 'This demo run skipped the real secure hardware — for testing only, not a verified result.'}
           </p>
-          <p className="text-[11px] font-mono tnum text-ink-muted break-all mb-3">{receipt.attestation}</p>
+          <div className="rounded-lg bg-bg-elevated border border-border px-3 py-2.5 mb-3">
+            <p className="text-data-label uppercase text-ink-muted mb-1">Quote</p>
+            <p className="text-[11px] font-mono tnum text-teal-text/90 break-all leading-relaxed">{receipt.attestation}</p>
+          </div>
           {cred && (
             <div className="pt-3 border-t border-teal-border">
               <span className={`text-xs font-semibold ${cred.genuine_negotiation ? 'text-success' : 'text-sealed'}`}>
@@ -1356,7 +1360,7 @@ export default function EmployerSession() {
 
   return (
     <PageShell>
-      <h1 className="text-hero-sm text-ink-primary mb-2">Competing offer verification</h1>
+      <h1 className="font-display text-hero-sm text-ink-primary mb-2">Competing offer verification</h1>
       <p className="text-sm text-ink-muted mb-8">
         Your band stays private. You'll only ever see the gap percentage.
       </p>

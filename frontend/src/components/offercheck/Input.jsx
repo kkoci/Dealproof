@@ -6,10 +6,13 @@
 import React from 'react'
 import { ChevronDownIcon } from './icons.jsx'
 
+// border-strong (not border-DEFAULT) — on the v5 dark surface, bg-input and border-DEFAULT sit too
+// close in luminance to read as a clear field edge; a form control needs a more visible boundary
+// than a static card does.
 const fieldBase =
-  'w-full px-3 py-2.5 rounded-lg bg-bg-input border border-border text-ink-primary placeholder:text-ink-muted text-sm ' +
+  'w-full px-3 py-2.5 rounded-lg bg-bg-input border border-border-strong text-ink-primary placeholder:text-ink-muted text-sm ' +
   'transition-[border-color,box-shadow] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] ' +
-  'focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.14] ' +
+  'focus:outline-none focus:border-teal focus:ring-[3px] focus:ring-teal/[0.18] ' +
   'disabled:opacity-50 disabled:cursor-not-allowed'
 
 export function FieldLabel({ children, className = '' }) {

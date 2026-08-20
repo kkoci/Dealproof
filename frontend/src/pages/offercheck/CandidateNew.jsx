@@ -99,7 +99,7 @@ export default function CandidateNew() {
   return (
     <PageShell>
       <div className="flex items-start justify-between gap-3 mb-2">
-        <h1 className="text-hero-sm text-ink-primary">Your competing offer</h1>
+        <h1 className="font-display text-hero-sm text-ink-primary">Your competing offer</h1>
         <Button type="button" variant="secondary" size="sm" onClick={loadDemoData} className="shrink-0 mt-1">
           Load demo data
         </Button>

@@ -34,9 +34,10 @@
   }
 
   /* Never the default OS highlight — a neutral ink tint, not a tint of the accent (matches luxe's
-     "restyle selection, don't tint it with the accent" guidance). */
+     "restyle selection, don't tint it with the accent" guidance). Light tint here since v5's
+     surface is dark — the v4 version of this rule was a dark tint for a light surface. */
   ::selection {
-    background: rgba(19, 31, 27, 0.14);
+    background: rgba(237, 238, 228, 0.18);
     color: var(--color-text-primary);
   }
 

@@ -28,7 +28,7 @@ function NavBar() {
         <div className="flex items-center justify-between h-14">
           <Link to="/" className="flex items-center gap-2 focus-ring rounded-md">
             <img src={logo} alt="" className="h-6 w-6" />
-            <span className="text-ink-primary font-semibold tracking-tight">
+            <span className="font-display text-ink-primary font-semibold tracking-tight">
               Offer Check
             </span>
           </Link>
@@ -62,7 +62,7 @@ function NotFound() {
   const navigate = useNavigate()
   return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-      <h1 className="text-hero text-ink-primary">404</h1>
+      <h1 className="font-display text-hero text-ink-primary">404</h1>
       <p className="text-ink-secondary">We couldn't find that page.</p>
       <Button onClick={() => navigate('/')}>Go home</Button>
     </div>

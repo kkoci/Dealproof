@@ -21,13 +21,18 @@ const SIZE = {
   lg: 'h-12 px-6 text-sm gap-2',
 }
 
+// v5 "The Enclave": every filled accent here (copper/success/danger) is a bright, mid-luminance
+// colour against a near-black surface — hand-checked WCAG contrast puts white text on any of them
+// at ~2.3–3.3:1 (fails AA). Dark ink text on the same fills clears 5.9–8.5:1. So filled variants
+// use `text-ink-inverse` (dark ink), not white — a deliberate flip from the v4 light-mode system,
+// not an oversight.
 const VARIANT = {
-  primary: 'bg-teal text-white hover:bg-teal-hover border border-transparent',
-  success: 'bg-success text-white hover:bg-success-hover border border-transparent',
-  destructive: 'bg-danger text-white hover:bg-danger-hover border border-transparent',
-  secondary: 'bg-transparent text-ink-secondary border-[1.5px] border-border-strong hover:bg-bg-elevated',
-  subtle: 'bg-teal-subtle text-teal border-[1.5px] border-teal hover:bg-teal-subtle/70',
-  ghost: 'bg-transparent text-teal hover:text-teal-hover border border-transparent px-0 h-auto',
+  primary: 'bg-teal text-ink-inverse hover:bg-teal-hover border border-transparent',
+  success: 'bg-success text-ink-inverse hover:bg-success-hover border border-transparent',
+  destructive: 'bg-danger text-ink-inverse hover:bg-danger-hover border border-transparent',
+  secondary: 'bg-transparent text-ink-secondary border-[1.5px] border-border-strong hover:bg-bg-elevated hover:text-ink-primary',
+  subtle: 'bg-teal-subtle text-teal-text border-[1.5px] border-teal/40 hover:bg-teal-subtle/70',
+  ghost: 'bg-transparent text-teal-text hover:text-teal-hover border border-transparent px-0 h-auto',
 }
 
 export function buttonClass({ variant = 'primary', size = 'md', fullWidth = false, className = '' } = {}) {
