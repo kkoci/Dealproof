@@ -36,6 +36,14 @@ class Settings(BaseSettings):
 
     # Offer Check Phase 3: billing (per-verification / monthly SaaS pricing)
     stripe_api_key: str = ""       # STRIPE_API_KEY — unset => billing.record_verification_usage() no-ops
+    stripe_webhook_secret: str = ""  # STRIPE_WEBHOOK_SECRET — signs the account-wide Checkout webhook (Phase 4 credits); unset => the webhook route rejects everything (never a silent-accept fallback)
+    # Phase 4 payment gating (app/offercheck/credits.py) — same "off by default, explicit opt-in"
+    # convention as every other paid/external integration in this vertical (StripeNotConfigured,
+    # ArcNotConfigured, AtsNotConfigured, the memory sidecar): False means _maybe_attest()
+    # produces the proof bundle exactly as it always has, with zero credit/company involvement —
+    # this is deliberate, not a placeholder, since flipping the default would silently require
+    # every existing company (and this entire test suite) to already hold a credit balance.
+    offercheck_payment_gating_enabled: bool = False  # OFFERCHECK_PAYMENT_GATING_ENABLED
 
     # Offer Check: external market-data comparator (app/offercheck/integrations/market_data.py)
     # BLS OEWS (US): optional registration key for higher API rate limits — unauthenticated

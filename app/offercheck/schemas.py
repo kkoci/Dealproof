@@ -334,6 +334,13 @@ class SessionView(BaseModel):
     require_provenance_credential: bool = False
     candidate_provenance_verified: bool = False
     candidate_provenance_credential: ProvenanceCredentialSummary | None = None
+    # Payment gating (see app.offercheck.credits) — Phase 4. True once a terminal
+    # session was evaluated for payment and couldn't be charged (no company attached
+    # yet, or the attached company is out of credit) — the negotiation outcome above
+    # (agreed_price, history, gap_pct, etc.) is still fully visible either way; only
+    # the attestation/credential/market_percentile bundle is withheld. See
+    # routes.py::_maybe_attest and POST /sessions/{id}/claim.
+    payment_required: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +354,11 @@ AtsProvider = Literal["greenhouse", "lever", "workday"]
 class CompanyRegisterRequest(BaseModel):
     name: str
     hires_per_year: int = Field(default=0, ge=0, description="Used only to recommend a plan")
+    test_mode: bool = Field(
+        default=False,
+        description="Mints an 'oc_test_'-prefixed key with a starter credit grant — never touches real "
+        "payment. See app.offercheck.credits.",
+    )
 
 
 class CompanyRegisterResponse(BaseModel):
@@ -354,6 +366,8 @@ class CompanyRegisterResponse(BaseModel):
     api_key: str = Field(..., description="Shown exactly once — store it now, it cannot be recovered")
     recommended_plan: Plan
     pricing: dict
+    is_test_mode: bool = False
+    credit_balance: int = 0
 
 
 class AtsConnectRequest(BaseModel):
@@ -612,3 +626,46 @@ class DisputesView(BaseModel):
     final_gap_pct: float | None
     market_percentile: float | None
     disputes: list[DisputeSummary]
+
+
+# ---------------------------------------------------------------------------
+# Payment gating (see app.offercheck.credits) — Phase 4
+# ---------------------------------------------------------------------------
+
+
+class ClaimSessionResponse(BaseModel):
+    """
+    Response for POST /sessions/{id}/claim — attaches the calling company to an
+    already-terminal session (if it doesn't have one yet) and retries the payment
+    gate. attestation is populated only if the claim actually unlocked the proof
+    bundle this call; payment_required stays true (attestation stays null) if the
+    company still has no credit — see credits.py and routes.py::_maybe_attest.
+    """
+    session_id: str
+    payment_required: bool
+    credit_balance: int  # the claiming company's balance AFTER this call
+    attestation: AttestationReceipt | None = None
+
+
+class PurchaseCreditsRequest(BaseModel):
+    credit_count: int = Field(gt=0, le=1000)
+    success_url: str = Field(..., description="Where Stripe redirects the browser after a successful checkout")
+    cancel_url: str = Field(..., description="Where Stripe redirects the browser if checkout is abandoned")
+
+
+class PurchaseCreditsResponse(BaseModel):
+    checkout_url: str = Field(..., description="Redirect the company's browser here to complete payment")
+
+
+class GrantCreditsRequest(BaseModel):
+    """Operator-only — see POST /company/credits/grant (X-Internal-Key). Exactly one of
+    credit_count/unlimited should be set; unlimited wins if both are (see route)."""
+    company_id: str
+    credit_count: int | None = Field(default=None, gt=0)
+    unlimited: bool = False
+
+
+class GrantCreditsResponse(BaseModel):
+    company_id: str
+    credit_balance: int
+    is_unlimited: bool

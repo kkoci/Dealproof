@@ -79,6 +79,11 @@ class Session:
     attestation: str | None = None
     credential: OfferVerifiedCredential | None = None
     company_id: str | None = None  # Phase 3: set when created via company API key or an ATS webhook
+    # Payment gating (see app.offercheck.credits) — Phase 4. Set (and re-checked) by
+    # routes.py::_maybe_attest whenever a terminal session couldn't be billed (no company
+    # attached yet, or the attached company is out of credit). False once attestation
+    # actually happens — see that function's own docstring for the retry-safe contract.
+    payment_required: bool = False
     ats_candidate_ref: str | None = None  # Phase 3: candidate/opportunity id in the company's ATS, for notify_outcome
     notified: bool = False  # Phase 3: billing/ATS side effects fired at most once per session
     # Phase 2A agentic negotiation (offercheck_phase2_spec.md) — sealed, never exposed via any response schema.

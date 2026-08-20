@@ -274,6 +274,10 @@ tests/test_offercheck_disputes.py 48 tests — vertical/hr-offer-check: dispute/
                                               dispute cap, no already-attested-field mutation, decoupled from reopen, disputes_view, multi-dispute coexistence,
                                               lightweight status lifecycle — valid/invalid transitions, terminal-dispute/non-party rejection, either-party
                                               RESOLVED, no session/negotiation coupling, dispute_hash unchanged, resolved_at only on terminal), HTTP e2e
+tests/test_offercheck_payments.py 47 tests — vertical/hr-offer-check: payment gating (app.offercheck.credits) — debit/grant/unlimited/flat-rate-plan
+                                              semantics, OFF-by-default gate (settings.offercheck_payment_gating_enabled), test-mode registration starter
+                                              credits, POST /sessions/{id}/claim (unlock/idempotent/wrong-company-403/non-terminal-409), Stripe Checkout
+                                              session creation + webhook signature verification + credit crediting, operator-only grant/unlimited endpoint
 tests/test_devcred.py        29 tests — corpus root, SCAE ×3 adversarial, inspector ×4, clamp, pipeline round-trip, schema privacy, hash
 tests/test_devcred_rate_limit.py  5 tests — /evaluate 3/hr + /ingest 10/hr per-IP limits, daily 50/day hard stop, counter DB layer
 ```

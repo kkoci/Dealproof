@@ -29,13 +29,17 @@ Endpoints:
   PATCH /sessions/{id}/candidate/enable-agentic  seal candidate_floor any time pre-terminal (not just at creation)
   PATCH /sessions/{id}/employer/enable-agentic   seal employer_authority_limit any time pre-terminal (after band is set)
   GET  /sessions/{id}                     viewer-scoped status poll (?token=...)
-  GET  /sessions/{id}/attest              TDX attestation receipt (terminal states only)
+  GET  /sessions/{id}/attest              TDX attestation receipt (terminal states only; 402 if payment_required)
   GET  /sessions/{id}/dcap-verify         parsed DCAP quote fields for the receipt above
   GET  /sessions/{id}/credential          πCreds-style conduct credential (token or X-API-Key)
-  POST /company/register                  company signs up, gets an API key (shown once)
+  POST /sessions/{id}/claim               attach a company + retry the payment gate on a terminal session (X-API-Key)
+  POST /company/register                  company signs up, gets an API key (shown once); optional test_mode
   POST /company/ats-connect               attach a Greenhouse/Lever/Workday API key (X-API-Key)
   POST /company/verify/bulk               create up to 50 sessions in one call (X-API-Key)
   GET  /company/sessions                  list this company's sessions (X-API-Key)
+  POST /company/credits/purchase          start a real Stripe Checkout for N verification credits (X-API-Key)
+  POST /company/credits/grant             operator-only credit grant / unlimited flag (X-Internal-Key)
+  POST /integrations/stripe/webhook       credits a company's balance on a verified checkout.session.completed
   POST /integrations/{provider}/webhook/{company_id}   inbound ATS webhook, HMAC-verified
   POST /sessions/{id}/start-agentic       run CandidateAgent vs EmployerAgent to completion (Phase 2A)
   POST /sessions/{id}/start-agentic-package  run full compensation package negotiation (Phase 2B)
@@ -60,7 +64,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, demo_auth, disputes, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
+from app.offercheck import auth, billing, credential, credits, demo_auth, disputes, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, market_data, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -81,6 +85,7 @@ from app.offercheck.schemas import (
     CandidateJoinRequest,
     CandidateSubmitRequest,
     CandidateSubmitResponse,
+    ClaimSessionResponse,
     CompanyRegisterRequest,
     CompanyRegisterResponse,
     CompanySessionSummary,
@@ -99,6 +104,8 @@ from app.offercheck.schemas import (
     EmployerInviteResponse,
     ExtractedOfferFields,
     FileDisputeRequest,
+    GrantCreditsRequest,
+    GrantCreditsResponse,
     InviteStatusResponse,
     MoveRequest,
     OfferLetterExtraction,
@@ -107,6 +114,8 @@ from app.offercheck.schemas import (
     PackageCredentialResponse,
     PackageRoundDetail,
     ProvenanceCredentialSummary,
+    PurchaseCreditsRequest,
+    PurchaseCreditsResponse,
     RoundSummary,
     SessionView,
     UpdateDisputeStatusRequest,
@@ -250,6 +259,7 @@ def _view_for(session: Session, viewer: str) -> SessionView:
             if session.candidate_provenance_credential
             else None
         ),
+        payment_required=session.payment_required,
     )
 
 
@@ -313,9 +323,36 @@ async def _maybe_attest(session: Session) -> None:
     function's own docstring) just leaves session.market_percentile at its
     default None; the session still reaches AGREED and still attests
     normally either way.
+
+    Payment gate (Phase 4 — see app.offercheck.credits), OFF by default: gated behind
+    settings.offercheck_payment_gating_enabled, same "off unless explicitly configured"
+    convention as StripeNotConfigured/ArcNotConfigured/AtsNotConfigured elsewhere in
+    this codebase — with it off (the default, and what this whole test suite runs
+    with unless a specific test opts in), this function behaves exactly as it always
+    has. With it on: the negotiation itself still stays free and unauthenticated —
+    reaching a terminal state, seeing agreed_price/history/gap_pct, all still work
+    with zero company involvement. What's gated is specifically the proof bundle this
+    function produces (credential + market comparator + TDX attestation) — the paid
+    "$25 per verification" deliverable (billing.PRICING["individual"]).
+    credits.debit_for_verification is checked FIRST, before any of the (non-free — a
+    credential computation and a network fetch) work below runs. If it can't charge
+    (no company attached to the session yet, or the attached company is out of
+    credit), session.payment_required is set and this function returns having done
+    nothing else — no partial credential/attestation state. This is safe to call
+    again later: POST /sessions/{id}/claim re-invokes it after attaching a company
+    and/or purchasing more credits, and since nothing was written on the failed
+    attempt, there's nothing to reconcile.
     """
     if session.state not in negotiation.TERMINAL_STATES or session.attestation is not None:
         return
+
+    if settings.offercheck_payment_gating_enabled:
+        debit = credits.debit_for_verification(session)
+        if not debit.charged:
+            session.payment_required = True
+            return
+        session.payment_required = False
+
     session.credential = credential.compute_credential(session)
     if session.state == "AGREED":
         market_range = await market_data.fetch_market_range(
@@ -342,12 +379,21 @@ async def _maybe_notify(session: Session) -> None:
     if company is None:
         return
 
-    try:
-        await billing.record_verification_usage(company.id, company.plan)
-    except billing.StripeNotConfigured:
-        logger.info(f"session {session.id}: billing not configured, skipping usage record")
-    except Exception as exc:
-        logger.warning(f"session {session.id}: billing usage record failed — {exc}")
+    # "individual" plan usage is now paid for at credit-purchase time (see
+    # app.offercheck.credits — a verification credit was already debited in
+    # _maybe_attest before this function could even run, since attestation only
+    # exists once that debit succeeded). Calling record_verification_usage() here too
+    # would fire a SECOND, live per-use Stripe charge on top of the block purchase —
+    # skip it for exactly the plan it would double-charge. Flat-monthly plans
+    # (team/growth/enterprise) are unaffected: that call was already a no-op charge
+    # for them (see record_verification_usage's own docstring), so it still just logs.
+    if company.plan != "individual":
+        try:
+            await billing.record_verification_usage(company.id, company.plan)
+        except billing.StripeNotConfigured:
+            logger.info(f"session {session.id}: billing not configured, skipping usage record")
+        except Exception as exc:
+            logger.warning(f"session {session.id}: billing usage record failed — {exc}")
 
     if company.ats_provider and session.ats_candidate_ref and session.credential:
         integration = _ATS_INTEGRATIONS.get(company.ats_provider)
@@ -1000,6 +1046,8 @@ async def get_attestation_receipt(session_id: str, token: str) -> AttestationRec
     session = _get_session_or_404(session_id)
     _resolve_viewer(session, token)
     if session.attestation is None:
+        if session.payment_required:
+            raise HTTPException(status_code=402, detail="verification unpaid — see POST /sessions/{id}/claim")
         raise HTTPException(status_code=409, detail="attestation not available until the session closes")
 
     return AttestationReceipt(
@@ -1018,11 +1066,72 @@ async def get_attestation_receipt(session_id: str, token: str) -> AttestationRec
     )
 
 
+@router.post("/sessions/{session_id}/claim", response_model=ClaimSessionResponse)
+async def claim_session_route(
+    session_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> ClaimSessionResponse:
+    """
+    Attach the calling company to an already-terminal session (if it doesn't have one
+    yet) and retry the payment gate — see app.offercheck.credits and
+    routes.py::_maybe_attest's own docstring for the full design. This is how the
+    common case — a candidate-initiated session negotiated entirely for free, with no
+    company ever in the loop — gets its proof bundle unlocked after the fact: "we
+    negotiated informally, now we want the official verified record."
+
+    Idempotent and safe to call repeatedly (e.g. immediately after a credit
+    purchase completes): if the session is already claimed by a DIFFERENT company,
+    this 403s rather than letting a second company bill/attach itself to someone
+    else's negotiation. If it's unclaimed, or already claimed by the calling company,
+    this (re)runs the same debit-then-attest attempt _maybe_attest always runs at a
+    terminal transition — nothing here bypasses or duplicates that logic.
+    """
+    company = _require_company(x_api_key)
+    session = _get_session_or_404(session_id)
+    if session.state not in negotiation.TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail="session is not terminal yet")
+    if session.company_id is not None and session.company_id != company.id:
+        raise HTTPException(status_code=403, detail="session already claimed by a different company")
+
+    if session.company_id is None:
+        session.company_id = company.id
+        auth.record_session(company, session.id)
+
+    await _maybe_attest(session)
+    await _maybe_notify(session)
+
+    return ClaimSessionResponse(
+        session_id=session.id,
+        payment_required=session.payment_required,
+        credit_balance=company.credit_balance,
+        attestation=(
+            AttestationReceipt(
+                session_id=session.id,
+                state=session.state,
+                round_number=session.round_number,
+                agreed_price=session.agreed_price,
+                final_gap_pct=negotiation.final_gap_pct(session),
+                market_percentile=session.market_percentile,
+                competing_offer_hash=negotiation.competing_offer_hash(session),
+                employer_band_hash=negotiation.employer_band_hash(session),
+                credential_hash=session.credential.credential_hash if session.credential else None,
+                attestation=session.attestation,
+                tee_attested=settings.tee_mode == "production",
+                tee_mode=settings.tee_mode,
+            )
+            if session.attestation is not None
+            else None
+        ),
+    )
+
+
 @router.get("/sessions/{session_id}/dcap-verify", response_model=DcapVerification)
 async def get_dcap_verification(session_id: str, token: str) -> DcapVerification:
     session = _get_session_or_404(session_id)
     _resolve_viewer(session, token)
     if session.attestation is None:
+        if session.payment_required:
+            raise HTTPException(status_code=402, detail="verification unpaid — see POST /sessions/{id}/claim")
         raise HTTPException(status_code=409, detail="attestation not available until the session closes")
 
     parsed = parse_tdx_quote(session.attestation)
@@ -1052,6 +1161,8 @@ async def get_credential_route(
 
     response = _credential_response(session)
     if response is None:
+        if session.payment_required:
+            raise HTTPException(status_code=402, detail="verification unpaid — see POST /sessions/{id}/claim")
         raise HTTPException(status_code=409, detail="credential not available until the session closes")
     return response
 
@@ -1062,7 +1173,7 @@ async def register_company_route(body: CompanyRegisterRequest, request: Request)
     to bound unauthenticated growth of auth.py's in-memory Company store; see
     rate_limit.check_company_register."""
     rate_limit.check_company_register(request)
-    company, raw_key = auth.register_company(body.name)
+    company, raw_key = auth.register_company(body.name, test_mode=body.test_mode)
     plan = billing.recommend_plan(body.hires_per_year)
     company.plan = plan
     return CompanyRegisterResponse(
@@ -1070,6 +1181,8 @@ async def register_company_route(body: CompanyRegisterRequest, request: Request)
         api_key=raw_key,
         recommended_plan=plan,
         pricing=billing.pricing_for_plan(plan),
+        is_test_mode=company.is_test_mode,
+        credit_balance=company.credit_balance,
     )
 
 
@@ -1139,6 +1252,118 @@ async def list_company_sessions_route(
             )
         )
     return CompanySessionsResponse(company_id=company.id, sessions=summaries)
+
+
+@router.post("/company/credits/purchase", response_model=PurchaseCreditsResponse)
+async def purchase_credits_route(
+    body: PurchaseCreditsRequest,
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> PurchaseCreditsResponse:
+    """
+    Starts a real Stripe Checkout for `credit_count` verification credits — see
+    app.offercheck.billing.create_credit_checkout_session and the payment-gating
+    design in app.offercheck.credits. Returns a hosted checkout URL; the balance
+    itself is only credited once POST /integrations/stripe/webhook verifies the
+    resulting checkout.session.completed event — creating a checkout session here is
+    not a payment.
+    """
+    rate_limit.check_credit_purchase(request)
+    company = _require_company(x_api_key)
+    try:
+        checkout_url = await billing.create_credit_checkout_session(
+            company.id, body.credit_count, body.success_url, body.cancel_url
+        )
+    except billing.StripeNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return PurchaseCreditsResponse(checkout_url=checkout_url)
+
+
+@router.post("/integrations/stripe/webhook")
+async def stripe_webhook_route(
+    request: Request,
+    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+) -> dict:
+    """
+    Credits a company's balance once a real Stripe checkout.session.completed event
+    is verified — the only place credits.grant_credits() is called for a real
+    purchase (see app.offercheck.credits' module docstring). Unlike the ATS webhooks
+    above, this is one global endpoint (not per-company in the path) signed with the
+    account-wide STRIPE_WEBHOOK_SECRET, since Stripe signs with your account's own
+    secret, not a per-customer one — company identity instead comes from
+    client_reference_id, set at checkout-session creation time
+    (create_credit_checkout_session).
+
+    Unset STRIPE_WEBHOOK_SECRET means this endpoint rejects everything (503) rather
+    than silently accepting unsigned events — there is no safe unconfigured fallback
+    for "credit someone's balance," unlike every other *NotConfigured path in this
+    vertical, which degrades to a no-op.
+    """
+    if not settings.stripe_webhook_secret:
+        raise HTTPException(status_code=503, detail="Stripe webhook is not configured")
+
+    raw_body = await request.body()
+    if not billing.verify_stripe_webhook_signature(raw_body, stripe_signature or "", settings.stripe_webhook_secret):
+        raise HTTPException(status_code=403, detail="invalid webhook signature")
+
+    event = json.loads(raw_body)
+    if event.get("type") != "checkout.session.completed":
+        return {"received": True, "ignored": event.get("type")}
+
+    session_obj = event.get("data", {}).get("object", {})
+    company_id = session_obj.get("client_reference_id")
+    company = auth.get_company(company_id) if company_id else None
+    if company is None:
+        logger.warning(f"Stripe checkout.session.completed with unknown client_reference_id {company_id!r}")
+        return {"received": True, "ignored": "unknown company"}
+
+    credit_count = sum(
+        item.get("quantity", 0) for item in session_obj.get("line_items", {}).get("data", [session_obj])
+    ) or session_obj.get("quantity", 0)
+    if not credit_count:
+        # Checkout Sessions don't always inline line_items on the webhook payload
+        # (depends on the `expand` params used at creation) — falling back to a
+        # single credit rather than silently crediting 0 keeps this from being a
+        # no-op integration; confirm against a real Stripe payload before relying on
+        # this in production (same caveat as every other Stripe call in this repo).
+        credit_count = 1
+    credits.grant_credits(company, credit_count)
+    logger.info(f"company {company.id}: credited {credit_count} verification credit(s) via Stripe checkout")
+    return {"received": True, "credited": credit_count}
+
+
+@router.post("/company/credits/grant", response_model=GrantCreditsResponse)
+async def grant_credits_route(
+    body: GrantCreditsRequest,
+    x_internal_key: str | None = Header(default=None, alias="X-Internal-Key"),
+) -> GrantCreditsResponse:
+    """
+    Operator-only credit grant — for test-mode top-ups beyond the automatic starter
+    grant, and for the "unlimited credits for the product owner's own testing/demos"
+    mechanism (see app.offercheck.credits' module docstring, point 3). Gated by the
+    same OFFERCHECK_INTERNAL_KEY mechanism POST /auth/demo-link already uses — this
+    is deliberately the ONLY place credits.grant_unlimited() can be reached from;
+    there is no company-scoped or self-service path to it.
+    """
+    if not settings.offercheck_internal_key or x_internal_key != settings.offercheck_internal_key:
+        raise HTTPException(status_code=401, detail="X-Internal-Key required")
+
+    company = auth.get_company(body.company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="unknown company")
+
+    if body.unlimited:
+        credits.grant_unlimited(company)
+    elif body.credit_count:
+        credits.grant_credits(company, body.credit_count)
+    else:
+        raise HTTPException(status_code=400, detail="one of credit_count or unlimited is required")
+
+    return GrantCreditsResponse(
+        company_id=company.id,
+        credit_balance=company.credit_balance,
+        is_unlimited=company.is_unlimited,
+    )
 
 
 @router.post("/integrations/{provider}/webhook/{company_id}")

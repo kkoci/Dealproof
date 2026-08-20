@@ -31,6 +31,10 @@ class Company:
     session_ids: list[str] = field(default_factory=list)
     ats_provider: str | None = None   # "greenhouse" | "lever" | "workday"
     ats_api_key: str | None = None    # never returned in any API response — write-only
+    # Payment gating (see app.offercheck.credits) — additive, Phase 4.
+    is_test_mode: bool = False   # set once, at registration, from the "oc_test_" key prefix
+    is_unlimited: bool = False   # operator-only, see credits.grant_unlimited
+    credit_balance: int = 0      # verification credits available — see credits.debit_for_verification
 
 
 _COMPANIES: dict[str, Company] = {}
@@ -47,15 +51,29 @@ def _hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
-def register_company(name: str) -> tuple[Company, str]:
-    """Returns (company, raw_api_key). The raw key is never stored — only its hash."""
-    raw_key = "oc_" + secrets.token_urlsafe(32)
+def register_company(name: str, test_mode: bool = False) -> tuple[Company, str]:
+    """
+    Returns (company, raw_api_key). The raw key is never stored — only its hash.
+
+    test_mode mints an "oc_test_"-prefixed key (vs. "oc_live_") and grants a starter
+    credit balance immediately — see app.offercheck.credits' module docstring for why
+    this is kept completely separate from the real-payment path. Both prefixes still
+    satisfy the frontend's existing "oc_" well-formedness heuristic
+    (offercheckCheckCompanyKey in api.js), so nothing there needs to change.
+    """
+    from app.offercheck import credits  # local import — avoids a module-load cycle (credits imports auth)
+
+    prefix = "oc_test_" if test_mode else "oc_live_"
+    raw_key = prefix + secrets.token_urlsafe(32)
     company = Company(
         id=secrets.token_urlsafe(12),
         name=name,
         api_key_hash=_hash_key(raw_key),
         webhook_secret=secrets.token_urlsafe(24),
+        is_test_mode=test_mode,
     )
+    if test_mode:
+        credits.grant_credits(company, credits.TEST_STARTER_CREDITS)
     _COMPANIES[company.id] = company
     _API_KEY_INDEX[company.api_key_hash] = company.id
     return company, raw_key

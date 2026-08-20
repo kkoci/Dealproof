@@ -67,6 +67,17 @@ BULK_VERIFY_LIMIT = 3        # /company/verify/bulk calls per IP per hour — de
                                # sessions/hour/IP) independent of the plain /sessions bucket,
                                # closing "many session/token pairs with zero backstop" without
                                # breaking the documented "up to 50 per call" feature.
+CREDIT_PURCHASE_LIMIT = 5    # /company/credits/purchase calls per IP per hour — calls Stripe
+                               # (billing.create_credit_checkout_session), so this gets the same
+                               # "any endpoint that calls an external paid API must be
+                               # rate-limited" standing treatment as every other such endpoint in
+                               # this vertical. Key-gated (X-API-Key required) unlike
+                               # parse-offer-letter, so this is a lighter backstop than that one —
+                               # closer to BULK_VERIFY_LIMIT's tier. The Stripe webhook itself
+                               # (POST /integrations/stripe/webhook) is deliberately NOT
+                               # rate-limited here — same precedent as the existing ATS webhooks,
+                               # which rely on signature verification, not a per-IP bucket, since
+                               # legitimate traffic comes from Stripe's own servers.
 DISPUTE_LIMIT = 10           # employer/dispute + candidate/dispute calls per IP per hour — same
                                # "no Claude cost, backstop against a self-issued-token script" family
                                # as MOVE_LIMIT, but its own bucket rather than sharing MOVE_LIMIT's:
@@ -85,6 +96,7 @@ _move_hits: dict[str, list[float]] = defaultdict(list)
 _company_register_hits: dict[str, list[float]] = defaultdict(list)
 _bulk_verify_hits: dict[str, list[float]] = defaultdict(list)
 _dispute_hits: dict[str, list[float]] = defaultdict(list)
+_credit_purchase_hits: dict[str, list[float]] = defaultdict(list)
 
 
 def reset() -> None:
@@ -97,6 +109,7 @@ def reset() -> None:
     _company_register_hits.clear()
     _bulk_verify_hits.clear()
     _dispute_hits.clear()
+    _credit_purchase_hits.clear()
 
 
 def client_ip(request: Request) -> str:
@@ -153,3 +166,7 @@ def check_bulk_verify(request: Request) -> None:
 
 def check_dispute(request: Request) -> None:
     _check(_dispute_hits, client_ip(request), DISPUTE_LIMIT)
+
+
+def check_credit_purchase(request: Request) -> None:
+    _check(_credit_purchase_hits, client_ip(request), CREDIT_PURCHASE_LIMIT)
