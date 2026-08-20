@@ -41,6 +41,7 @@ Endpoints:
   POST /company/credits/grant             operator-only credit grant / unlimited flag (X-Internal-Key)
   POST /integrations/stripe/webhook       credits a company's balance on a verified checkout.session.completed
   POST /integrations/{provider}/webhook/{company_id}   inbound ATS webhook, HMAC-verified
+  GET  /admin/export-training-data        operator-only anonymized training-data export (X-Internal-Key)
   POST /sessions/{id}/start-agentic       run CandidateAgent vs EmployerAgent to completion (Phase 2A)
   POST /sessions/{id}/start-agentic-package  run full compensation package negotiation (Phase 2B)
   POST /auth/demo-link                    mint a magic-link demo token for a session (X-Internal-Key)
@@ -64,7 +65,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from app.config import settings
-from app.offercheck import auth, billing, credential, credits, demo_auth, disputes, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
+from app.offercheck import auth, billing, credential, credits, demo_auth, disputes, export, invites, negotiation, package, parsing, provenance, rate_limit, store, verifier
 from app.offercheck.agents import mediator, package_mediator
 from app.offercheck.integrations import greenhouse, lever, market_data, workday
 from app.offercheck.integrations._shared import AtsNotConfigured
@@ -1391,6 +1392,25 @@ async def ats_webhook_route(
         raise HTTPException(status_code=403, detail="invalid webhook signature")
 
     return {"received": True, "provider": provider}
+
+
+@router.get("/admin/export-training-data")
+async def export_training_data_route(
+    x_internal_key: str | None = Header(default=None, alias="X-Internal-Key"),
+) -> dict:
+    """
+    Operator-only — exports every currently-in-memory terminal session as
+    anonymized training data (see app.offercheck.export's module docstring for
+    exactly what is and isn't included, and why). Same X-Internal-Key gate as
+    POST /auth/demo-link and POST /company/credits/grant — there is no
+    company-scoped or self-service path to this, since it can read across every
+    company's sessions, not just the caller's own.
+    """
+    if not settings.offercheck_internal_key or x_internal_key != settings.offercheck_internal_key:
+        raise HTTPException(status_code=401, detail="X-Internal-Key required")
+
+    records = export.export_sessions(store.all_sessions())
+    return {"count": len(records), "records": records}
 
 
 def _authorize_agentic_call(session: Session, party_token: str | None, demo_token: str | None) -> None:

@@ -179,3 +179,11 @@ def create_session(
 
 def get_session(session_id: str) -> Session | None:
     return _SESSIONS.get(session_id)
+
+
+def all_sessions() -> list[Session]:
+    """Every session currently held in memory — used by app.offercheck.export's
+    admin-only training-data export route. Nothing else in this codebase needs to
+    enumerate every session at once, so this stays a narrow, deliberate addition
+    rather than exposing the underlying dict."""
+    return list(_SESSIONS.values())
