@@ -143,3 +143,13 @@ app/generic_negotiate/
 data.json
 eval_harness.py
 eval_results/
+
+# synthetic salary-negotiation dialogue generation pipeline (GNOME-style,
+# self-hosted Qwen3-8B) -- experimental data-generation tooling, not product
+# code, same precedent as eval_harness.py/app/generic_negotiate/ above.
+# models/ holds large binary model weights, never committed regardless of
+# license; negochat_corpus/ and synth_results/ are seed/generated data.
+models/
+negochat_corpus/
+synth_negotiate_gen.py
+synth_results/
