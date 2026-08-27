@@ -1252,7 +1252,13 @@ async def list_company_sessions_route(
                 ats_candidate_ref=session.ats_candidate_ref,
             )
         )
-    return CompanySessionsResponse(company_id=company.id, sessions=summaries)
+    return CompanySessionsResponse(
+        company_id=company.id,
+        sessions=summaries,
+        credit_balance=company.credit_balance,
+        plan=company.plan,
+        is_unlimited=company.is_unlimited,
+    )
 
 
 @router.post("/company/credits/purchase", response_model=PurchaseCreditsResponse)

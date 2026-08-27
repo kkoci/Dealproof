@@ -537,6 +537,23 @@ export function offercheckClaimSession(sessionId, apiKey) {
 }
 
 /**
+ * POST /api/offercheck/company/credits/purchase — starts a real Stripe Checkout
+ * for `credit_count` verification credits. Returns a hosted checkout URL; the
+ * balance itself is only credited once Stripe's webhook confirms payment —
+ * creating the session here is not a payment.
+ * @param {string} apiKey
+ * @param {{ credit_count: number, success_url: string, cancel_url: string }} body
+ * @returns {Promise<object>} PurchaseCreditsResponse — { checkout_url }
+ */
+export function offercheckPurchaseCredits(apiKey, body) {
+  return request('/api/offercheck/company/credits/purchase', {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey },
+    body: JSON.stringify(body),
+  })
+}
+
+/**
  * Classifies a stored/entered company API key before any authenticated UI renders, so a stale
  * key (e.g. left over in localStorage from before a backend restart wiped the in-memory company
  * store) never surfaces as a raw "invalid API key" error — it reads as "no company registered

@@ -429,6 +429,12 @@ class CompanySessionSummary(BaseModel):
 class CompanySessionsResponse(BaseModel):
     company_id: str
     sessions: list[CompanySessionSummary]
+    # Added for the dashboard's credit-purchase UI (app.offercheck.credits) — the
+    # route already has the full Company object in scope to build `sessions`
+    # above, so this is a zero-new-query addition, not a new lookup.
+    credit_balance: int = 0
+    plan: Plan = "individual"
+    is_unlimited: bool = False
 
 
 # ---------------------------------------------------------------------------
