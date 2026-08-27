@@ -1070,6 +1070,7 @@ async def get_attestation_receipt(session_id: str, token: str) -> AttestationRec
 @router.post("/sessions/{session_id}/claim", response_model=ClaimSessionResponse)
 async def claim_session_route(
     session_id: str,
+    request: Request,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> ClaimSessionResponse:
     """
@@ -1086,7 +1087,13 @@ async def claim_session_route(
     else's negotiation. If it's unclaimed, or already claimed by the calling company,
     this (re)runs the same debit-then-attest attempt _maybe_attest always runs at a
     terminal transition — nothing here bypasses or duplicates that logic.
+
+    rate_limit.check_claim runs first, before the API key is even validated — same
+    "even invalid-key attempts consume budget" property every other bucket in that
+    module has — see rate_limit.CLAIM_LIMIT's own comment for why this bucket has no
+    session-level counterpart the way disputes do.
     """
+    rate_limit.check_claim(request)
     company = _require_company(x_api_key)
     session = _get_session_or_404(session_id)
     if session.state not in negotiation.TERMINAL_STATES:

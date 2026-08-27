@@ -87,6 +87,29 @@ DISPUTE_LIMIT = 10           # employer/dispute + candidate/dispute calls per IP
                                # per-IP limit only needs to guard against a script filing disputes
                                # across many self-issued sessions, not a real high-frequency human
                                # workflow the way MOVE_LIMIT's looser 20/hour is calibrated for).
+CLAIM_LIMIT = 5               # POST /sessions/{id}/claim calls per IP per hour — key-gated
+                               # (X-API-Key required) and has a real credit-debiting side effect on
+                               # success, so it gets the same tier as CREDIT_PURCHASE_LIMIT rather
+                               # than the higher-frequency MOVE_LIMIT/DISPUTE_LIMIT tier: legitimate
+                               # use is "claim this one session I just found out is unlocked," an
+                               # occasional action, not a per-round human workflow. No external paid
+                               # API call happens here (unlike credit_purchase's real Stripe hit), so
+                               # it's not pushed into the tighter PARSE_OFFER_LETTER_LIMIT/
+                               # PROVENANCE_VERIFY_LIMIT tier either.
+                               #
+                               # Deliberately NO session-level cap alongside this (unlike
+                               # MAX_DISPUTES_PER_PARTY_PER_SESSION): the two aren't analogous.
+                               # Filing a dispute only requires a party token the filer is already
+                               # entitled to hold, so a per-session cap is the only thing standing
+                               # between a legitimate token-holder and spamming one victim session.
+                               # Claiming requires a company API key the caller is NOT entitled to
+                               # guess — the ownership check (session.company_id != company.id -> 403)
+                               # runs BEFORE any debit or state mutation, so a wrong-company or
+                               # invalid-key attempt costs the session nothing, and the realistic
+                               # defense against key-guessing is the key's own entropy, not request
+                               # throttling of any granularity. The per-IP bucket above already
+                               # bounds a single scripted actor's throughput; a session-level cap
+                               # would add real code for no meaningful additional protection.
 
 _session_create_hits: dict[str, list[float]] = defaultdict(list)
 _agentic_call_hits: dict[str, list[float]] = defaultdict(list)
@@ -97,6 +120,7 @@ _company_register_hits: dict[str, list[float]] = defaultdict(list)
 _bulk_verify_hits: dict[str, list[float]] = defaultdict(list)
 _dispute_hits: dict[str, list[float]] = defaultdict(list)
 _credit_purchase_hits: dict[str, list[float]] = defaultdict(list)
+_claim_hits: dict[str, list[float]] = defaultdict(list)
 
 
 def reset() -> None:
@@ -110,6 +134,7 @@ def reset() -> None:
     _bulk_verify_hits.clear()
     _dispute_hits.clear()
     _credit_purchase_hits.clear()
+    _claim_hits.clear()
 
 
 def client_ip(request: Request) -> str:
@@ -170,3 +195,7 @@ def check_dispute(request: Request) -> None:
 
 def check_credit_purchase(request: Request) -> None:
     _check(_credit_purchase_hits, client_ip(request), CREDIT_PURCHASE_LIMIT)
+
+
+def check_claim(request: Request) -> None:
+    _check(_claim_hits, client_ip(request), CLAIM_LIMIT)

@@ -175,6 +175,21 @@ def test_check_dispute_blocks_over_limit():
     assert "429" in str(exc_info.value) or getattr(exc_info.value, "status_code", None) == 429
 
 
+def test_check_claim_allows_up_to_limit():
+    req = _FakeRequest()
+    for _ in range(rate_limit.CLAIM_LIMIT):
+        rate_limit.check_claim(req)  # should not raise
+
+
+def test_check_claim_blocks_over_limit():
+    req = _FakeRequest()
+    for _ in range(rate_limit.CLAIM_LIMIT):
+        rate_limit.check_claim(req)
+    with pytest.raises(Exception) as exc_info:
+        rate_limit.check_claim(req)
+    assert "429" in str(exc_info.value) or getattr(exc_info.value, "status_code", None) == 429
+
+
 # ---------------------------------------------------------------------------
 # HTTP e2e
 # ---------------------------------------------------------------------------
@@ -303,6 +318,29 @@ def test_employer_dispute_rate_limited_over_http(client):
     blocked = client.post(
         f"/api/offercheck/sessions/{session_id}/employer/dispute",
         json={"token": "wrong", "dispute_type": "process", "evidence": "x"},
+    )
+    assert blocked.status_code == 429
+
+
+def test_claim_rate_limited_over_http(client):
+    """Same pattern as test_employer_dispute_rate_limited_over_http — the per-IP
+    check runs before the API key is even validated, so invalid-key attempts
+    still consume budget (the session doesn't even need to be terminal, since
+    rate_limit.check_claim is the first line of the route, before the
+    terminal-state check too)."""
+    submit = client.post("/api/offercheck/sessions", json=_submit_body())
+    session_id = submit.json()["session_id"]
+
+    for _ in range(rate_limit.CLAIM_LIMIT):
+        resp = client.post(
+            f"/api/offercheck/sessions/{session_id}/claim",
+            headers={"X-API-Key": "not-real"},
+        )
+        assert resp.status_code == 403
+
+    blocked = client.post(
+        f"/api/offercheck/sessions/{session_id}/claim",
+        headers={"X-API-Key": "not-real"},
     )
     assert blocked.status_code == 429
 
