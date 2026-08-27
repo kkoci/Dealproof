@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { offercheckJoinInvite, offercheckParseOfferLetter } from '../../api.js'
 import PageShell from '../../components/offercheck/PageShell.jsx'
 import Button from '../../components/offercheck/Button.jsx'
-import { FieldLabel, Input } from '../../components/offercheck/Input.jsx'
+import { FieldLabel, Input, Select } from '../../components/offercheck/Input.jsx'
 
 export default function CandidateJoin() {
   const navigate = useNavigate()
@@ -16,6 +16,8 @@ export default function CandidateJoin() {
     bonus: '',
     start_date: '',
     candidate_ask: '',
+    location: '',
+    currency: 'USD',
   })
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -35,6 +37,8 @@ export default function CandidateJoin() {
       bonus: '15000',
       start_date: startDate,
       candidate_ask: '190000',
+      location: 'Seattle, WA',
+      currency: 'USD',
     })
     setParseNotice(null)
     setError('')
@@ -82,6 +86,8 @@ export default function CandidateJoin() {
           equity_value: Number(form.equity_value || 0),
           bonus: Number(form.bonus || 0),
           start_date: form.start_date,
+          location: form.location.trim() || undefined,
+          currency: form.currency,
         },
         candidate_ask: Number(form.candidate_ask),
       }
@@ -171,6 +177,24 @@ export default function CandidateJoin() {
         <div>
           <FieldLabel>Start date</FieldLabel>
           <Input type="date" value={form.start_date} onChange={update('start_date')} required />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-border">
+          <div className="sm:col-span-2">
+            <FieldLabel>Location (optional)</FieldLabel>
+            <Input value={form.location} onChange={update('location')} placeholder="Seattle, WA or London" />
+          </div>
+          <div>
+            <FieldLabel>Currency</FieldLabel>
+            <Select value={form.currency} onChange={update('currency')}>
+              <option value="USD">USD</option>
+              <option value="GBP">GBP</option>
+            </Select>
+          </div>
+          <p className="sm:col-span-3 text-xs text-ink-muted -mt-1.5">
+            Helps us compare your offer against real market data for your area. Skip it and we'll use national
+            averages instead.
+          </p>
         </div>
 
         <div className="pt-2 border-t border-border">
