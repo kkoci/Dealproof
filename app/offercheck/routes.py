@@ -1318,15 +1318,31 @@ async def stripe_webhook_route(
         logger.warning(f"Stripe checkout.session.completed with unknown client_reference_id {company_id!r}")
         return {"received": True, "ignored": "unknown company"}
 
-    credit_count = sum(
-        item.get("quantity", 0) for item in session_obj.get("line_items", {}).get("data", [session_obj])
-    ) or session_obj.get("quantity", 0)
-    if not credit_count:
-        # Checkout Sessions don't always inline line_items on the webhook payload
-        # (depends on the `expand` params used at creation) — falling back to a
-        # single credit rather than silently crediting 0 keeps this from being a
-        # no-op integration; confirm against a real Stripe payload before relying on
-        # this in production (same caveat as every other Stripe call in this repo).
+    # Read the purchased quantity from session metadata (set at creation time —
+    # see billing.create_credit_checkout_session), NOT reconstructed from
+    # line_items. CONFIRMED LIVE (real Stripe test-mode Checkout + a real card +
+    # a real webhook via `stripe listen`) that checkout.session.completed does not
+    # reliably inline line_items — the old line_items-summing logic here always
+    # computed 0 and silently fell back to a hardcoded credit_count = 1,
+    # regardless of how many credits were actually paid for. metadata IS always
+    # present verbatim on the webhook payload; it exists specifically for this
+    # "carry your own data through" purpose.
+    raw_credit_count = session_obj.get("metadata", {}).get("credit_count")
+    try:
+        credit_count = int(raw_credit_count)
+        if credit_count <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        # Metadata should always be present now that we set it at creation time —
+        # if it's genuinely missing or malformed, that's an unexpected state
+        # (not the "normal" gap the old line_items fallback was guarding), so this
+        # logs at error level rather than the old silent/warning-level fallback.
+        # Still grants 1 rather than 0, to avoid a paid purchase becoming a total
+        # no-op while this gets investigated.
+        logger.error(
+            f"company {company.id}: checkout.session.completed had no usable metadata.credit_count "
+            f"(raw={raw_credit_count!r}) — granting 1 credit as a floor, but this indicates a real bug"
+        )
         credit_count = 1
     credits.grant_credits(company, credit_count)
     logger.info(f"company {company.id}: credited {credit_count} verification credit(s) via Stripe checkout")

@@ -126,14 +126,27 @@ async def create_credit_checkout_session(
     from that verified-webhook path, never from this function itself (creating a
     checkout session is not a payment; only the webhook confirms one happened).
 
+    `metadata[credit_count]` carries the actual purchased quantity through to the
+    webhook the same way `client_reference_id` carries company identity — confirmed
+    live (real Stripe test-mode Checkout, real card, real webhook via `stripe
+    listen`) that Stripe's checkout.session.completed payload does NOT reliably
+    include line_items inline (that needs explicit expansion this code never
+    requested), so a webhook handler that tries to reconstruct the purchased
+    quantity from line_items silently gets 0 and under-grants. metadata, by
+    contrast, IS always present verbatim on the webhook payload — it's designed
+    for exactly this "carry your own data through to the webhook" purpose. Stripe
+    requires metadata values to be strings, hence str(credit_count) below.
+
     Raises StripeNotConfigured if STRIPE_API_KEY is unset — routes.py surfaces this as
     a clear error rather than the non-fatal degrade record_verification_usage() uses,
     since "buy credits" has no sensible free-degradation path.
 
     Same caveat as every other Stripe call in this module: this request shape matches
-    Stripe's documented Checkout Sessions API as of this writing, not exercised
-    against a live account in this environment — confirm against current Stripe docs
-    (docs.stripe.com/api/checkout/sessions/create) before relying on this in production.
+    Stripe's documented Checkout Sessions API as of this writing — confirm against
+    current Stripe docs (docs.stripe.com/api/checkout/sessions/create) before relying
+    on this in production. Unlike the rest of this module, the metadata plumbing here
+    HAS been exercised against a live Stripe test-mode account and a real webhook
+    delivery, not just inferred from docs (see the credit-count regression this fixes).
     """
     if not settings.stripe_api_key:
         raise StripeNotConfigured("STRIPE_API_KEY is not set — credit purchase is disabled")
@@ -149,6 +162,7 @@ async def create_credit_checkout_session(
                 "success_url": success_url,
                 "cancel_url": cancel_url,
                 "client_reference_id": company_id,
+                "metadata[credit_count]": str(credit_count),
                 "line_items[0][quantity]": credit_count,
                 "line_items[0][price_data][currency]": "usd",
                 "line_items[0][price_data][unit_amount]": unit_amount_cents,

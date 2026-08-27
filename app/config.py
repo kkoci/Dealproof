@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,7 +36,13 @@ class Settings(BaseSettings):
     arcid_registry_address: str = ""     # ARCID_REGISTRY_ADDRESS
 
     # Offer Check Phase 3: billing (per-verification / monthly SaaS pricing)
-    stripe_api_key: str = ""       # STRIPE_API_KEY — unset => billing.record_verification_usage() no-ops
+    # STRIPE_API_KEY (this repo's original name) or STRIPE_SECRET_KEY (Stripe's own
+    # conventional name, e.g. what `stripe listen`/most Stripe docs and integrations
+    # call it) -- accepting both means a real .env set up the standard Stripe way
+    # doesn't silently fail to load. Found live: a real STRIPE_SECRET_KEY in .env was
+    # never being picked up because this field only matched STRIPE_API_KEY exactly.
+    # Unset => billing.record_verification_usage() no-ops.
+    stripe_api_key: str = Field(default="", validation_alias=AliasChoices("STRIPE_API_KEY", "STRIPE_SECRET_KEY"))
     stripe_webhook_secret: str = ""  # STRIPE_WEBHOOK_SECRET — signs the account-wide Checkout webhook (Phase 4 credits); unset => the webhook route rejects everything (never a silent-accept fallback)
     # Phase 4 payment gating (app/offercheck/credits.py) — same "off by default, explicit opt-in"
     # convention as every other paid/external integration in this vertical (StripeNotConfigured,

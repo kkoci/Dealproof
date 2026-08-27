@@ -441,6 +441,7 @@ async def test_create_credit_checkout_session_posts_correct_line_items():
     assert url == "https://checkout.stripe.com/session123"
     _, kwargs = mock_client.post.call_args
     assert kwargs["data"]["client_reference_id"] == "company-123"
+    assert kwargs["data"]["metadata[credit_count]"] == "10"  # what the webhook handler actually reads back
     assert kwargs["data"]["line_items[0][quantity]"] == 10
     assert kwargs["data"]["line_items[0][price_data][unit_amount]"] == 2500  # $25 in cents
 
@@ -514,14 +515,34 @@ def test_stripe_webhook_route_403_on_invalid_signature(client):
     assert resp.status_code == 403
 
 
+def _real_checkout_completed_payload(company_id: str, credit_count: int | None, *, include_line_items: bool = False) -> dict:
+    """
+    A checkout.session.completed payload shaped the way Stripe's real webhook
+    delivery actually looks — confirmed live against a real Stripe test-mode
+    account via `stripe listen` (see the CRITICAL BUG this regression-tests):
+    the session object carries metadata (whatever create_credit_checkout_session
+    set at creation time) and client_reference_id, but does NOT inline
+    line_items by default, and never has a bare top-level "quantity" field --
+    that field doesn't exist on a real Checkout Session object at all. The
+    original bug shipped because the old test used an idealized payload with a
+    top-level "quantity" the real API never sends.
+    """
+    obj = {"client_reference_id": company_id}
+    if credit_count is not None:
+        obj["metadata"] = {"credit_count": str(credit_count)}
+    if include_line_items:
+        obj["line_items"] = {"data": [{"quantity": credit_count}]}
+    return {"type": "checkout.session.completed", "data": {"object": obj}}
+
+
 def test_stripe_webhook_route_credits_balance_on_valid_event(client):
+    """Regression test for the CRITICAL credit-count bug: a real Stripe webhook
+    payload (metadata present, no line_items inlined) must credit the ACTUAL
+    purchased amount, not silently fall back to 1."""
     register = client.post("/api/offercheck/company/register", json={"name": "Acme Corp"})
     company_id = register.json()["company_id"]
 
-    payload = {
-        "type": "checkout.session.completed",
-        "data": {"object": {"client_reference_id": company_id, "quantity": 7}},
-    }
+    payload = _real_checkout_completed_payload(company_id, credit_count=7)
     raw_body = json.dumps(payload).encode()
     header = _stripe_signature_header(raw_body, "whsec_test")
 
@@ -536,8 +557,78 @@ def test_stripe_webhook_route_credits_balance_on_valid_event(client):
     assert auth.get_company(company_id).credit_balance == 7
 
 
+def test_stripe_webhook_route_credits_balance_correctly_for_a_larger_purchase(client):
+    """The exact live-confirmed failure case: $125 for 5 credits must grant 5,
+    not silently degrade to 1 the way the old line_items-summing logic did."""
+    register = client.post("/api/offercheck/company/register", json={"name": "Acme Corp"})
+    company_id = register.json()["company_id"]
+
+    payload = _real_checkout_completed_payload(company_id, credit_count=5)
+    raw_body = json.dumps(payload).encode()
+    header = _stripe_signature_header(raw_body, "whsec_test")
+
+    with patch("app.offercheck.routes.settings.stripe_webhook_secret", "whsec_test"):
+        resp = client.post(
+            "/api/offercheck/integrations/stripe/webhook",
+            content=raw_body,
+            headers={"Stripe-Signature": header, "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["credited"] == 5
+    assert auth.get_company(company_id).credit_balance == 5
+
+
+def test_stripe_webhook_route_ignores_inlined_line_items_uses_metadata_instead(client):
+    """Even if a future Stripe API version (or an `expand` param someone adds
+    later) DOES inline line_items with a different, wrong quantity, metadata is
+    still the source of truth -- guards against re-introducing a
+    line_items-reconstruction path that could disagree with what was actually
+    charged."""
+    register = client.post("/api/offercheck/company/register", json={"name": "Acme Corp"})
+    company_id = register.json()["company_id"]
+
+    payload = _real_checkout_completed_payload(company_id, credit_count=5, include_line_items=True)
+    # Deliberately make the (should-be-ignored) line_items disagree with metadata.
+    payload["data"]["object"]["line_items"]["data"][0]["quantity"] = 999
+    raw_body = json.dumps(payload).encode()
+    header = _stripe_signature_header(raw_body, "whsec_test")
+
+    with patch("app.offercheck.routes.settings.stripe_webhook_secret", "whsec_test"):
+        resp = client.post(
+            "/api/offercheck/integrations/stripe/webhook",
+            content=raw_body,
+            headers={"Stripe-Signature": header, "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["credited"] == 5
+    assert auth.get_company(company_id).credit_balance == 5
+
+
+def test_stripe_webhook_route_falls_back_to_one_credit_when_metadata_missing(client):
+    """Belt-and-suspenders path: if metadata is genuinely absent (shouldn't
+    happen now that creation always sets it), still grant 1 rather than 0 --
+    matches the original fallback's intent, now reached only in a genuinely
+    unexpected state (logged at error level in the route, not silently)."""
+    register = client.post("/api/offercheck/company/register", json={"name": "Acme Corp"})
+    company_id = register.json()["company_id"]
+
+    payload = _real_checkout_completed_payload(company_id, credit_count=None)
+    raw_body = json.dumps(payload).encode()
+    header = _stripe_signature_header(raw_body, "whsec_test")
+
+    with patch("app.offercheck.routes.settings.stripe_webhook_secret", "whsec_test"):
+        resp = client.post(
+            "/api/offercheck/integrations/stripe/webhook",
+            content=raw_body,
+            headers={"Stripe-Signature": header, "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["credited"] == 1
+    assert auth.get_company(company_id).credit_balance == 1
+
+
 def test_stripe_webhook_route_ignores_unknown_company(client):
-    payload = {"type": "checkout.session.completed", "data": {"object": {"client_reference_id": "ghost", "quantity": 3}}}
+    payload = _real_checkout_completed_payload("ghost", credit_count=3)
     raw_body = json.dumps(payload).encode()
     header = _stripe_signature_header(raw_body, "whsec_test")
     with patch("app.offercheck.routes.settings.stripe_webhook_secret", "whsec_test"):
