@@ -5,12 +5,14 @@ import PageShell from '../../components/offercheck/PageShell.jsx'
 import Card from '../../components/offercheck/Card.jsx'
 import Button from '../../components/offercheck/Button.jsx'
 import { FieldLabel, Input } from '../../components/offercheck/Input.jsx'
+import Checkbox from '../../components/offercheck/Checkbox.jsx'
 import { LockIcon, CopyIcon, CheckIcon } from '../../components/offercheck/icons.jsx'
 
 export default function CompanyRegister() {
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [hiresPerYear, setHiresPerYear] = useState('')
+  const [testMode, setTestMode] = useState(false)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
@@ -24,6 +26,7 @@ export default function CompanyRegister() {
       const data = await offercheckRegisterCompany({
         name: name.trim(),
         hires_per_year: Number(hiresPerYear || 0),
+        test_mode: testMode,
       })
       setResult(data)
     } catch (err) {
@@ -42,9 +45,14 @@ export default function CompanyRegister() {
     return (
       <PageShell width="lg">
         <h1 className="font-display text-hero-sm text-ink-primary mb-2">You're registered</h1>
-        <p className="flex items-center gap-1.5 text-sm text-sealed-text mb-6">
+        <p className="flex items-center gap-1.5 text-sm text-sealed-text mb-2">
           <LockIcon size={14} className="shrink-0" />
           Save this API key now — it's shown exactly once and cannot be recovered.
+        </p>
+        <p className="text-xs text-ink-muted mb-6">
+          {result.is_test_mode
+            ? 'Test account — 100 free verification credits, no real billing.'
+            : 'Live account — real billing applies per your plan.'}
         </p>
 
         <Card padding="sm" className="!bg-sealed-subtle !border-dashed !border-sealed-border mb-4">
@@ -111,6 +119,14 @@ export default function CompanyRegister() {
             onChange={(e) => setHiresPerYear(e.target.value)}
             placeholder="50"
           />
+        </div>
+
+        <div className="pt-2 border-t border-border">
+          <Checkbox checked={testMode} onChange={(e) => setTestMode(e.target.checked)}>
+            Register as a test account — no real billing, just 100 free verification
+            credits to try the product with. Your key will be prefixed <span className="font-mono">oc_test_</span> instead
+            of <span className="font-mono">oc_live_</span> so it's always clear which one you're using.
+          </Checkbox>
         </div>
 
         {error && (
