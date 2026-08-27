@@ -761,6 +761,26 @@ function DisputesPanel({ sessionId, token, myActor, view, visible, disputesData,
   )
 }
 
+// Read-only counterpart to EmployerSession.jsx's ClaimCompanyPanel: a candidate
+// never holds a company API key, so there's nothing for them to attach — this
+// just explains, in plain terms, why the proof below isn't showing yet instead
+// of surfacing the raw "verification unpaid — see POST /sessions/{id}/claim"
+// backend error text (visible here before this fix — that string is
+// implementation detail, not something a candidate should ever see).
+function PendingCompanyNote({ visible }) {
+  if (!visible) return null
+  return (
+    <Card emphasis="default" padding="lg" className="mb-4">
+      <p className="text-sm font-semibold text-ink-primary mb-1">Proof pending</p>
+      <p className="text-xs text-ink-muted leading-relaxed">
+        This negotiation didn't have a company account attached, so the attested proof is on hold until
+        the employer links their account. The negotiation outcome above is final either way — this only
+        affects the cryptographic verification receipt.
+      </p>
+    </Card>
+  )
+}
+
 function AttestationPanel({ sessionId, token, visible }) {
   const [receipt, setReceipt] = useState(null)
   const [cred, setCred] = useState(null)
@@ -1772,7 +1792,8 @@ export default function CandidateSession() {
         {nextAction?.key === 'proof' ? (
           <Card emphasis="spotlight" padding="lg">
             <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
-            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+            <PendingCompanyNote visible={Boolean(isTerminal && view?.payment_required)} />
+            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal && !view?.payment_required)} />
             <DisputesPanel
               sessionId={sessionId}
               token={token}
@@ -1785,7 +1806,8 @@ export default function CandidateSession() {
           </Card>
         ) : (
           <>
-            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+            <PendingCompanyNote visible={Boolean(isTerminal && view?.payment_required)} />
+            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal && !view?.payment_required)} />
             <DisputesPanel
               sessionId={sessionId}
               token={token}

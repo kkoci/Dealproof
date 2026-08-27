@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { getEnclaveAttestation, offercheckEmployerApproval, offercheckEmployerApprovalPackage, offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckEnableEmployerPackageAgentic, offercheckFileEmployerDispute, offercheckGetAttestation, offercheckGetCredential, offercheckGetDisputes, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckUpdateEmployerDisputeStatus } from '../../api.js'
+import { getEnclaveAttestation, offercheckClaimSession, offercheckEmployerApproval, offercheckEmployerApprovalPackage, offercheckEmployerMove, offercheckEnableEmployerAgentic, offercheckEnableEmployerPackageAgentic, offercheckFileEmployerDispute, offercheckGetAttestation, offercheckGetCredential, offercheckGetDisputes, offercheckGetSession, offercheckSetEmployerBand, offercheckStartAgentic, offercheckStartAgenticPackage, offercheckUpdateEmployerDisputeStatus } from '../../api.js'
 import PageShell from '../../components/offercheck/PageShell.jsx'
 import Card from '../../components/offercheck/Card.jsx'
 import Button from '../../components/offercheck/Button.jsx'
@@ -741,6 +741,76 @@ function DisputesPanel({ sessionId, token, myActor, view, visible, disputesData,
       )}
 
       <FileDisputeForm sessionId={sessionId} token={token} myActor={myActor} view={view} visible onFiled={onChanged} />
+    </Card>
+  )
+}
+
+// Surfaces once a terminal session's proof is withheld because no company was
+// ever attached to it — the common case for a candidate-initiated session,
+// which (unlike the employer-invite flow) has no point in its flow where a
+// company gets attached automatically. Mirrors POST /sessions/{id}/claim's own
+// docstring: "a session that couldn't be billed the first time... can be
+// unlocked later... without redoing the negotiation." Reads
+// `payment_required` off the already-fetched SessionView — no new backend
+// field needed, that boolean already exists specifically for this.
+function ClaimCompanyPanel({ sessionId, visible, onClaimed }) {
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('offercheck_api_key') || '')
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState('')
+  const [result, setResult] = useState(null)
+
+  if (!visible) return null
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setErr('')
+    setSubmitting(true)
+    try {
+      const data = await offercheckClaimSession(sessionId, apiKey.trim())
+      setResult(data)
+      if (!data.payment_required) onClaimed?.()
+    } catch (e) {
+      setErr(
+        /already claimed/i.test(e.message || '')
+          ? 'This session is already billed to a different company account.'
+          : (e.message || 'Could not attach that company account'),
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Card emphasis="default" padding="lg" className="mb-4">
+      <p className="text-sm font-semibold text-ink-primary mb-1">Bill this to your company account</p>
+      <p className="text-xs text-ink-muted leading-relaxed mb-3">
+        This negotiation happened without a company account attached, so the attested proof below is on
+        hold. Enter your Offer Check API key to bill this verification to your account and unlock it —
+        the negotiation outcome itself doesn't change either way.
+      </p>
+      {result && result.payment_required && (
+        <p className="mb-3 text-xs text-sealed-text">
+          Account attached, but it has no verification credit left — see Plans for how to add more.
+        </p>
+      )}
+      <form onSubmit={submit} className="space-y-3">
+        <div>
+          <FieldLabel>Company API key</FieldLabel>
+          <Input
+            mono
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="oc_live_… or oc_test_…"
+            required
+          />
+        </div>
+        {err && (
+          <div className="px-3 py-2 rounded-lg bg-danger-subtle border border-danger/30 text-danger text-xs">{err}</div>
+        )}
+        <Button type="submit" variant="secondary" size="sm" loading={submitting}>
+          {submitting ? 'Attaching…' : 'Attach and unlock proof'}
+        </Button>
+      </form>
     </Card>
   )
 }
@@ -1691,7 +1761,8 @@ export default function EmployerSession() {
         {nextAction?.key === 'proof' ? (
           <Card emphasis="spotlight" padding="lg">
             <p className="text-sm font-semibold text-teal-text uppercase tracking-wide mb-3">See what happened</p>
-            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+            <ClaimCompanyPanel sessionId={sessionId} visible={Boolean(isTerminal && view?.payment_required)} onClaimed={refresh} />
+            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal && !view?.payment_required)} />
             <DisputesPanel
               sessionId={sessionId}
               token={token}
@@ -1704,7 +1775,8 @@ export default function EmployerSession() {
           </Card>
         ) : (
           <>
-            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal)} />
+            <ClaimCompanyPanel sessionId={sessionId} visible={Boolean(isTerminal && view?.payment_required)} onClaimed={refresh} />
+            <AttestationPanel sessionId={sessionId} token={token} visible={Boolean(isTerminal && !view?.payment_required)} />
             <DisputesPanel
               sessionId={sessionId}
               token={token}

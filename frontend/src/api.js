@@ -520,6 +520,23 @@ export function offercheckListCompanySessions(apiKey) {
 }
 
 /**
+ * POST /api/offercheck/sessions/:id/claim — attach the calling company to an
+ * already-terminal session that has no company yet (or was already claimed by
+ * this same company) and retry the payment gate. This is how a candidate-
+ * initiated session — negotiated for free, with no company ever in the loop —
+ * gets billed/unlocked after the fact.
+ * @param {string} sessionId
+ * @param {string} apiKey
+ * @returns {Promise<object>} ClaimSessionResponse — { session_id, payment_required, credit_balance, attestation }
+ */
+export function offercheckClaimSession(sessionId, apiKey) {
+  return request(`/api/offercheck/sessions/${sessionId}/claim`, {
+    method: 'POST',
+    headers: { 'X-API-Key': apiKey },
+  })
+}
+
+/**
  * Classifies a stored/entered company API key before any authenticated UI renders, so a stale
  * key (e.g. left over in localStorage from before a backend restart wiped the in-memory company
  * store) never surfaces as a raw "invalid API key" error — it reads as "no company registered
