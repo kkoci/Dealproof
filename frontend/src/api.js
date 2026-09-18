@@ -13,9 +13,11 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     let errorMessage = `HTTP ${res.status}: ${res.statusText}`
+    let detail = null
     try {
       const errBody = await res.json()
       if (errBody.detail) {
+        detail = errBody.detail
         errorMessage = typeof errBody.detail === 'string'
           ? errBody.detail
           : JSON.stringify(errBody.detail)
@@ -28,6 +30,12 @@ async function request(path, options = {}) {
     // other failures without message-sniffing — added for the dispute-filing UI, but generally
     // useful; existing callers that only read `.message` are unaffected.
     err.status = res.status
+    // Raw (unstringified) `detail`, when the server sent a structured object rather than a
+    // plain string — e.g. devcred's ingest 404 fallback payload (see ingestRepos below), which
+    // a caller needs to branch on (`err.detail.fallback_available`) rather than string-match.
+    // `null` for a plain-string detail or no body at all; existing callers reading only
+    // `.message`/`.status` are unaffected.
+    err.detail = detail
     throw err
   }
 
@@ -669,4 +677,36 @@ export function evaluateDevCredential(credentialId) {
  */
 export function getDevCredential(credentialId) {
   return request(`/api/devcred/${credentialId}`)
+}
+
+/**
+ * POST /api/devcred/ingest-local — Route C (revoked-access fallback).
+ * Only derived metrics + a signature ever leave the client — no file paths, no
+ * private key. See app/devcred/local_signature.py for the signing contract and
+ * frontend/src/pages/devcred/LocalGitUpload.jsx for how commits/signature/public_key
+ * are produced.
+ * @param {{ credential_id: string, developer_handle: string, commits: object[],
+ *            signature: string, signature_format: 'ssh'|'gpg', public_key: string }} body
+ * @returns {Promise<{ credential_id, corpus_root, commit_count, key_fingerprint, github_key_currently_listed }>}
+ */
+export function ingestLocalGit(body) {
+  return request('/api/devcred/ingest-local', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * POST /api/devcred/self-report — Route D, the honest dead end. Produces a
+ * credential with verified: false and provenance_method: "self_reported" directly
+ * (no separate evaluate step — there's no git data to evaluate).
+ * @param {{ credential_id: string, developer_handle?: string, role_title: string,
+ *            company_name: string, employment_start: string, employment_end?: string }} body
+ * @returns {Promise<{ credential_id, credential, tee_quote, tee_attested }>}
+ */
+export function selfReportCredential(body) {
+  return request('/api/devcred/self-report', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }

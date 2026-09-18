@@ -21,3 +21,9 @@ pypdf==6.14.2
 python-multipart==0.0.32
 # Dev Credential: per-IP rate limiting on paid-API endpoints
 slowapi==0.1.10
+# Dev Credential: Route C (local .git upload) GPG signature verification —
+# best-effort, requires the `gpg` binary in the deployment image (see
+# app/devcred/local_signature.py::verify_gpg_signature for the fail-closed behavior
+# when it's absent). SSH signature verification (the primary Route C path) needs no
+# extra dependency — it's implemented on top of the `cryptography` pin above.
+python-gnupg==0.5.2

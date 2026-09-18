@@ -82,6 +82,51 @@ def test_ingest_rate_limited_at_10_per_hour(client):
 # 2. POST /{id}/evaluate — 3/hour/IP
 # ---------------------------------------------------------------------------
 
+def test_ingest_local_rate_limited_at_10_per_hour(client):
+    # Empty commits list fails fast with 400 (LocalGitUploadRequest.commits accepts
+    # an empty list at the schema level — the endpoint itself rejects it), before any
+    # signature verification work — the rate limit still applies first.
+    payload = {
+        "credential_id": "cid",
+        "developer_handle": "octocat",
+        "commits": [],
+        "signature": "x",
+        "signature_format": "ssh",
+        "public_key": "x",
+    }
+
+    for _ in range(10):
+        resp = client.post("/api/devcred/ingest-local", json=payload)
+        assert resp.status_code == 400
+
+    resp = client.post("/api/devcred/ingest-local", json=payload)
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["error"].lower()
+
+
+def test_self_report_rate_limited_at_10_per_hour(client):
+    payload = {
+        "credential_id": "will-be-unique",
+        "role_title": "Engineer",
+        "company_name": "Co",
+        "employment_start": "2020-01-01",
+    }
+
+    for i in range(10):
+        resp = client.post(
+            "/api/devcred/self-report",
+            json={**payload, "credential_id": f"self-report-rl-{i}"},
+        )
+        assert resp.status_code == 200
+
+    resp = client.post(
+        "/api/devcred/self-report",
+        json={**payload, "credential_id": "self-report-rl-overflow"},
+    )
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["error"].lower()
+
+
 def test_evaluate_rate_limited_at_3_per_hour(client):
     # Unknown credential_id fails fast with 404 — same reasoning as above.
     for _ in range(3):

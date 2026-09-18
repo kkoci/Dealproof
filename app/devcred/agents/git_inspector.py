@@ -81,6 +81,69 @@ def _seniority(
     return "junior"
 
 
+EVENTS_MID_SIGNAL_MIN_EVENTS = 50   # minimum total events to consider "mid" from events-stream evidence alone
+EVENTS_MID_SIGNAL_MIN_MONTHS = 2    # minimum distinct active months for the same
+
+
+@dataclass
+class EventsInspectionReport:
+    """
+    Route B (events-stream fallback) counterpart to GitInspectionReport.
+
+    Deliberately cannot reach "senior": GitHub's events timeline carries no diffs,
+    languages, or test-file signal — the same evidence GitInspectionReport.seniority_signal
+    requires (>= 2 deep languages, has_test_culture) to call something "senior" is
+    structurally unavailable here. Capping this signal at "mid" is not a special-cased
+    rule bolted on top — it falls out of the same _seniority() thresholds Route A uses,
+    just fed permanently-empty/false values for the fields Route B cannot supply.
+    """
+    total_events: int
+    active_months: int
+    event_type_counts: dict
+    first_event_date: str | None
+    last_event_date: str | None
+    seniority_signal: str   # "junior" | "mid" — never "senior" from events alone
+
+
+def inspect_events(event_metrics: dict) -> EventsInspectionReport:
+    """
+    Deterministic, no-LLM inspection of Route B event metrics (see
+    git_hasher.extract_event_metrics). Mirrors GitInspectorAgent.inspect()'s
+    discipline — the hard signal here is likewise authoritative and cannot be
+    upgraded by an LLM (Route B skips the LLM evaluation step entirely; see
+    routes.py::evaluate_credential's events_stream branch for why).
+    """
+    total_events = event_metrics.get("total_events", 0)
+    active_months = event_metrics.get("active_months", 0)
+    event_type_counts = event_metrics.get("event_type_counts", {})
+
+    has_pr_activity = event_type_counts.get("PullRequestEvent", 0) > 0
+    has_review_activity = event_type_counts.get("PullRequestReviewEvent", 0) > 0
+
+    # Events-specific "mid" bar: meaningful volume, spread across more than one
+    # month (not a single burst), with evidence of collaborative work (a PR opened
+    # or reviewed) rather than solo pushes alone. There is no path to "senior" here
+    # at all — see the class docstring for why that's structural, not a threshold
+    # tuning choice.
+    if (
+        total_events >= EVENTS_MID_SIGNAL_MIN_EVENTS
+        and active_months >= EVENTS_MID_SIGNAL_MIN_MONTHS
+        and (has_pr_activity or has_review_activity)
+    ):
+        seniority_signal = "mid"
+    else:
+        seniority_signal = "junior"
+
+    return EventsInspectionReport(
+        total_events=total_events,
+        active_months=active_months,
+        event_type_counts=event_type_counts,
+        first_event_date=event_metrics.get("first_event_date"),
+        last_event_date=event_metrics.get("last_event_date"),
+        seniority_signal=seniority_signal,
+    )
+
+
 class GitInspectorAgent:
     """
     Deterministic layer. Runs first. No LLM, no network.

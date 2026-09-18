@@ -321,23 +321,41 @@ async def get_corpus_by_root(corpus_root: str) -> dict | None:
 
 
 async def create_dev_credentials_table() -> None:
-    """Create dev_credentials table for the devcred vertical."""
+    """
+    Create dev_credentials table for the devcred vertical.
+
+    provenance_method / event_count added for the revoked-repo-access fallback
+    (Routes B/C/D — see app/devcred/routes.py). Added via ALTER TABLE, same safe
+    "duplicate column name -> swallow and move on" migration pattern init_db() uses
+    for the core `deals` table above, so existing DBs from before this change don't
+    need a manual migration.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS dev_credentials (
-                credential_id    TEXT PRIMARY KEY,
-                developer_handle TEXT,
-                repo_corpus_root TEXT NOT NULL,
-                commit_count     INTEGER,
-                metrics_json     TEXT,
-                credential_json  TEXT,
-                tee_quote        TEXT,
-                status           TEXT DEFAULT 'pending',
-                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                credential_id     TEXT PRIMARY KEY,
+                developer_handle  TEXT,
+                repo_corpus_root  TEXT NOT NULL,
+                commit_count      INTEGER,
+                metrics_json      TEXT,
+                credential_json   TEXT,
+                tee_quote         TEXT,
+                status            TEXT DEFAULT 'pending',
+                provenance_method TEXT DEFAULT 'direct_access',
+                event_count       INTEGER,
+                created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        try:
+            await db.execute("ALTER TABLE dev_credentials ADD COLUMN provenance_method TEXT DEFAULT 'direct_access'")
+        except Exception:
+            pass  # column already present
+        try:
+            await db.execute("ALTER TABLE dev_credentials ADD COLUMN event_count INTEGER")
+        except Exception:
+            pass  # column already present
         await db.commit()
 
 
@@ -347,19 +365,70 @@ async def create_dev_credential(
     repo_corpus_root: str,
     commit_count: int,
     metrics: dict,
+    provenance_method: str = "direct_access",
+    event_count: int | None = None,
 ) -> None:
-    """Insert or replace a dev credential record. Token never passed here."""
+    """
+    Insert or replace a dev credential record. Token never passed here.
+
+    provenance_method/event_count default to Route A's values so every existing
+    caller (app.devcred.routes.ingest_repos's direct-access path, and any test
+    that constructs a call without these two kwargs) is unaffected.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR REPLACE INTO dev_credentials "
-            "(credential_id, developer_handle, repo_corpus_root, commit_count, metrics_json, status) "
-            "VALUES (?, ?, ?, ?, ?, 'ingested')",
+            "(credential_id, developer_handle, repo_corpus_root, commit_count, metrics_json, "
+            "status, provenance_method, event_count) "
+            "VALUES (?, ?, ?, ?, ?, 'ingested', ?, ?)",
             (
                 credential_id,
                 developer_handle,
                 repo_corpus_root,
                 commit_count,
                 json.dumps(metrics),
+                provenance_method,
+                event_count,
+            ),
+        )
+        await db.commit()
+
+
+async def create_dev_credential_complete(
+    credential_id: str,
+    developer_handle: str,
+    repo_corpus_root: str,
+    credential: dict,
+    tee_quote: str | None,
+    provenance_method: str,
+) -> None:
+    """
+    Insert a dev credential record that's already complete at creation time — used
+    by Route D (self_reported), which has no separate ingest/evaluate split since
+    there's no git data to fetch or evaluate. commit_count/metrics_json are left
+    empty; the full credential lives in credential_json exactly as it does after
+    evaluate_credential() finishes for the other three routes.
+
+    repo_corpus_root is NOT NULL at the table level (unchanged from Route A, to
+    avoid touching that constraint for this addition) — the self_reported caller
+    passes a clearly non-cryptographic placeholder (e.g. "self-reported:<id>"),
+    never a real hash. provenance_method=self_reported and verified=False on the
+    credential itself are what actually mark this record as unverified; this
+    column is a leftover of Route A's schema shape, not load-bearing here.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO dev_credentials "
+            "(credential_id, developer_handle, repo_corpus_root, commit_count, metrics_json, "
+            "credential_json, tee_quote, status, provenance_method, event_count) "
+            "VALUES (?, ?, ?, 0, NULL, ?, ?, 'complete', ?, NULL)",
+            (
+                credential_id,
+                developer_handle,
+                repo_corpus_root,
+                json.dumps(credential),
+                tee_quote,
+                provenance_method,
             ),
         )
         await db.commit()
@@ -385,7 +454,8 @@ async def get_dev_credential(credential_id: str) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT credential_id, developer_handle, repo_corpus_root, commit_count, "
-            "metrics_json, credential_json, tee_quote, status, created_at "
+            "metrics_json, credential_json, tee_quote, status, created_at, "
+            "provenance_method, event_count "
             "FROM dev_credentials WHERE credential_id = ?",
             (credential_id,),
         ) as cursor:
@@ -404,6 +474,8 @@ async def get_dev_credential(credential_id: str) -> dict | None:
         "tee_quote": row[6],
         "status": row[7],
         "created_at": row[8],
+        "provenance_method": row[9] or "direct_access",
+        "event_count": row[10],
     }
 
 

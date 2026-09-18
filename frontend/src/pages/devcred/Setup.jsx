@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ingestRepos, evaluateDevCredential, getEnclaveAttestation } from '../../api.js'
+import LocalGitUpload from './LocalGitUpload.jsx'
+import SelfReportForm from './SelfReportForm.jsx'
 
 function RepoTag({ repo, onRemove }) {
   return (
@@ -283,6 +285,17 @@ export default function DevCredSetup() {
   const [error, setError] = useState('')
   const tokenRef = useRef(null)
 
+  // Revoked-repo-access fallback (Routes B/C/D — see app/devcred/routes.py). Route B
+  // (events_stream) needs no UI branching at all — it returns the same
+  // DevCredIngestResponse shape and the existing evaluate step just runs normally.
+  // This state is only for the genuine dead end: Route A AND Route B both found
+  // nothing, so the ingest 404 carries a structured `fallback_available` detail
+  // (see api.js's `err.detail`) offering Route C and/or Route D instead of a bare error.
+  const [fallbackDetail, setFallbackDetail] = useState(null)
+  const [fallbackCredentialId, setFallbackCredentialId] = useState(null)
+  const [fallbackHandle, setFallbackHandle] = useState('')
+  const [fallbackMode, setFallbackMode] = useState(null) // null | 'local' | 'self-report'
+
   // Verify, then release: fetch the enclave attestation before the form
   // becomes usable (Hang Yin / Phala feedback, July 20 2026).
   const [attestation, setAttestation] = useState(null)
@@ -341,6 +354,7 @@ export default function DevCredSetup() {
     if (repos.length === 0) { setError('Add at least one repo'); return }
 
     setError('')
+    setFallbackDetail(null)
     setSubmitting(true)
 
     const credentialId = crypto.randomUUID()
@@ -351,7 +365,8 @@ export default function DevCredSetup() {
     setShowToken(false)
 
     try {
-      // Step 1: ingest
+      // Step 1: ingest — Route A (direct_access) or Route B (events_stream) both
+      // return this same response shape, so no branching is needed here for Route B.
       setSteps({ ingest: 'loading', evaluate: 'pending' })
       await ingestRepos({
         github_token: capturedToken,
@@ -367,6 +382,17 @@ export default function DevCredSetup() {
       // Navigate to results
       navigate(`/devcred/${credentialId}`)
     } catch (err) {
+      if (err.status === 404 && err.detail?.fallback_available) {
+        // Route A and Route B both found nothing — offer Route C / Route D instead
+        // of a dead-end error. developer_handle isn't known client-side at this point
+        // (the token never round-trips back to the browser) — Route C's upload flow
+        // asks for it directly since it needs it for the identity cross-check anyway.
+        setFallbackDetail(err.detail)
+        setFallbackCredentialId(credentialId)
+        setSteps({ ingest: 'pending', evaluate: 'pending' })
+        setSubmitting(false)
+        return
+      }
       setError(err.message || 'Something went wrong')
       setSteps({ ingest: 'pending', evaluate: 'pending' })
       setSubmitting(false)
@@ -562,6 +588,74 @@ export default function DevCredSetup() {
             )}
           </button>
         </form>
+
+        {/* Revoked-access fallback — only shown when Route A AND Route B both found
+            nothing (see handleSubmit's catch block). Route B itself needs no UI here
+            at all; it's transparent to this form. */}
+        {fallbackDetail && (
+          <div className="mt-6 space-y-4">
+            <div className="rounded-lg bg-yellow-950/30 border border-yellow-800/50 px-4 py-3 text-sm text-yellow-300">
+              {fallbackDetail.message}
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                GitHub username
+              </label>
+              <input
+                type="text"
+                value={fallbackHandle}
+                onChange={(e) => setFallbackHandle(e.target.value)}
+                placeholder="octocat"
+                className="w-full px-3 py-2.5 rounded-lg bg-gray-900/60 border border-gray-700/60 text-gray-200 placeholder-gray-600 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setFallbackMode('local')}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
+                  fallbackMode === 'local'
+                    ? 'bg-indigo-600/30 border-indigo-600/60 text-indigo-300'
+                    : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                I still have a local copy
+              </button>
+              <button
+                type="button"
+                onClick={() => setFallbackMode('self-report')}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
+                  fallbackMode === 'self-report'
+                    ? 'bg-gray-700/50 border-gray-600/60 text-gray-200'
+                    : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                I don't — submit unverified
+              </button>
+            </div>
+
+            {fallbackMode === 'local' && fallbackHandle.trim() && (
+              <LocalGitUpload
+                credentialId={fallbackCredentialId}
+                developerHandle={fallbackHandle.trim()}
+                onComplete={() => navigate(`/devcred/${fallbackCredentialId}`)}
+              />
+            )}
+            {fallbackMode === 'local' && !fallbackHandle.trim() && (
+              <p className="text-xs text-gray-500">Enter your GitHub username above to continue.</p>
+            )}
+
+            {fallbackMode === 'self-report' && (
+              <SelfReportForm
+                credentialId={fallbackCredentialId}
+                developerHandle={fallbackHandle.trim()}
+                onComplete={() => navigate(`/devcred/${fallbackCredentialId}`)}
+              />
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

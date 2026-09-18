@@ -10,6 +10,27 @@ const SENIORITY_COLOR = {
   junior: 'text-yellow-300 border-yellow-700/60 bg-yellow-950/40',
 }
 
+// Labels/styling for the four provenance_method values — see
+// app/devcred/schemas.py::SeniorDevCredential's docstring for what each means.
+// Deliberately distinct visual treatment for self_reported (amber/unverified) vs.
+// the three genuinely verified routes (emerald/indigo) — this must never read as
+// "just another data source" alongside direct_access.
+const PROVENANCE_LABEL = {
+  direct_access: { text: 'Verified · Direct GitHub Access', className: 'text-emerald-300 border-emerald-700/50 bg-emerald-950/30' },
+  events_stream: { text: 'Verified · GitHub Activity Timeline', className: 'text-indigo-300 border-indigo-700/50 bg-indigo-950/30' },
+  local_git_upload: { text: 'Verified · Signed Local Upload', className: 'text-indigo-300 border-indigo-700/50 bg-indigo-950/30' },
+  self_reported: { text: 'UNVERIFIED · Self-Reported', className: 'text-yellow-300 border-yellow-700/60 bg-yellow-950/40' },
+}
+
+function ProvenanceBadge({ method }) {
+  const cfg = PROVENANCE_LABEL[method] || PROVENANCE_LABEL.direct_access
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold uppercase tracking-wide ${cfg.className}`}>
+      {cfg.text}
+    </span>
+  )
+}
+
 function CredentialField({ label, children }) {
   return (
     <div>
@@ -60,15 +81,49 @@ function LanguageTag({ lang }) {
   )
 }
 
+function SelfReportedBody({ cred }) {
+  const sr = cred.self_reported
+  return (
+    <div className="px-5 py-5 space-y-4">
+      <div className="rounded-lg bg-yellow-950/30 border border-yellow-800/50 px-4 py-3 text-sm text-yellow-200">
+        No verifiable git signal was available for this entry — direct repository access was
+        revoked, GitHub's activity-timeline window had already passed, and no signed local copy
+        was submitted. Everything below is the candidate's own unverified claim, not a
+        cryptographically or platform-verified assessment.
+      </div>
+      {sr && (
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <CredentialField label="Role">
+            <span className="text-sm font-semibold text-gray-200">{sr.role_title}</span>
+          </CredentialField>
+          <CredentialField label="Company">
+            <span className="text-sm font-semibold text-gray-200">{sr.company_name}</span>
+          </CredentialField>
+          <CredentialField label="Start Date">
+            <span className="text-sm text-gray-300">{sr.employment_start}</span>
+          </CredentialField>
+          <CredentialField label="End Date">
+            <span className="text-sm text-gray-300">{sr.employment_end || 'Present (self-reported)'}</span>
+          </CredentialField>
+        </dl>
+      )}
+      <CredentialField label="Note">
+        <p className="text-sm text-gray-400 leading-relaxed">{cred.qualitative_assessment}</p>
+      </CredentialField>
+    </div>
+  )
+}
+
 function CredentialCard({ cred }) {
   if (!cred) return null
 
   const seniorityClass = SENIORITY_COLOR[cred.seniority_level] || SENIORITY_COLOR.junior
+  const isSelfReported = cred.provenance_method === 'self_reported' || cred.verified === false
 
   return (
-    <div className="rounded-2xl border border-gray-800/60 bg-gray-900/40 overflow-hidden">
+    <div className={`rounded-2xl border overflow-hidden ${isSelfReported ? 'border-yellow-800/50 bg-yellow-950/5' : 'border-gray-800/60 bg-gray-900/40'}`}>
       {/* header strip */}
-      <div className="px-5 py-4 border-b border-gray-800/40 bg-gray-900/60 flex items-center justify-between gap-4">
+      <div className="px-5 py-4 border-b border-gray-800/40 bg-gray-900/60 flex items-center justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2 text-xs font-mono text-indigo-400 mb-1">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -77,13 +132,21 @@ function CredentialCard({ cred }) {
             SeniorDevCredential
           </div>
           <h2 className="text-xl font-bold text-white">@{cred.developer_handle}</h2>
+          <div className="mt-2">
+            <ProvenanceBadge method={cred.provenance_method} />
+          </div>
         </div>
-        <span className={`px-3 py-1.5 rounded-full border text-sm font-bold uppercase tracking-wide ${seniorityClass}`}>
-          {cred.seniority_level}
-        </span>
+        {!isSelfReported && (
+          <span className={`px-3 py-1.5 rounded-full border text-sm font-bold uppercase tracking-wide ${seniorityClass}`}>
+            {cred.seniority_level}
+          </span>
+        )}
       </div>
 
-      {/* body */}
+      {isSelfReported ? (
+        <SelfReportedBody cred={cred} />
+      ) : (
+      /* body */
       <div className="px-5 py-5 space-y-4">
         <dl className="space-y-4">
 
@@ -162,6 +225,7 @@ function CredentialCard({ cred }) {
           </div>
         </dl>
       </div>
+      )}
     </div>
   )
 }

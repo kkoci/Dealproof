@@ -89,6 +89,93 @@ def compute_repo_corpus_root(commits: list[dict]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def hash_event(event: dict) -> str:
+    """
+    SHA-256 of a canonical GitHub Events-API event: id, type, repo name, timestamp.
+    Deliberately excludes the event `payload` — for a PushEvent that includes commit
+    messages/shas already covered by hash_commit's own privacy discipline elsewhere, but
+    for other event types (IssuesEvent, etc.) the payload can carry free-text bodies we
+    have no reason to hash into an evidentiary root. Only the fields that establish
+    "this event happened, of this type, against this repo, at this time" are hashed.
+    """
+    canonical = {
+        "id": event.get("id"),
+        "type": event.get("type"),
+        "repo": (event.get("repo") or {}).get("name"),
+        "created_at": event.get("created_at"),
+    }
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def compute_events_corpus_root(events: list[dict]) -> str:
+    """
+    Merkle root over GitHub events — same length-prefixed algorithm as
+    compute_repo_corpus_root, just over hash_event() instead of hash_commit().
+    Used for Route B (events-stream fallback) credentials in place of a real
+    commit corpus root, since no commit-level data was ever fetched.
+    """
+    if not events:
+        raise ValueError("compute_events_corpus_root requires at least one event")
+    event_hashes = [hash_event(e) for e in events]
+    length_prefix = len(event_hashes).to_bytes(4, "big")
+    raw = length_prefix + b"".join(bytes.fromhex(h) for h in event_hashes)
+    return hashlib.sha256(raw).hexdigest()
+
+
+def extract_event_metrics(events: list[dict]) -> dict:
+    """
+    Deterministic metrics extraction from GitHub Events-API events — the Route B
+    (revoked-access fallback) counterpart to extract_commit_metrics().
+
+    GitHub's events stream carries no diffs, file paths, or language info — only
+    event type, repo name, and timestamp — so this is deliberately a coarser
+    signal than extract_commit_metrics() produces. There is no "languages",
+    "avg_diff_size", or "test_file_ratio" here; downstream (git_inspector.inspect_events)
+    reflects that by capping the seniority signal it can produce.
+
+    Returns:
+      total_events, active_months, event_type_counts,
+      first_event_date, last_event_date, repos_touched
+    """
+    if not events:
+        return {
+            "total_events": 0,
+            "active_months": 0,
+            "event_type_counts": {},
+            "first_event_date": None,
+            "last_event_date": None,
+            "repos_touched": 0,
+        }
+
+    dates = [_parse_date(e.get("created_at")) for e in events]
+    dates_valid = [d for d in dates if d is not None]
+    active_months = len({(d.year, d.month) for d in dates_valid})
+
+    event_type_counts: dict[str, int] = {}
+    repos_seen: set[str] = set()
+    for e in events:
+        etype = e.get("type") or "UnknownEvent"
+        event_type_counts[etype] = event_type_counts.get(etype, 0) + 1
+        repo_name = (e.get("repo") or {}).get("name")
+        if repo_name:
+            repos_seen.add(repo_name)
+
+    sorted_dates = sorted(dates_valid)
+    first_event_date = sorted_dates[0].isoformat() if sorted_dates else None
+    last_event_date = sorted_dates[-1].isoformat() if sorted_dates else None
+
+    return {
+        "total_events": len(events),
+        "active_months": active_months,
+        "event_type_counts": event_type_counts,
+        "first_event_date": first_event_date,
+        "last_event_date": last_event_date,
+        "repos_touched": len(repos_seen),
+    }
+
+
 def _parse_date(date_str: str | None) -> datetime | None:
     if not date_str:
         return None

@@ -683,3 +683,670 @@ async def test_ingest_repos_covers_feature_branch_only_commits():
     mock_db.create_dev_credential.assert_awaited_once()
     _, kwargs = mock_db.create_dev_credential.call_args
     assert kwargs["commit_count"] == 3
+
+
+# ===========================================================================
+# Revoked-repo-access fallback: Route B (events_stream), Route C
+# (local_git_upload), Route D (self_reported)
+# ===========================================================================
+
+import base64
+import struct
+import time
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import HTTPException
+
+from app.devcred.git_hasher import compute_events_corpus_root, extract_event_metrics
+from app.devcred.agents.git_inspector import inspect_events
+from app.devcred.local_signature import (
+    _write_string,
+    SSHSIG_MAGIC,
+    canonical_payload,
+    verify_gpg_signature,
+    verify_signature,
+    verify_ssh_signature,
+)
+from app.devcred.schemas import ProvenanceMethod
+
+
+def _event(etype: str, repo: str, created_at: str, event_id: str = "1") -> dict:
+    return {"id": event_id, "type": etype, "repo": {"name": repo}, "created_at": created_at}
+
+
+# ---------------------------------------------------------------------------
+# 20. git_hasher: extract_event_metrics / compute_events_corpus_root
+# ---------------------------------------------------------------------------
+
+def test_extract_event_metrics_counts_types_and_months():
+    events = [
+        _event("PushEvent", "acme/widgets", "2026-01-05T00:00:00Z", "1"),
+        _event("PullRequestEvent", "acme/widgets", "2026-01-20T00:00:00Z", "2"),
+        _event("PullRequestReviewEvent", "acme/widgets", "2026-02-01T00:00:00Z", "3"),
+    ]
+    m = extract_event_metrics(events)
+    assert m["total_events"] == 3
+    assert m["active_months"] == 2
+    assert m["event_type_counts"] == {"PushEvent": 1, "PullRequestEvent": 1, "PullRequestReviewEvent": 1}
+    assert m["repos_touched"] == 1
+    assert m["first_event_date"] is not None
+    assert m["last_event_date"] is not None
+
+
+def test_extract_event_metrics_empty():
+    m = extract_event_metrics([])
+    assert m["total_events"] == 0
+    assert m["active_months"] == 0
+    assert m["event_type_counts"] == {}
+
+
+def test_events_corpus_root_deterministic_and_sensitive_to_content():
+    events = [_event("PushEvent", "acme/widgets", "2026-01-05T00:00:00Z", "1")]
+    r1 = compute_events_corpus_root(events)
+    r2 = compute_events_corpus_root(events)
+    assert r1 == r2
+    assert len(r1) == 64
+
+    other = [_event("PushEvent", "acme/widgets", "2026-01-06T00:00:00Z", "1")]
+    assert compute_events_corpus_root(other) != r1
+
+
+def test_events_corpus_root_requires_at_least_one_event():
+    with pytest.raises(ValueError):
+        compute_events_corpus_root([])
+
+
+# ---------------------------------------------------------------------------
+# 21. git_inspector.inspect_events — capped below "senior"
+# ---------------------------------------------------------------------------
+
+def test_inspect_events_junior_when_sparse():
+    metrics = extract_event_metrics([_event("PushEvent", "acme/widgets", "2026-01-05T00:00:00Z")])
+    r = inspect_events(metrics)
+    assert r.seniority_signal == "junior"
+
+
+def test_inspect_events_mid_when_substantial_and_collaborative():
+    events = [_event("PushEvent", "acme/widgets", f"2026-01-{i:02d}T00:00:00Z", str(i)) for i in range(1, 26)]
+    events += [_event("PullRequestEvent", "acme/widgets", f"2026-02-{i:02d}T00:00:00Z", f"pr{i}") for i in range(1, 26)]
+    metrics = extract_event_metrics(events)
+    assert metrics["total_events"] >= 50
+    r = inspect_events(metrics)
+    assert r.seniority_signal == "mid"
+
+
+def test_inspect_events_never_reaches_senior_even_with_huge_volume():
+    """SCAE-style guard: no volume of bare PushEvents alone should reach 'senior' —
+    there is no path to it at all in inspect_events(), by construction."""
+    events = [_event("PushEvent", "acme/widgets", "2026-01-01T00:00:00Z", str(i)) for i in range(1000)]
+    metrics = extract_event_metrics(events)
+    r = inspect_events(metrics)
+    assert r.seniority_signal in ("junior", "mid")
+    assert r.seniority_signal != "senior"
+
+
+def test_inspect_events_mid_requires_collaborative_evidence_not_just_volume():
+    """Pure solo pushes, no PR/review activity, must not reach 'mid' regardless of volume."""
+    events = [_event("PushEvent", "acme/widgets", f"2026-{m:02d}-01T00:00:00Z", str(m)) for m in range(1, 7)]
+    metrics = extract_event_metrics(events)
+    r = inspect_events(metrics)
+    assert r.seniority_signal == "junior"
+
+
+# ---------------------------------------------------------------------------
+# 22. routes._events_referencing_repos / _dead_end_detail
+# ---------------------------------------------------------------------------
+
+def test_events_referencing_repos_filters_case_insensitively():
+    from app.devcred.routes import _events_referencing_repos
+
+    events = [
+        _event("PushEvent", "Acme/Widgets", "2026-01-01T00:00:00Z", "1"),
+        _event("PushEvent", "other/repo", "2026-01-01T00:00:00Z", "2"),
+    ]
+    matched = _events_referencing_repos(events, ["acme/widgets"])
+    assert len(matched) == 1
+    assert matched[0]["id"] == "1"
+
+
+def test_dead_end_detail_lists_fallback_routes():
+    from app.devcred.routes import _dead_end_detail
+
+    detail = _dead_end_detail(["acme/widgets"])
+    assert detail["error"] == "repo_access_revoked_no_recent_activity"
+    assert detail["fallback_available"] == ["local_git_upload", "self_reported"]
+    assert detail["revoked_repos"] == ["acme/widgets"]
+
+
+# ---------------------------------------------------------------------------
+# 23. ingest_repos — Route B fallback on full revocation
+# ---------------------------------------------------------------------------
+
+class _FakeGithubAsyncClientRevoked:
+    """All repo access 404s; the events endpoint returns activity matching the
+    requested (now-inaccessible) repo, within GitHub's real ~30-day window."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url, headers=None, params=None, timeout=None):
+        params = params or {}
+        if url.endswith("/user"):
+            return _make_github_response({"login": "octocat"})
+        if url.endswith("/branches"):
+            return _make_github_response({}, status_code=404)
+        if url.endswith("/events"):
+            if params.get("page", 1) != 1:
+                return _make_github_response([])
+            return _make_github_response([
+                {"id": "1", "type": "PushEvent", "repo": {"name": "octocat/hello-world"},
+                 "created_at": "2026-09-01T00:00:00Z"},
+                {"id": "2", "type": "PullRequestEvent", "repo": {"name": "octocat/hello-world"},
+                 "created_at": "2026-09-05T00:00:00Z"},
+                {"id": "3", "type": "PushEvent", "repo": {"name": "unrelated/other"},
+                 "created_at": "2026-09-05T00:00:00Z"},
+            ])
+        return _make_github_response({}, status_code=404)
+
+
+class _FakeGithubAsyncClientRevokedNoEvents(_FakeGithubAsyncClientRevoked):
+    """Same as above, but the account has no matching recent activity either —
+    the genuine dead-end case."""
+
+    async def get(self, url, headers=None, params=None, timeout=None):
+        if url.endswith("/events"):
+            return _make_github_response([])
+        return await super().get(url, headers=headers, params=params, timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_ingest_repos_falls_back_to_events_stream_on_full_revocation():
+    from app.devcred.routes import ingest_repos, DevCredIngest
+
+    body = DevCredIngest(
+        github_token="fake-token",
+        repos=["octocat/hello-world"],
+        credential_id="revoked-fallback-id",
+    )
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClientRevoked()):
+        mock_db.create_dev_credential = AsyncMock()
+        response = await ingest_repos(_fake_request(path="/api/devcred/ingest"), body)
+
+    assert response.provenance_method == "events_stream"
+    assert response.commit_count == 0
+    assert response.event_count == 2  # only the 2 events referencing the requested repo
+    mock_db.create_dev_credential.assert_awaited_once()
+    _, kwargs = mock_db.create_dev_credential.call_args
+    assert kwargs["provenance_method"] == "events_stream"
+    assert kwargs["event_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_ingest_repos_dead_end_when_events_also_empty():
+    from app.devcred.routes import ingest_repos, DevCredIngest
+
+    body = DevCredIngest(
+        github_token="fake-token",
+        repos=["octocat/hello-world"],
+        credential_id="dead-end-id",
+    )
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("httpx.AsyncClient", return_value=_FakeGithubAsyncClientRevokedNoEvents()):
+        mock_db.create_dev_credential = AsyncMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await ingest_repos(_fake_request(path="/api/devcred/ingest"), body)
+
+    assert exc_info.value.status_code == 404
+    detail = exc_info.value.detail
+    assert detail["error"] == "repo_access_revoked_no_recent_activity"
+    assert "local_git_upload" in detail["fallback_available"]
+    assert "self_reported" in detail["fallback_available"]
+    mock_db.create_dev_credential.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 24. evaluate_credential — events_stream branch skips the LLM entirely
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_evaluate_credential_events_stream_never_calls_llm():
+    from app.devcred.routes import evaluate_credential
+
+    events = [_event("PushEvent", "acme/widgets", "2026-09-01T00:00:00Z", str(i)) for i in range(5)]
+    metrics = extract_event_metrics(events)
+
+    db_record = {
+        "credential_id": "events-eval-id",
+        "developer_handle": "octocat",
+        "repo_corpus_root": "e" * 64,
+        "commit_count": 0,
+        "event_count": metrics["total_events"],
+        "metrics": metrics,
+        "credential": None,
+        "tee_quote": None,
+        "status": "ingested",
+        "provenance_method": "events_stream",
+    }
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("app.devcred.routes.sign_result", new=AsyncMock(return_value="sim_quote:events")), \
+         patch("app.devcred.agents.git_evaluator.GitEvaluatorAgent.evaluate", new=AsyncMock()) as mock_evaluate:
+
+        mock_db.get_dev_credential = AsyncMock(return_value=db_record)
+        mock_db.update_dev_credential_result = AsyncMock()
+        mock_db.increment_daily_eval_count = AsyncMock(return_value=1)
+        mock_db.decrement_daily_eval_count = AsyncMock()
+
+        response = await evaluate_credential(_fake_request(), "events-eval-id")
+
+    mock_evaluate.assert_not_called()
+    assert response.credential.provenance_method == ProvenanceMethod.EVENTS_STREAM
+    assert response.credential.verified is True
+    assert response.credential.event_count == metrics["total_events"]
+    assert response.credential.hard_seniority_signal == "junior"
+    assert "events timeline fallback" in " ".join(response.credential.caveats)
+
+
+# ---------------------------------------------------------------------------
+# 25. local_signature — SSHSIG verification (round-tripped against this
+# module's own wire encoder — see local_signature.py's module docstring for
+# why this has NOT been cross-checked against a genuine `ssh-keygen` binary)
+# ---------------------------------------------------------------------------
+
+def _build_test_ssh_signature(payload: bytes, namespace: str = "devcred-route-c", hash_alg: str = "sha256"):
+    """Builds a spec-shaped SSHSIG blob + matching OpenSSH public key line using a
+    freshly generated Ed25519 keypair, for testing verify_ssh_signature in isolation."""
+    import hashlib as _hashlib
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key()
+    raw_pub = pub.public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
+    pubkey_blob = _write_string(b"ssh-ed25519") + _write_string(raw_pub)
+
+    hasher = {"sha256": _hashlib.sha256, "sha512": _hashlib.sha512}[hash_alg]
+    message_hash = hasher(payload).digest()
+    signed_data = SSHSIG_MAGIC + _write_string(namespace.encode()) + _write_string(b"") + _write_string(hash_alg.encode()) + _write_string(message_hash)
+
+    raw_sig = priv.sign(signed_data)
+    signature_field = _write_string(b"ssh-ed25519") + _write_string(raw_sig)
+
+    blob = SSHSIG_MAGIC + struct.pack(">I", 1) + _write_string(pubkey_blob) + _write_string(namespace.encode()) + _write_string(b"") + _write_string(hash_alg.encode()) + _write_string(signature_field)
+
+    armored = "-----BEGIN SSH SIGNATURE-----\n" + base64.b64encode(blob).decode() + "\n-----END SSH SIGNATURE-----"
+    pubkey_line = "ssh-ed25519 " + base64.b64encode(pubkey_blob).decode()
+    return armored, pubkey_line, priv
+
+
+def test_verify_ssh_signature_valid():
+    payload = canonical_payload("cred-1", "octocat", "a" * 64)
+    armored, pubkey_line, _ = _build_test_ssh_signature(payload)
+
+    result = verify_ssh_signature(payload, armored, pubkey_line)
+    assert result.valid is True
+    assert result.key_fingerprint is not None
+    assert result.key_fingerprint.startswith("SHA256:")
+
+
+def test_verify_ssh_signature_rejects_tampered_payload():
+    payload = canonical_payload("cred-1", "octocat", "a" * 64)
+    armored, pubkey_line, _ = _build_test_ssh_signature(payload)
+
+    tampered = canonical_payload("cred-1", "octocat", "b" * 64)
+    result = verify_ssh_signature(tampered, armored, pubkey_line)
+    assert result.valid is False
+
+
+def test_verify_ssh_signature_rejects_wrong_namespace():
+    payload = canonical_payload("cred-1", "octocat", "a" * 64)
+    armored, pubkey_line, _ = _build_test_ssh_signature(payload, namespace="some-other-namespace")
+
+    result = verify_ssh_signature(payload, armored, pubkey_line)
+    assert result.valid is False
+    assert "namespace" in result.error
+
+
+def test_verify_ssh_signature_rejects_mismatched_public_key():
+    payload = canonical_payload("cred-1", "octocat", "a" * 64)
+    armored, _pubkey_line, _ = _build_test_ssh_signature(payload)
+
+    # A different, unrelated keypair's public line — must not verify against it
+    _, other_pubkey_line, _ = _build_test_ssh_signature(payload)
+    result = verify_ssh_signature(payload, armored, other_pubkey_line)
+    assert result.valid is False
+
+
+def test_verify_signature_dispatches_by_format():
+    payload = canonical_payload("cred-1", "octocat", "a" * 64)
+    armored, pubkey_line, _ = _build_test_ssh_signature(payload)
+
+    assert verify_signature(payload, armored, pubkey_line, "ssh").valid is True
+    result = verify_signature(payload, "garbage", "garbage", "unknown-format")
+    assert result.valid is False
+    assert "unsupported" in result.error
+
+
+def test_verify_gpg_signature_fails_closed_on_garbage_input():
+    """No real GPG keypair is available in this environment — confirms the fail-closed
+    path (never fabricates a pass) rather than exercising a real gpg binary round-trip."""
+    result = verify_gpg_signature(b"payload", "not a real signature", "not a real key")
+    assert result.valid is False
+
+
+# ---------------------------------------------------------------------------
+# 26. Route C endpoint — POST /ingest-local
+# ---------------------------------------------------------------------------
+
+def _local_commit(sha: str, message: str = "fix bug") -> dict:
+    return {
+        "sha": sha,
+        "author": "octocat",
+        "timestamp": "2024-01-01T00:00:00+00:00",
+        "message": message,
+        "diff_stat": {"additions": 10, "deletions": 2, "total": 12},
+    }
+
+
+@pytest.mark.asyncio
+async def test_ingest_local_git_accepts_valid_signature():
+    from app.devcred.routes import ingest_local_git
+    from app.devcred.schemas import LocalGitUploadRequest
+
+    commits = [_local_commit("sha1"), _local_commit("sha2", "add feature")]
+    corpus_root = compute_repo_corpus_root(commits)
+    payload = canonical_payload("local-cred-1", "octocat", corpus_root)
+    armored, pubkey_line, _ = _build_test_ssh_signature(payload)
+
+    body = LocalGitUploadRequest(
+        credential_id="local-cred-1",
+        developer_handle="octocat",
+        commits=commits,
+        signature=armored,
+        signature_format="ssh",
+        public_key=pubkey_line,
+    )
+
+    class _NoKeysClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None, params=None, timeout=None):
+            return _make_github_response([], status_code=200)
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("httpx.AsyncClient", return_value=_NoKeysClient()):
+        mock_db.create_dev_credential = AsyncMock()
+        response = await ingest_local_git(_fake_request(path="/api/devcred/ingest-local"), body)
+
+    assert response.commit_count == 2
+    assert response.corpus_root == corpus_root
+    assert response.key_fingerprint is not None
+    assert response.github_key_currently_listed is False  # empty keys list from the fake client
+    mock_db.create_dev_credential.assert_awaited_once()
+    _, kwargs = mock_db.create_dev_credential.call_args
+    assert kwargs["provenance_method"] == "local_git_upload"
+
+
+@pytest.mark.asyncio
+async def test_ingest_local_git_rejects_invalid_signature():
+    from app.devcred.routes import ingest_local_git
+    from app.devcred.schemas import LocalGitUploadRequest
+
+    commits = [_local_commit("sha1")]
+    corpus_root = compute_repo_corpus_root(commits)
+    # Sign over a DIFFERENT corpus root than the one that will actually be recomputed
+    # server-side from `commits` — simulates a tampered/incorrect submission.
+    wrong_payload = canonical_payload("local-cred-2", "octocat", "0" * 64)
+    armored, pubkey_line, _ = _build_test_ssh_signature(wrong_payload)
+
+    body = LocalGitUploadRequest(
+        credential_id="local-cred-2",
+        developer_handle="octocat",
+        commits=commits,
+        signature=armored,
+        signature_format="ssh",
+        public_key=pubkey_line,
+    )
+
+    with patch("app.devcred.routes.db") as mock_db:
+        mock_db.create_dev_credential = AsyncMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await ingest_local_git(_fake_request(path="/api/devcred/ingest-local"), body)
+
+    assert exc_info.value.status_code == 401
+    mock_db.create_dev_credential.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ingest_local_git_requires_at_least_one_commit():
+    from app.devcred.routes import ingest_local_git
+    from app.devcred.schemas import LocalGitUploadRequest
+
+    body = LocalGitUploadRequest(
+        credential_id="local-cred-3",
+        developer_handle="octocat",
+        commits=[],
+        signature="x",
+        signature_format="ssh",
+        public_key="x",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await ingest_local_git(_fake_request(path="/api/devcred/ingest-local"), body)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_evaluate_credential_local_git_upload_flags_missing_language_signal():
+    """Route C shares Route A's evaluate pipeline — confirms the caveat disclosing
+    the absent file-path/language signal is actually attached, not just documented."""
+    from app.devcred.routes import evaluate_credential
+
+    commits = [_local_commit("sha1"), _local_commit("sha2")]
+    metrics_input = [{**c, "is_merge": False, "files": []} for c in commits]
+    metrics = extract_commit_metrics(metrics_input)
+
+    db_record = {
+        "credential_id": "local-eval-id",
+        "developer_handle": "octocat",
+        "repo_corpus_root": compute_repo_corpus_root(commits),
+        "commit_count": 2,
+        "event_count": None,
+        "metrics": metrics,
+        "credential": None,
+        "tee_quote": None,
+        "status": "ingested",
+        "provenance_method": "local_git_upload",
+    }
+
+    llm_response = json.dumps({
+        "seniority_level": "mid",
+        "primary_languages": [],
+        "specializations": [],
+        "contribution_pattern": "Steady commits.",
+        "qualitative_assessment": "Reasonable contribution history.",
+        "confidence": "medium",
+        "caveats": [],
+    })
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("app.devcred.routes.sign_result", new=AsyncMock(return_value="sim_quote:local")):
+        mock_db.get_dev_credential = AsyncMock(return_value=db_record)
+        mock_db.update_dev_credential_result = AsyncMock()
+        mock_db.increment_daily_eval_count = AsyncMock(return_value=1)
+        mock_db.decrement_daily_eval_count = AsyncMock()
+
+        evaluator_mock_client = AsyncMock()
+        evaluator_mock_client.messages.create = AsyncMock(return_value=_make_mock_response(llm_response))
+        with patch("app.devcred.agents.git_evaluator.anthropic.AsyncAnthropic", return_value=evaluator_mock_client):
+            response = await evaluate_credential(_fake_request(), "local-eval-id")
+
+    assert response.credential.provenance_method == ProvenanceMethod.LOCAL_GIT_UPLOAD
+    assert response.credential.has_test_culture is False
+    assert response.credential.primary_languages == []
+    assert any("no file paths were available" in c for c in response.credential.caveats)
+
+
+# ---------------------------------------------------------------------------
+# 27. Route D endpoint — POST /self-report (the honest dead end)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_self_report_produces_clearly_unverified_credential():
+    from app.devcred.routes import self_report_credential
+    from app.devcred.schemas import SelfReportedRequest
+
+    body = SelfReportedRequest(
+        credential_id="self-report-1",
+        developer_handle="octocat",
+        role_title="Senior Backend Engineer",
+        company_name="Old Employer Inc",
+        employment_start="2019-01-01",
+        employment_end="2022-06-01",
+    )
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("app.devcred.routes.sign_result", new=AsyncMock(return_value="sim_quote:selfreport")):
+        mock_db.get_dev_credential = AsyncMock(return_value=None)
+        mock_db.create_dev_credential_complete = AsyncMock()
+
+        response = await self_report_credential(_fake_request(), body)
+
+    cred = response.credential
+    assert cred.provenance_method == ProvenanceMethod.SELF_REPORTED
+    assert cred.verified is False
+    assert cred.repo_corpus_root is None
+    assert cred.commit_count == 0
+    assert cred.self_reported is not None
+    assert cred.self_reported.company_name == "Old Employer Inc"
+    assert cred.self_reported.role_title == "Senior Backend Engineer"
+    assert any("UNVERIFIED" in c for c in cred.caveats)
+
+    mock_db.create_dev_credential_complete.assert_awaited_once()
+    _, kwargs = mock_db.create_dev_credential_complete.call_args
+    assert kwargs["provenance_method"] == "self_reported"
+    # the placeholder passed to the DB layer is never a real hash and never
+    # leaks into the credential object itself (checked above: repo_corpus_root is None)
+    assert kwargs["repo_corpus_root"] == "self-reported:self-report-1"
+
+
+@pytest.mark.asyncio
+async def test_self_report_never_fabricates_a_seniority_score():
+    """The dead-end path must not produce a graded credential that could be
+    mistaken for a real assessment — hard_seniority_signal stays None."""
+    from app.devcred.routes import self_report_credential
+    from app.devcred.schemas import SelfReportedRequest
+
+    body = SelfReportedRequest(
+        credential_id="self-report-2",
+        role_title="Staff Engineer",
+        company_name="Some Co",
+        employment_start="2015-01-01",
+    )
+
+    with patch("app.devcred.routes.db") as mock_db, \
+         patch("app.devcred.routes.sign_result", new=AsyncMock(return_value="sim_quote:x")):
+        mock_db.get_dev_credential = AsyncMock(return_value=None)
+        mock_db.create_dev_credential_complete = AsyncMock()
+        response = await self_report_credential(_fake_request(), body)
+
+    assert response.credential.hard_seniority_signal is None
+    assert response.credential.confidence == "low"
+    assert "unverified" in response.credential.qualitative_assessment.lower()
+
+
+@pytest.mark.asyncio
+async def test_self_report_rejects_duplicate_credential_id():
+    from app.devcred.routes import self_report_credential
+    from app.devcred.schemas import SelfReportedRequest
+
+    body = SelfReportedRequest(
+        credential_id="dup-id",
+        role_title="Engineer",
+        company_name="Co",
+        employment_start="2020-01-01",
+    )
+
+    with patch("app.devcred.routes.db") as mock_db:
+        mock_db.get_dev_credential = AsyncMock(return_value={"status": "complete"})
+        with pytest.raises(HTTPException) as exc_info:
+            await self_report_credential(_fake_request(), body)
+
+    assert exc_info.value.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# 28. db.py — provenance_method / event_count persistence + migration safety
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_db_create_dev_credential_defaults_to_direct_access(tmp_path):
+    import app.db as db_module
+
+    original_path = db_module.DB_PATH
+    db_module.DB_PATH = tmp_path / f"test_{time.time_ns()}.db"
+    try:
+        await db_module.create_dev_credentials_table()
+        await db_module.create_dev_credential(
+            credential_id="db-test-1",
+            developer_handle="octocat",
+            repo_corpus_root="a" * 64,
+            commit_count=5,
+            metrics={},
+        )
+        record = await db_module.get_dev_credential("db-test-1")
+        assert record["provenance_method"] == "direct_access"
+        assert record["event_count"] is None
+    finally:
+        db_module.DB_PATH = original_path
+
+
+@pytest.mark.asyncio
+async def test_db_create_dev_credential_complete_for_self_reported(tmp_path):
+    import app.db as db_module
+
+    original_path = db_module.DB_PATH
+    db_module.DB_PATH = tmp_path / f"test_{time.time_ns()}.db"
+    try:
+        await db_module.create_dev_credentials_table()
+        await db_module.create_dev_credential_complete(
+            credential_id="db-test-2",
+            developer_handle="octocat",
+            repo_corpus_root="self-reported:db-test-2",
+            credential={"credential_id": "db-test-2", "verified": False},
+            tee_quote="sim_quote:z",
+            provenance_method="self_reported",
+        )
+        record = await db_module.get_dev_credential("db-test-2")
+        assert record["status"] == "complete"
+        assert record["provenance_method"] == "self_reported"
+        assert record["credential"]["verified"] is False
+    finally:
+        db_module.DB_PATH = original_path
+
+
+def test_create_dev_credentials_table_migration_is_idempotent(tmp_path):
+    """Running the ALTER TABLE migration twice must not raise — same 'duplicate
+    column name' swallow pattern as init_db()'s core `deals` table migration."""
+    import asyncio
+    import app.db as db_module
+
+    original_path = db_module.DB_PATH
+    db_module.DB_PATH = tmp_path / f"test_{time.time_ns()}.db"
+
+    async def _run():
+        await db_module.create_dev_credentials_table()
+        await db_module.create_dev_credentials_table()  # must be a safe no-op
+
+    try:
+        asyncio.run(_run())
+    finally:
+        db_module.DB_PATH = original_path
